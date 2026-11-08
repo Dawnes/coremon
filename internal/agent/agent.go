@@ -14,13 +14,14 @@ import (
 	"time"
 
 	"coremon/internal/feature"
+	"coremon/internal/feature/system"
 	"coremon/internal/feature/updates"
 	"coremon/internal/proto"
 )
 
 // features are the agent's built-in functions.
 func features() []feature.Feature {
-	return []feature.Feature{updates.New()}
+	return []feature.Feature{updates.New(), system.New()}
 }
 
 // Options configure the agent.

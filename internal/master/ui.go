@@ -40,7 +40,8 @@ func (s *Server) handleSession(w http.ResponseWriter, r *http.Request) {
 	c, err := r.Cookie(cookieName)
 	authed := err == nil && s.sess.valid(c.Value)
 	_, statErr := os.Stat(s.initialPwPath())
-	writeJSON(w, map[string]any{"authenticated": authed, "version": s.cfg.Version, "initial_password": statErr == nil, "min_password": minPasswordLen})
+	writeJSON(w, map[string]any{"authenticated": authed, "version": s.cfg.Version, "build_date": s.cfg.BuildDate,
+		"initial_password": statErr == nil, "min_password": minPasswordLen})
 }
 
 func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
@@ -137,7 +138,8 @@ type agentView struct {
 	CoreLatest   string                     `json:"core_latest"`
 	CoreIsLatest bool                       `json:"core_is_latest"`
 	DesiredCore  string                     `json:"desired_core"`
-	Legacy       bool                       `json:"legacy"` // agent before 0.2: no built-in features
+	Legacy       bool                       `json:"legacy"`    // agent before 0.2: no built-in features
+	IsMaster     bool                       `json:"is_master"` // the system the master itself runs on
 	Facts        proto.Facts                `json:"facts"`
 	Features     []string                   `json:"features"`
 	Updates      *updatesSummary            `json:"updates,omitempty"`
@@ -160,6 +162,12 @@ func (s *Server) view(a *Agent, full bool) agentView {
 	v.Legacy = a.CoreVersion != "" && versionLess(a.CoreVersion, minAgentVersion)
 	for _, f := range a.Features {
 		v.Features = append(v.Features, f.Name)
+	}
+	own := s.ownIPs()
+	for _, ip := range a.Facts.IPs {
+		if own[ip] {
+			v.IsMaster = true
+		}
 	}
 	if raw, ok := a.State["updates"]; ok {
 		var u updatesSummary
@@ -560,7 +568,24 @@ func (s *Server) handleSettingsGet(w http.ResponseWriter, r *http.Request) {
 	s.st.mu.Lock()
 	defer s.st.mu.Unlock()
 	writeJSON(w, map[string]any{"settings": s.st.st.Settings, "pin": s.pin, "suggested_url": s.derivedURL(r), "index_url": url,
+		"next_purge": s.nextPurgeAt().Unix(), "agent_port": s.agentPort(), "ui_port_error": s.uiPortError(),
 		"limits": map[string]int{"heartbeat_min": minHeartbeat, "heartbeat_max": maxHeartbeat, "retention_min": minRetention, "retention_max": maxRetention}})
+}
+
+// handleRetentionPreview tells what a retention of ?days=N would remove,
+// and when, if it were saved now.
+func (s *Server) handleRetentionPreview(w http.ResponseWriter, r *http.Request) {
+	days, _ := strconv.Atoi(r.URL.Query().Get("days"))
+	days = clamp(days, minRetention, maxRetention)
+	s.st.mu.Lock()
+	cur := s.st.st.Settings.RetentionDays
+	s.st.mu.Unlock()
+	at := s.nextPurgeAt()
+	if days != cur {
+		at = purgeAfterChange(time.Now())
+	}
+	cutoff, audit, jobs := s.purgePreview(days, at)
+	writeJSON(w, map[string]any{"days": days, "at": at.Unix(), "cutoff": cutoff, "audit": audit, "jobs": jobs})
 }
 
 var masterURLRe = regexp.MustCompile(`^https://[A-Za-z0-9.\-\[\]:]+$`)
@@ -583,6 +608,10 @@ func (s *Server) handleSettingsSave(w http.ResponseWriter, r *http.Request) {
 		bad(fmt.Sprintf("retention must be %d-%d days", minRetention, maxRetention))
 		return
 	}
+	if req.UIPort != 8443 && req.UIPort != 443 {
+		bad("website port must be 8443 or 443")
+		return
+	}
 	req.MasterURL = strings.TrimRight(strings.TrimSpace(req.MasterURL), "/")
 	if req.MasterURL != "" && !masterURLRe.MatchString(req.MasterURL) {
 		bad("master URL must look like https://host:port")
@@ -600,15 +629,18 @@ func (s *Server) handleSettingsSave(w http.ResponseWriter, r *http.Request) {
 	s.st.st.Settings = req
 	s.st.markDirty()
 	s.st.mu.Unlock()
-	s.audit.write(actorAdmin, clientIP(r), "settings.saved", "", fmt.Sprintf("check=%dh heartbeat=%ds retention=%dd url=%q repo=%q",
-		req.CheckIntervalHours, req.HeartbeatSec, req.RetentionDays, req.MasterURL, req.GitHubRepo))
+	s.audit.write(actorAdmin, clientIP(r), "settings.saved", "", fmt.Sprintf("check=%dh heartbeat=%ds retention=%dd port=%d url=%q repo=%q",
+		req.CheckIntervalHours, req.HeartbeatSec, req.RetentionDays, req.UIPort, req.MasterURL, req.GitHubRepo))
 	if old.GitHubRepo != req.GitHubRepo {
 		s.kickIndex()
 	}
 	if old.RetentionDays != req.RetentionDays {
-		go s.purge()
+		s.setNextPurge(purgeAfterChange(time.Now()))
 	}
-	writeJSON(w, req)
+	if old.UIPort != req.UIPort && s.handler != nil {
+		s.applyUIPort(s.handler)
+	}
+	writeJSON(w, map[string]any{"settings": req, "next_purge": s.nextPurgeAt().Unix(), "ui_port_error": s.uiPortError()})
 }
 
 func (s *Server) handleAudit(w http.ResponseWriter, r *http.Request) {

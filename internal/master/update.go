@@ -127,5 +127,33 @@ func ApplyUpdate(dataDir, keyPath, target, current string) error {
 		return err
 	}
 	log.Printf("installed coremon-master %s; restarting service", version)
+	ensurePortCapability()
 	return exec.Command("systemctl", "restart", "coremon-master.service").Run()
+}
+
+const (
+	unitFile     = "/etc/systemd/system/coremon-master.service"
+	portDropIn   = "/etc/systemd/system/coremon-master.service.d/10-port.conf"
+	portDropInTx = "# Written by coremon-master apply-update: lets the website listen on port 443.\n[Service]\nCapabilityBoundingSet=CAP_NET_BIND_SERVICE\nAmbientCapabilities=CAP_NET_BIND_SERVICE\n"
+)
+
+// ensurePortCapability lets masters installed before 0.2.3 bind port 443
+// after a self-update (the update only replaces the binary, not the unit).
+func ensurePortCapability() {
+	if b, err := os.ReadFile(unitFile); err != nil || bytes.Contains(b, []byte("AmbientCapabilities=CAP_NET_BIND_SERVICE")) {
+		return
+	}
+	if _, err := os.Stat(portDropIn); err == nil {
+		return
+	}
+	if err := os.MkdirAll(filepath.Dir(portDropIn), 0o755); err != nil {
+		log.Printf("port capability: %v", err)
+		return
+	}
+	if err := os.WriteFile(portDropIn, []byte(portDropInTx), 0o644); err != nil {
+		log.Printf("port capability: %v", err)
+		return
+	}
+	exec.Command("systemctl", "daemon-reload").Run()
+	log.Printf("added %s", portDropIn)
 }

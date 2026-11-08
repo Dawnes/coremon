@@ -14,7 +14,10 @@ import (
 	"coremon/internal/master"
 )
 
-var version = "dev"
+var (
+	version   = "dev"
+	buildDate = "" // YYYY-MM-DD, set by build.sh
+)
 
 func main() {
 	cmd := "serve"
@@ -55,7 +58,7 @@ func main() {
 		}
 		s, err := master.New(master.Config{
 			Listen: *listen, HTTPListen: *httpListen, DataDir: *data, ReleaseDir: *release,
-			SANs: sanList, Version: version, SigningKeyPath: *key, GitHubRepo: *github, IndexURL: *indexURL,
+			SANs: sanList, Version: version, BuildDate: buildDate, SigningKeyPath: *key, GitHubRepo: *github, IndexURL: *indexURL,
 		})
 		if err != nil {
 			log.Fatal(err)

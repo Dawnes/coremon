@@ -97,22 +97,16 @@ func (s *Server) baseURL(r *http.Request) string {
 	return s.derivedURL(r)
 }
 
-// derivedURL guesses the agent-facing URL from the request.
+// derivedURL guesses the agent-facing URL from the request: the host the
+// browser used, with the agents' port. Agents never use the website-only
+// port 443 or a reverse proxy, so the website port can change freely.
 func (s *Server) derivedURL(r *http.Request) string {
-	if r.TLS != nil {
-		return "https://" + r.Host
-	}
-	// Reached via the plain-HTTP/proxy listener: agents must use the master's
-	// own pinned HTTPS port, never the proxy.
 	host := r.Host
 	if h, _, err := net.SplitHostPort(r.Host); err == nil {
 		host = h
 	}
-	_, port, err := net.SplitHostPort(s.cfg.Listen)
-	if err != nil || port == "" {
-		port = "8443"
-	}
-	return "https://" + net.JoinHostPort(host, port)
+	host = strings.Trim(host, "[]")
+	return "https://" + net.JoinHostPort(host, s.agentPort())
 }
 
 func (s *Server) handleInstallScript(w http.ResponseWriter, r *http.Request) {

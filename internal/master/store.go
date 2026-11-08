@@ -17,6 +17,7 @@ type Settings struct {
 	CheckIntervalHours int    `json:"check_interval_hours"`
 	HeartbeatSec       int    `json:"heartbeat_sec"`  // longest gap between agent contacts
 	RetentionDays      int    `json:"retention_days"` // audit log and job history
+	UIPort             int    `json:"ui_port"`        // website port: 8443 (agents' port) or 443 (extra listener)
 	MasterURL          string `json:"master_url"`     // used in install commands; empty = derive from browser
 	GitHubRepo         string `json:"github_repo"`    // owner/name publishing the version index
 	GitHubSeeded       bool   `json:"github_seeded"`
@@ -43,6 +44,9 @@ func (s *Settings) normalize() {
 		s.RetentionDays = defaultRetention
 	}
 	s.RetentionDays = clamp(s.RetentionDays, minRetention, maxRetention)
+	if s.UIPort != 443 {
+		s.UIPort = 8443
+	}
 }
 
 func clamp(v, lo, hi int) int {

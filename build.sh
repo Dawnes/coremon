@@ -23,8 +23,9 @@ echo "$VERSION" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$' || { echo "version must be
 rm -rf dist
 mkdir -p dist/release dist/assets
 
+BUILD_DATE="$(date -u +%Y-%m-%d)"
 gobuild() { # goarch pkg dst
-  CGO_ENABLED=0 GOOS=linux GOARCH="$1" go build -trimpath -ldflags "-s -w -X main.version=$VERSION" -o "$3" "$2"
+  CGO_ENABLED=0 GOOS=linux GOARCH="$1" go build -trimpath -ldflags "-s -w -X main.version=$VERSION -X main.buildDate=$BUILD_DATE" -o "$3" "$2"
 }
 
 echo "Running tests..."

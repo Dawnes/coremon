@@ -92,6 +92,27 @@ func (a *auditLog) list(agentID string, limit int) []auditEntry {
 	return out
 }
 
+// countOlder counts entries older than cutoff.
+func (a *auditLog) countOlder(cutoff int64) int {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	f, err := os.Open(a.path)
+	if err != nil {
+		return 0
+	}
+	defer f.Close()
+	n := 0
+	sc := bufio.NewScanner(f)
+	sc.Buffer(make([]byte, 64*1024), 4<<20)
+	for sc.Scan() {
+		var e auditEntry
+		if json.Unmarshal(sc.Bytes(), &e) == nil && e.Time < cutoff {
+			n++
+		}
+	}
+	return n
+}
+
 // purge drops entries older than cutoff by rewriting the file.
 func (a *auditLog) purge(cutoff int64) (int, error) {
 	a.mu.Lock()

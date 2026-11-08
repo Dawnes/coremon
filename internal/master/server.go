@@ -15,6 +15,8 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
+	"sync"
 	"time"
 
 	"coremon/internal/sign"
@@ -31,6 +33,7 @@ type Config struct {
 	ReleaseDir string
 	SANs       []string
 	Version    string
+	BuildDate  string // YYYY-MM-DD, set at release build time
 	// SigningKeyPath is the release signing public key (root-owned).
 	SigningKeyPath string
 	// GitHubRepo ("owner/name") publishes the version index.
@@ -51,6 +54,101 @@ type Server struct {
 	signingKeyB64 string
 	wakes         map[string]chan struct{} // guarded by st.mu
 	idx           *indexSync
+
+	handler http.Handler
+
+	purgeMu   sync.Mutex
+	nextPurge time.Time
+
+	uiMu  sync.Mutex
+	uiSrv *http.Server // extra website listener on port 443
+	uiErr string
+
+	ipMu    sync.Mutex
+	ipCache map[string]bool
+	ipAt    time.Time
+}
+
+// ownIPs returns this host's addresses (cached for a minute), used to
+// recognise the master's own system among the agents.
+func (s *Server) ownIPs() map[string]bool {
+	s.ipMu.Lock()
+	defer s.ipMu.Unlock()
+	if s.ipCache != nil && time.Since(s.ipAt) < time.Minute {
+		return s.ipCache
+	}
+	m := map[string]bool{}
+	addrs, _ := net.InterfaceAddrs()
+	for _, a := range addrs {
+		if ipn, ok := a.(*net.IPNet); ok && !ipn.IP.IsLoopback() && !ipn.IP.IsLinkLocalUnicast() {
+			m[ipn.IP.String()] = true
+		}
+	}
+	s.ipCache, s.ipAt = m, time.Now()
+	return m
+}
+
+// agentPort is the port agents use (the -listen address).
+func (s *Server) agentPort() string {
+	_, port, err := net.SplitHostPort(s.cfg.Listen)
+	if err != nil || port == "" {
+		return "8443"
+	}
+	return port
+}
+
+// applyUIPort starts or stops the extra website listener so the website is
+// reachable on the configured port. Agents always keep using agentPort.
+func (s *Server) applyUIPort(handler http.Handler) {
+	s.st.mu.Lock()
+	want := s.st.st.Settings.UIPort
+	s.st.mu.Unlock()
+	s.uiMu.Lock()
+	defer s.uiMu.Unlock()
+	// Only 443 needs its own listener; 8443 is the agents' listener, which
+	// always serves the website too.
+	need := want == 443 && s.agentPort() != "443"
+	if s.uiSrv != nil && !need {
+		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		s.uiSrv.Shutdown(ctx)
+		cancel()
+		s.uiSrv = nil
+		log.Printf("website listener on port 443 stopped")
+	}
+	if !need {
+		s.uiErr = ""
+		return
+	}
+	if s.uiSrv != nil {
+		return
+	}
+	host, _, _ := net.SplitHostPort(s.cfg.Listen)
+	addr := net.JoinHostPort(host, fmt.Sprint(want))
+	ln, err := net.Listen("tcp", addr)
+	if err != nil {
+		s.uiErr = fmt.Sprintf("cannot listen on port %d: %v", want, err)
+		if errors.Is(err, os.ErrPermission) || strings.Contains(err.Error(), "permission denied") {
+			s.uiErr += " (the service needs CAP_NET_BIND_SERVICE; re-run the master installer)"
+		}
+		log.Printf("website: %s", s.uiErr)
+		return
+	}
+	srv := &http.Server{Handler: handler, ReadHeaderTimeout: 10 * time.Second, IdleTimeout: 120 * time.Second,
+		TLSConfig: &tls.Config{MinVersion: tls.VersionTLS12, Certificates: []tls.Certificate{s.cert}},
+		ErrorLog:  log.New(os.Stderr, "http: ", 0)}
+	s.uiSrv, s.uiErr = srv, ""
+	go func() {
+		if err := srv.ServeTLS(ln, "", ""); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			log.Printf("website listener: %v", err)
+		}
+	}()
+	log.Printf("website also on https://%s", addr)
+}
+
+func (s *Server) uiPortError() string {
+	s.uiMu.Lock()
+	defer s.uiMu.Unlock()
+	return s.uiErr
 }
 
 func (s *Server) initialPwPath() string { return filepath.Join(s.cfg.DataDir, "initial-password.txt") }
@@ -174,6 +272,7 @@ func (s *Server) routes() http.Handler {
 	ui("POST /api/ui/groups/{id}", s.handleGroupUpdate)
 	ui("POST /api/ui/groups/{id}/delete", s.handleGroupDelete)
 	ui("POST /api/ui/layout", s.handleLayout)
+	ui("GET /api/ui/retention", s.handleRetentionPreview)
 	ui("GET /api/ui/settings", s.handleSettingsGet)
 	ui("POST /api/ui/settings", s.handleSettingsSave)
 	ui("GET /api/ui/audit", s.handleAudit)
@@ -199,9 +298,12 @@ func (s *Server) Run(ctx context.Context) error {
 	go s.st.flushLoop(stop)
 	go s.schedulerLoop(stop)
 	go s.indexLoop(stop)
+	handler := s.routes()
+	s.handler = handler
+	s.applyUIPort(handler)
 	srv := &http.Server{
 		Addr:              s.cfg.Listen,
-		Handler:           s.routes(),
+		Handler:           handler,
 		ReadHeaderTimeout: 10 * time.Second,
 		IdleTimeout:       120 * time.Second,
 		TLSConfig:         &tls.Config{MinVersion: tls.VersionTLS12, Certificates: []tls.Certificate{s.cert}},
@@ -227,6 +329,11 @@ func (s *Server) Run(ctx context.Context) error {
 		sctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 		srv.Shutdown(sctx)
+		s.uiMu.Lock()
+		if s.uiSrv != nil {
+			s.uiSrv.Shutdown(sctx)
+		}
+		s.uiMu.Unlock()
 		if plain != nil {
 			plain.Shutdown(sctx)
 		}

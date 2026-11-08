@@ -400,12 +400,11 @@ func (s *Server) requestCore(a *Agent, version, actor string) *Job {
 func (s *Server) schedulerLoop(stop <-chan struct{}) {
 	t := time.NewTicker(15 * time.Second)
 	defer t.Stop()
-	var lastPurge time.Time
 	for {
 		s.schedulerTick()
-		if time.Since(lastPurge) > time.Hour {
+		if due := s.nextPurgeAt(); !time.Now().Before(due) {
 			s.purge()
-			lastPurge = time.Now()
+			s.setNextPurge(nextFullHour(time.Now()))
 		}
 		select {
 		case <-stop:
@@ -413,6 +412,36 @@ func (s *Server) schedulerLoop(stop <-chan struct{}) {
 		case <-t.C:
 		}
 	}
+}
+
+// The history cleanup runs on every full hour.
+const purgeMinNotice = 3 * time.Minute
+
+func nextFullHour(t time.Time) time.Time { return t.Truncate(time.Hour).Add(time.Hour) }
+
+// purgeAfterChange is when a changed retention period takes effect: the
+// next full hour, unless that is less than three minutes away.
+func purgeAfterChange(now time.Time) time.Time {
+	n := nextFullHour(now)
+	if n.Sub(now) < purgeMinNotice {
+		n = n.Add(time.Hour)
+	}
+	return n
+}
+
+func (s *Server) nextPurgeAt() time.Time {
+	s.purgeMu.Lock()
+	defer s.purgeMu.Unlock()
+	if s.nextPurge.IsZero() {
+		s.nextPurge = nextFullHour(time.Now())
+	}
+	return s.nextPurge
+}
+
+func (s *Server) setNextPurge(t time.Time) {
+	s.purgeMu.Lock()
+	s.nextPurge = t
+	s.purgeMu.Unlock()
 }
 
 func (s *Server) schedulerTick() {
@@ -463,12 +492,35 @@ func (s *Server) schedulerTick() {
 	}
 }
 
+// retentionCutoff returns the oldest time kept at moment t.
+func retentionCutoff(t time.Time, days int) int64 {
+	return t.Add(-time.Duration(days) * 24 * time.Hour).Unix()
+}
+
+// purgePreview counts what a cleanup at time at with the given retention
+// would remove.
+func (s *Server) purgePreview(days int, at time.Time) (cutoff int64, audit, jobs int) {
+	cutoff = retentionCutoff(at, days)
+	s.st.mu.Lock()
+	for _, j := range s.st.st.Jobs {
+		end := j.Finished
+		if end == 0 {
+			end = j.Created
+		}
+		if j.done() && end < cutoff {
+			jobs++
+		}
+	}
+	s.st.mu.Unlock()
+	return cutoff, s.audit.countOlder(cutoff), jobs
+}
+
 // purge removes audit entries, jobs and job output older than the
 // retention period.
 func (s *Server) purge() {
 	s.st.mu.Lock()
 	days := s.st.st.Settings.RetentionDays
-	cutoff := time.Now().Add(-time.Duration(days) * 24 * time.Hour).Unix()
+	cutoff := retentionCutoff(time.Now(), days)
 	jobs := s.st.purgeJobs(cutoff)
 	s.st.mu.Unlock()
 	entries, err := s.audit.purge(cutoff)

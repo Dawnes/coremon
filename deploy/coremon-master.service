@@ -18,8 +18,9 @@ ProtectHome=yes
 PrivateTmp=yes
 PrivateDevices=yes
 ReadWritePaths=/var/lib/coremon-master
-CapabilityBoundingSet=
-AmbientCapabilities=
+# Only to bind port 443 when "Website port" is set to 443.
+CapabilityBoundingSet=CAP_NET_BIND_SERVICE
+AmbientCapabilities=CAP_NET_BIND_SERVICE
 RestrictSUIDSGID=yes
 LockPersonality=yes
 RestrictRealtime=yes

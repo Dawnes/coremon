@@ -110,7 +110,7 @@ The master needs outbound HTTPS to `github.com` and
 
 ## Add systems
 
-1. **Systems → Add a system → Generate install command.**
+1. **Settings → Systems → Add a system → Generate install command.**
 2. Run it as root on the target (needs `curl`). Do this on the master
    container too if you want it monitored.
 3. **Approve** the pending system and pick its group. The first update check
@@ -122,15 +122,26 @@ The master needs outbound HTTPS to `github.com` and
   headers to arrange; fold groups; select a whole group). Filters for updates,
   security, reboot, offline, pending and outdated agents; bulk *Check now*,
   *Upgrade all packages* and *Agent → latest*.
-* **System page** — *Updates*: select packages (or *Security only*) and
-  *Install selected*, or *Upgrade all*; output streams live. *Agent*: install
-  any of the 3 kept agent versions. *System*: host facts.
-* **Systems** — enrollment, approvals and groups (create, rename, delete,
-  reorder; deleting a group moves its systems to *Ungrouped*).
+* **System page** (for operating a system) — *Reboot* and *Pause*.
+  *Updates*: select packages (or *Security only*) and *Install selected*, or
+  *Upgrade all*; output streams live. *Agent*: install any of the 3 kept agent
+  versions. *System*: host facts.
 * **Releases** — version index status, master update, agent versions and a
   per-system version table.
-* **Audit log** — filter by system. Entries, jobs and job output older than
-  the retention period (Settings, 1–30 days, default 3) are removed.
+* **Audit log** — filter by system.
+* **Settings** — *General* (timers, retention, website port, install URL,
+  GitHub repository), *Systems* (enrollment, approvals, rename, group and
+  remove systems; create, rename, delete and reorder groups), *Login*
+  (password) and *Identity* (the fingerprint agents pin).
+
+Entries, jobs and job output older than the retention period (1–30 days,
+default 3) are removed by a cleanup that runs every full hour. After you
+change the period, the first cleanup is the next full hour, or the hour after
+that if it is less than 3 minutes away; Settings shows when and what will be
+removed before you save.
+
+**Website port**: 8443 (default) or 443. With 443 the website is reachable
+at `https://<master>` as well; agents always keep using port 8443.
 
 ### Timers
 
