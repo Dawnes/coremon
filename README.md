@@ -128,7 +128,11 @@ The master needs outbound HTTPS to `github.com` and
   versions. *System*: host facts.
 * **Releases** — version index status, master update, agent versions and a
   per-system version table.
-* **Audit log** — filter by system.
+* **History** — *Jobs* (everything sent to agents, with output) and *Audit
+  log* (who did what; filter by user and system; *Show output* opens the job
+  an action started).
+* **Pause** a system to send it nothing: no checks, jobs or version changes
+  until you resume. Pausing cancels jobs that were queued but not started.
 * **Settings** — *General* (timers, retention, website port, install URL,
   GitHub repository), *Systems* (enrollment, approvals, rename, group and
   remove systems; create, rename, delete and reorder groups), *Users*

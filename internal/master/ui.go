@@ -207,13 +207,21 @@ func (s *Server) handleAgentUpdate(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if req.Paused != nil && a.Status != "pending" {
-		if *req.Paused {
+		detail := ""
+		if *req.Paused && a.Status != "paused" {
 			a.Status = "paused"
-		} else {
+			// Start clean on resume: nothing queued earlier runs later.
+			n := s.cancelQueued(a, "system paused")
+			if a.DesiredCore != "" {
+				detail = "requested agent " + a.DesiredCore + " cancelled; "
+				a.DesiredCore = ""
+			}
+			detail += fmt.Sprintf("%d queued job(s) cancelled", n)
+		} else if !*req.Paused {
 			a.Status = "active"
 			s.wake(a.ID)
 		}
-		s.audit.writeAgent(actor(r), clientIP(r), "agent."+a.Status, a, "")
+		s.audit.writeAgent(actor(r), clientIP(r), "agent."+a.Status, a, detail)
 	}
 	s.st.markDirty()
 	writeJSON(w, s.view(a, false))
@@ -268,7 +276,7 @@ func (s *Server) handleRemove(w http.ResponseWriter, r *http.Request) {
 	if req.Uninstall && s.online(a, time.Now().Unix()) {
 		a.Removing = true
 		j := s.enqueue(a, &Job{Type: proto.CmdUninstall, Actor: actor(r), Timeout: 120})
-		s.audit.writeAgent(actor(r), clientIP(r), "agent.uninstall", a, "")
+		s.audit.writeJob(actor(r), clientIP(r), "agent.uninstall", a, "", j)
 		writeJSON(w, map[string]any{"job": j.ID})
 		return
 	}
@@ -318,11 +326,12 @@ func (s *Server) handleCoreUpdate(w http.ResponseWriter, r *http.Request) {
 	if versionLess(req.Version, from) {
 		verb = "downgrade"
 	}
-	s.audit.writeAgent(actor(r), clientIP(r), "agent."+verb, a, from+" → "+req.Version)
 	res := map[string]any{"agent": s.view(a, false)}
-	if j := s.requestCore(a, req.Version, actor(r)); j != nil {
+	j := s.requestCore(a, req.Version, actor(r))
+	if j != nil {
 		res["job"] = j.ID
 	}
+	s.audit.writeJob(actor(r), clientIP(r), "agent."+verb, a, from+" → "+req.Version, j)
 	writeJSON(w, res)
 }
 
@@ -367,7 +376,7 @@ func (s *Server) handleActions(w http.ResponseWriter, r *http.Request) {
 		j := s.enqueue(a, &Job{Type: proto.CmdAction, Feature: req.Feature, Action: req.Action, Params: req.Params, Actor: actor(r), Timeout: spec.Timeout})
 		jobs = append(jobs, j.ID)
 		if spec.Mutating {
-			s.audit.writeAgent(actor(r), clientIP(r), req.Feature+"."+req.Action, a, string(req.Params))
+			s.audit.writeJob(actor(r), clientIP(r), req.Feature+"."+req.Action, a, string(req.Params), j)
 		}
 	}
 	writeJSON(w, map[string]any{"jobs": jobs, "errors": errs})

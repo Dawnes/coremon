@@ -26,6 +26,7 @@ type auditEntry struct {
 	Agent  string `json:"agent,omitempty"` // system the entry is about
 	Target string `json:"target,omitempty"`
 	Detail string `json:"detail,omitempty"`
+	Job    string `json:"job,omitempty"` // job started by this action (its output)
 }
 
 // write records an entry that is not about one system.
@@ -36,6 +37,15 @@ func (a *auditLog) write(actor, ip, action, target, detail string) {
 // writeAgent records an entry about one system.
 func (a *auditLog) writeAgent(actor, ip, action string, ag *Agent, detail string) {
 	a.add(auditEntry{Actor: actor, IP: ip, Action: action, Agent: ag.ID, Target: ag.Name, Detail: detail})
+}
+
+// writeJob records an action about one system that started a job.
+func (a *auditLog) writeJob(actor, ip, action string, ag *Agent, detail string, j *Job) {
+	e := auditEntry{Actor: actor, IP: ip, Action: action, Agent: ag.ID, Target: ag.Name, Detail: detail}
+	if j != nil {
+		e.Job = j.ID
+	}
+	a.add(e)
 }
 
 func (a *auditLog) add(e auditEntry) {

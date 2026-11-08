@@ -88,6 +88,23 @@ func (s *Server) enqueue(a *Agent, j *Job) *Job {
 	return j
 }
 
+// cancelQueued cancels an agent's jobs that have not started yet; running
+// jobs finish normally. Caller holds s.st.mu.
+func (s *Server) cancelQueued(a *Agent, reason string) int {
+	n := 0
+	now := time.Now().Unix()
+	for _, j := range s.st.st.Jobs {
+		if j.AgentID == a.ID && j.Status == JobQueued {
+			j.Status, j.Finished, j.Error = JobCancelled, now, "cancelled: "+reason
+			n++
+		}
+	}
+	if n > 0 {
+		s.st.markDirty()
+	}
+	return n
+}
+
 // openJob reports whether a queued or running job matches.
 func (s *Server) openJob(agentID, typ, feature string) bool {
 	for i := len(s.st.st.Jobs) - 1; i >= 0; i-- {

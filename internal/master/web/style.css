@@ -70,8 +70,8 @@ code, .mono { font-family: var(--mono); font-size: 12.5px; }
 .side .foot .verinfo .dim { font-size: 11px; }
 .loginerr { color: var(--red); font-size: 13px; font-weight: 600; min-height: 18px; margin-top: -4px; }
 input.bad { border-color: rgba(248, 113, 113, 0.7); box-shadow: 0 0 0 3px rgba(248, 113, 113, 0.14); }
-.side .who { display: flex; align-items: center; gap: 8px; padding: 6px 12px 0; color: var(--muted); font-size: 12.5px; }
-.side .who .uname { font-weight: 600; color: var(--text); }
+.side .foot .who { color: var(--muted); font-size: 12px; margin-bottom: 4px; display: inline-flex; align-items: center; gap: 4px; flex-wrap: wrap; }
+.side .foot .who b { color: var(--text); font-weight: 600; }
 .stat .statnote { margin-top: 4px; font-size: 12px; color: var(--muted); display: flex; align-items: center; gap: 5px; position: relative; z-index: 1; }
 .stat .statnote svg { width: 12px; height: 12px; }
 .stat .value.datev { font-size: 17px; margin-top: 8px; letter-spacing: -0.01em; white-space: nowrap; }

@@ -150,7 +150,7 @@ document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeModal
 
 // ---------- job log modal ----------
 function statusBadge(st) {
-  const m = { queued: ['mute', 'queued'], running: ['info', 'running'], success: ['ok', 'success'], failed: ['sec', 'failed'], timeout: ['sec', 'timeout'] };
+  const m = { queued: ['mute', 'queued'], running: ['info', 'running'], success: ['ok', 'success'], failed: ['sec', 'failed'], timeout: ['sec', 'timeout'], cancelled: ['mute', 'cancelled'] };
   const [c, t] = m[st] || ['mute', st];
   return html`<span class="badge ${c}">${st === 'running' ? raw('<span class="spin" style="width:10px;height:10px"></span>') : ''}${t}</span>`;
 }
@@ -298,21 +298,30 @@ function showLogin() {
 
 const NAV = [
   ['', 'dash', 'Dashboard'],
-  ['jobs', 'jobs', 'Jobs'],
   ['releases', 'box', 'Releases'],
-  ['audit', 'shield', 'Audit log'],
+  ['history', 'jobs', 'History'],
   ['settings', 'cog', 'Settings'],
 ];
-// Settings submenu, always shown below "Settings".
-const settingsNav = () => [['general', 'General'], ['systems', 'Systems'], ...(canChange() ? [['users', 'Users']] : []), ['login', 'Login'], ['identity', 'Identity']];
+// Submenus, always shown below their menu item. The first entry opens when
+// the menu item itself is clicked.
+const SUBNAV = {
+  history: () => [['jobs', 'Jobs'], ['audit', 'Audit log']],
+  settings: () => [['general', 'General'], ['systems', 'Systems'], ...(canChange() ? [['users', 'Users']] : []), ['login', 'Login'], ['identity', 'Identity']],
+};
+const OLD_ROUTES = { systems: ['settings', 'systems'], jobs: ['history', 'jobs'], audit: ['history', 'audit'] };
 function currentRoute() {
   const p = location.hash.replace(/^#\/?/, '').split('/');
-  if (p[0] === 'systems') return ['settings', 'systems']; // old address
-  if (p[0] === 'settings') return ['settings', settingsNav().some(([k]) => k === p[1]) ? p[1] : 'general'];
+  if (OLD_ROUTES[p[0]]) return OLD_ROUTES[p[0]];
+  if (SUBNAV[p[0]]) {
+    const items = SUBNAV[p[0]]();
+    return [p[0], items.some(([k]) => k === p[1]) ? p[1] : items[0][0]];
+  }
   return [p[0] === 'agent' ? '' : p[0], ''];
 }
 const releasedLabel = () => (session.build_date ? 'Released: ' + session.build_date.split('-').reverse().join('-') : '');
-const settingsTabs = (cur) => html`<div class="settabs">${settingsNav().map(([k, l]) => html`<a href="#/settings/${k}" class="${cur === k ? 'on' : ''}">${l}</a>`)}</div>`;
+// On narrow screens the submenu is shown as tabs at the top of the page.
+const subTabs = (section, cur) => html`<div class="settabs">${SUBNAV[section]().map(([k, l]) => html`<a href="#/${section}/${k}" class="${cur === k ? 'on' : ''}">${l}</a>`)}</div>`;
+const settingsTabs = (cur) => subTabs('settings', cur);
 const roleLabel = (r) => (r === 'admin' ? 'Administrator' : r === 'viewer' ? 'Read-only' : r);
 
 function renderShell() {
@@ -322,9 +331,10 @@ function renderShell() {
       <aside class="side">
         <div class="brand"><img src="favicon.svg" alt=""><span>Coremon</span></div>
         <nav class="nav">${NAV.map(([h, ic, lbl]) => html`<a href="#/${h}" class="${active === h ? 'active' : ''}">${icon(ic)}<span class="lbl">${lbl}</span></a>
-          ${h === 'settings' ? html`<div class="subnav">${settingsNav().map(([k, l]) => html`<a href="#/settings/${k}" class="${sub === k ? 'active' : ''}">${l}${k === 'systems' ? html`<span id="nav-pending"></span>` : ''}</a>`)}</div>` : ''}`)}</nav>
-        <div class="who"><span class="uname">${session.user?.name}</span>${canChange() ? '' : html`<span class="badge info">read-only</span>`}</div>
-        <div class="foot"><div class="verinfo" title="Website and master version"><span>Coremon v${session.version}</span>${releasedLabel() ? html`<span class="dim">${releasedLabel()}</span>` : ''}</div><button class="btn ghost sm iconbtn" data-act="logout" title="Sign out">${icon('logout')}</button></div>
+          ${SUBNAV[h] ? html`<div class="subnav">${SUBNAV[h]().map(([k, l]) => html`<a href="#/${h}/${k}" class="${active === h && sub === k ? 'active' : ''}">${l}${k === 'systems' ? html`<span id="nav-pending"></span>` : ''}</a>`)}</div>` : ''}`)}</nav>
+        <div class="foot"><div class="verinfo"><span class="who">Signed in as <b>${session.user?.name}</b>${canChange() ? '' : html` <span class="badge info">read-only</span>`}</span>
+          <span title="Website and master version">Coremon v${session.version}</span>${releasedLabel() ? html`<span class="dim">${releasedLabel()}</span>` : ''}</div>
+          <button class="btn ghost sm iconbtn" data-act="logout" title="Sign out">${icon('logout')}</button></div>
       </aside>
       <main class="main" id="view"></main>
     </div>`);
@@ -341,10 +351,13 @@ function route() {
   clearInterval(refreshTimer);
   if (view?.unmount) view.unmount();
   const parts = location.hash.replace(/^#\/?/, '').split('/');
-  const [, sub] = currentRoute();
-  const settingsViews = { general: SettingsGeneral, systems: Systems, users: SettingsUsers, login: SettingsLogin, identity: SettingsIdentity };
-  const views = { '': Dashboard, agent: AgentPage, systems: Systems, jobs: Jobs, releases: Releases, audit: Audit, settings: settingsViews[sub] };
-  const V = views[parts[0]] || Dashboard;
+  const [section, sub] = currentRoute();
+  const subViews = {
+    settings: { general: SettingsGeneral, systems: Systems, users: SettingsUsers, login: SettingsLogin, identity: SettingsIdentity },
+    history: { jobs: Jobs, audit: Audit },
+  };
+  const views = { '': Dashboard, agent: AgentPage, releases: Releases };
+  const V = (subViews[section] && subViews[section][sub]) || views[parts[0]] || Dashboard;
   renderShell();
   view = V(parts.slice(1));
   const el = $('#view');
@@ -1049,7 +1062,7 @@ function Jobs() {
   return {
     interval: 3000,
     mount(el) {
-      el.innerHTML = r(html`<div class="page-head"><div><h1>Jobs</h1><div class="sub">Everything sent to agents</div></div><span class="spacer"></span>
+      el.innerHTML = r(html`${subTabs('history', 'jobs')}<div class="page-head"><div><h1>Jobs</h1><div class="sub">Everything sent to agents</div></div><span class="spacer"></span>
         <div class="chips"><button class="chip on" data-act="f" data-v="0">All</button><button class="chip" data-act="f" data-v="1">Active</button></div></div><div id="j-list"></div>`);
     },
     async refresh() {
@@ -1147,7 +1160,7 @@ function Audit() {
   return {
     interval: 10000,
     mount(el) {
-      el.innerHTML = r(html`<div class="page-head"><div><h1>Audit log</h1><div class="sub">Who did what, and when</div></div><span class="spacer"></span>
+      el.innerHTML = r(html`${subTabs('history', 'audit')}<div class="page-head"><div><h1>Audit log</h1><div class="sub">Who did what, and when</div></div><span class="spacer"></span>
         <label class="row small muted">User <select id="au-user"><option value="">All users</option></select></label>
         <label class="row small muted">System <select id="au-sys"><option value="">All systems</option></select></label></div><div id="au"></div>`);
       $('#au-sys').addEventListener('change', (e) => { st.agent = e.target.value; view.refresh(); });
@@ -1167,7 +1180,7 @@ function Audit() {
       const sys = (e) => e.agent ? (d.names[e.agent] || e.target || e.agent) : (d.names[e.target] || '');
       setHTML($('#au'), rows.length ? html`<div class="panel"><table class="tbl"><thead><tr><th>Time</th><th>Actor</th><th>Action</th><th>System</th><th>Target</th><th>Detail</th><th>IP</th></tr></thead>
         <tbody>${rows.map((e) => html`<tr><td class="muted mono small" style="white-space:nowrap">${fmtDate(e.time, true)}</td><td>${e.actor}</td><td><span class="tag mono">${e.action}</span></td>
-          <td>${sys(e)}</td><td class="mono small">${e.agent ? '' : (d.names[e.target] ? '' : e.target || '')}</td><td class="muted small">${e.detail || ''}</td><td class="dim small">${e.ip || ''}</td></tr>`)}</tbody></table></div>`
+          <td>${sys(e)}</td><td class="mono small">${e.agent ? '' : (d.names[e.target] ? '' : e.target || '')}</td><td class="muted small">${e.detail || ''}${e.job ? html` <button class="btn ghost sm" data-act="open-job" data-id="${e.job}" title="Show the output of the job this action started">${icon('jobs')} Show output</button>` : ''}</td><td class="dim small">${e.ip || ''}</td></tr>`)}</tbody></table></div>`
         : html`<div class="panel empty">${st.agent || st.user ? 'No entries for this filter.' : 'No entries yet.'}</div>`);
     },
   };

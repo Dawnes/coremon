@@ -106,11 +106,12 @@ type EnrollToken struct {
 
 // Job statuses.
 const (
-	JobQueued  = "queued"
-	JobRunning = "running"
-	JobSuccess = "success"
-	JobFailed  = "failed"
-	JobTimeout = "timeout"
+	JobQueued    = "queued"
+	JobRunning   = "running"
+	JobSuccess   = "success"
+	JobFailed    = "failed"
+	JobTimeout   = "timeout"
+	JobCancelled = "cancelled"
 )
 
 // Job is one command sent (or to be sent) to one agent.
