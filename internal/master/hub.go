@@ -104,9 +104,10 @@ func jobAllowed(a *Agent, j *Job) bool {
 }
 
 // syncMode sends the master's decision (active or report only) to an agent
-// that supports report-only mode and has not confirmed it yet. Caller holds
+// that supports report-only mode and has not confirmed it yet. actor is the
+// user who switched, or "scheduler" for an automatic resync. Caller holds
 // s.st.mu.
-func (s *Server) syncMode(a *Agent) *Job {
+func (s *Server) syncMode(a *Agent, actor string) *Job {
 	if a.Protocol < 3 || a.Status == StatusPending || a.Removing {
 		return nil
 	}
@@ -115,7 +116,7 @@ func (s *Server) syncMode(a *Agent) *Job {
 		return nil
 	}
 	p, _ := json.Marshal(proto.ModeParams{ReportOnly: want})
-	return s.enqueue(a, &Job{Type: proto.CmdSetMode, Params: p, Actor: "scheduler", Timeout: 60})
+	return s.enqueue(a, &Job{Type: proto.CmdSetMode, Params: p, Actor: actor, Timeout: 60})
 }
 
 // cancelQueued cancels an agent's queued actions (checks, installs,
@@ -232,7 +233,7 @@ func (s *Server) handlePoll(w http.ResponseWriter, r *http.Request) {
 		a.DesiredCore = ""
 	}
 	a.ReportOnly = req.ReportOnly
-	s.syncMode(a) // the master's decision wins; sent in this same reply
+	s.syncMode(a, "scheduler") // the master's decision wins; sent in this same reply
 	// Commands the agent no longer runs but never reported: lost (e.g. the
 	// agent restarted mid-command).
 	running := map[string]bool{}
@@ -515,7 +516,7 @@ func (s *Server) schedulerTick() {
 			s.requestCore(a, a.DesiredCore, "scheduler")
 		}
 		if !s.recentFailure(a.ID, proto.CmdSetMode, "", 2*time.Minute) {
-			s.syncMode(a)
+			s.syncMode(a, "scheduler")
 		}
 		if a.Status != StatusActive {
 			continue // report only: no checks

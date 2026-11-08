@@ -220,11 +220,11 @@ func (s *Server) handleAgentUpdate(w http.ResponseWriter, r *http.Request) {
 			a.Status = StatusReportOnly
 			// Nothing queued earlier runs later; agent version changes stay.
 			n := s.cancelQueued(a, "system set to report only")
-			j = s.syncMode(a)
+			j = s.syncMode(a, actor(r))
 			s.audit.writeJob(actor(r), clientIP(r), "agent.report_only", a, fmt.Sprintf("%d queued job(s) cancelled", n), j)
 		case !*req.ReportOnly && a.Status != StatusActive:
 			a.Status = StatusActive
-			j = s.syncMode(a)
+			j = s.syncMode(a, actor(r))
 			s.audit.writeJob(actor(r), clientIP(r), "agent.allow_changes", a, "", j)
 		}
 		s.wake(a.ID)

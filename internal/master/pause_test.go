@@ -61,6 +61,9 @@ func TestReportOnly(t *testing.T) {
 	if modeJob == nil || !strings.Contains(string(modeJob.Params), `"report_only":true`) {
 		t.Fatalf("no mode command for the agent: %+v", modeJob)
 	}
+	if modeJob.Actor != "admin" {
+		t.Errorf("the mode job must carry the user who switched, got %q", modeJob.Actor)
+	}
 	types := []string{}
 	for _, c := range cmds {
 		types = append(types, c.Type)
