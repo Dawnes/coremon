@@ -84,7 +84,9 @@ systemctl daemon-reload
 systemctl enable coremon-agent.service >/dev/null 2>&1
 systemctl restart coremon-agent.service
 echo "coremon: agent installed and started."
-echo "coremon: approve this system in the master UI: $MASTER"
+if [ -n "$TOKEN" ]; then
+  echo "coremon: approve this system in the master UI (Settings > Systems): $MASTER"
+fi
 `))
 
 func (s *Server) baseURL(r *http.Request) string {

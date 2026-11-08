@@ -116,5 +116,5 @@ fi
 [ -s /etc/coremon-master/master.env ] && echo "  releases: version index of https://github.com/$REPO"
 echo
 echo "The master downloads the agent versions within a minute (see Releases)."
-echo "To monitor this container too, open Systems > Add a system in the UI and"
+echo "To monitor this container too, open Settings > Systems > Add a system and"
 echo "run the generated command here as root."
