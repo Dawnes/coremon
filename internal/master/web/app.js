@@ -776,7 +776,7 @@ async function pingModal(a) {
   const row = (k, v) => html`<tr><td class="dim" style="padding:6px 16px 6px 0;white-space:nowrap">${k}</td><td style="padding:6px 0">${v}</td></tr>`;
   let body;
   if (p.answered && !p.error) {
-    body = html`<div class="notice green" style="margin:12px 0">${icon('check')} <b>The agent answered in ${p.rtt_ms} ms.</b> Network and keys work.</div>
+    body = html`<div class="notice green" style="margin:12px 0">${icon('check')} <b>The agent answered in ${p.rtt_ms < 1 ? 'under 1' : p.rtt_ms} ms.</b> Network and keys work.</div>
       <table>${row('Agent', p.version)}
       ${row('Connection key', html`<span class="mono small">${shortKey(p.key_used)}</span> ${p.key_current ? html`<span class="badge ok">current</span>` : html`<span class="badge upd">not the current key</span>`}`)}
       ${row('Key slots', html`<span class="mono small">${shortKey(p.slots[0]) || 'empty'} · ${shortKey(p.slots[1]) || 'empty'}</span> ${p.slots_ok ? html`<span class="badge ok">as expected</span>` : html`<span class="badge upd">being updated</span>`}`)}

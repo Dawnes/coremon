@@ -21,7 +21,7 @@ const pingAgentVersion = "0.3.1"
 type pingResult struct {
 	Answered   bool      `json:"answered"`
 	JobID      string    `json:"job_id"`
-	RTTMs      int64     `json:"rtt_ms,omitempty"`
+	RTTMs      int64     `json:"rtt_ms"`
 	Version    string    `json:"version,omitempty"`
 	KeyUsed    string    `json:"key_used,omitempty"` // fingerprint of the payload key of the connection
 	KeyCurrent bool      `json:"key_current"`        // that key is the master's current key
