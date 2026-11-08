@@ -97,6 +97,11 @@ func (s *Server) setCookie(w http.ResponseWriter, tok string) {
 
 func (s *Server) handleSession(w http.ResponseWriter, r *http.Request) {
 	out := map[string]any{"authenticated": false, "version": s.cfg.Version, "build_date": s.cfg.BuildDate, "min_password": minPasswordLen}
+	// For the login page: is the generated first password still in use?
+	_, statErr := os.Stat(s.initialPwPath())
+	s.st.mu.Lock()
+	out["initial_setup"] = statErr == nil && s.st.userByID(s.st.st.InitialUser) != nil
+	s.st.mu.Unlock()
 	if c, err := r.Cookie(cookieName); err == nil {
 		if uid := s.sess.userOf(c.Value); uid != "" {
 			s.st.mu.Lock()

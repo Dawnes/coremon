@@ -218,7 +218,7 @@ function openJob(id) {
 let view = null;
 const globalActs = {
   'open-job': (t) => openJob(t.dataset.id),
-  logout: async () => { await POST('logout').catch(() => {}); showLogin(); },
+  logout: async () => { await POST('logout').catch(() => {}); await boot().catch(() => showLogin()); },
 };
 document.addEventListener('click', (e) => {
   const t = e.target.closest('[data-act]');
@@ -273,7 +273,8 @@ function showLogin() {
         <div class="loginerr" id="login-err" role="alert"></div>
         <button class="btn primary" type="submit">Sign in</button>
       </form>
-      <div class="hint">First start? Sign in as <code>admin</code>; the initial password is in <code>/var/lib/coremon-master/initial-password.txt</code> on the master.</div>
+      ${session.initial_setup ? html`<div class="hint">First start? Sign in as <code>admin</code>; the initial password is in <code>/var/lib/coremon-master/initial-password.txt</code> on the master.</div>` : ''}
+      ${session.version ? html`<div class="loginver">Coremon v${session.version}</div>` : ''}
     </div></div>`);
   view = {
     acts: {

@@ -52,6 +52,9 @@ func TestUsersAndRoles(t *testing.T) {
 	pw, _ := os.ReadFile(filepath.Join(s.cfg.DataDir, "initial-password.txt"))
 
 	admin := newUIClient(t, srv.URL)
+	if _, body := admin.do("GET", "/api/ui/session", ""); !strings.Contains(body, `"initial_setup":true`) || !strings.Contains(body, `"version":"0.2.4"`) {
+		t.Fatalf("login page before first password change: %s", body)
+	}
 	if code, body := admin.do("POST", "/api/ui/login", `{"username":"admin","password":"nope"}`); code != 401 || body != "wrong user name or password" {
 		t.Fatalf("wrong password: %d %q", code, body)
 	}
@@ -97,6 +100,14 @@ func TestUsersAndRoles(t *testing.T) {
 	// A viewer may change its own password.
 	if code, body := ro.do("POST", "/api/ui/password", `{"current":"abcde","new":"fghij"}`); code != 200 {
 		t.Errorf("viewer own password: %d %s", code, body)
+	}
+
+	// Once admin changes the generated password, the login page hint goes.
+	if code, _ := admin.do("POST", "/api/ui/password", `{"current":"`+strings.TrimSpace(string(pw))+`","new":"newpass"}`); code != 200 {
+		t.Fatal("admin password change failed")
+	}
+	if _, body := newUIClient(t, srv.URL).do("GET", "/api/ui/session", ""); !strings.Contains(body, `"initial_setup":false`) {
+		t.Fatalf("hint must disappear after the password change: %s", body)
 	}
 
 	// The last administrator cannot be removed or demoted.
