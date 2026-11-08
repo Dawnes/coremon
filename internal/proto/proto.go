@@ -1,4 +1,4 @@
-// Package proto defines the wire protocol between agent-core and master.
+// Package proto defines the wire protocol between the agent and the master.
 //
 // Transport: HTTPS (TLS pinned by SPKI hash on the agent side). The agent
 // always initiates: it long-polls the master for commands and posts output
@@ -8,38 +8,27 @@ package proto
 import "encoding/json"
 
 // ProtocolVersion is bumped on incompatible changes.
-const ProtocolVersion = 1
+// 2: built-in features instead of modules; heartbeat in poll responses.
+const ProtocolVersion = 2
 
-// Facts describe the system an agent runs on. Sent on every poll.
+// Facts describe the system an agent runs on. Sent on every poll; the
+// master keeps only the latest value.
 type Facts struct {
 	Hostname  string   `json:"hostname"`
-	OSName    string   `json:"os_name"`    // e.g. "Debian GNU/Linux 12 (bookworm)"
+	OSName    string   `json:"os_name"`    // e.g. "Debian GNU/Linux 13 (trixie)"
 	OSID      string   `json:"os_id"`      // e.g. "debian"
-	OSVersion string   `json:"os_version"` // e.g. "12"
+	OSVersion string   `json:"os_version"` // e.g. "13"
 	Kernel    string   `json:"kernel"`
 	OS        string   `json:"os"`   // Go GOOS, e.g. "linux"
 	Arch      string   `json:"arch"` // Go GOARCH, e.g. "amd64"
 	Virt      string   `json:"virt"` // lxc, kvm, none, ...
 	UptimeSec int64    `json:"uptime_sec"`
 	CPUs      int      `json:"cpus"`
-	Load1     float64  `json:"load1"`
-	MemTotal  uint64   `json:"mem_total"`
-	MemAvail  uint64   `json:"mem_avail"`
-	DiskTotal uint64   `json:"disk_total"`
-	DiskFree  uint64   `json:"disk_free"`
+	MemTotal  uint64   `json:"mem_total"` // memory assigned to the system, bytes
 	IPs       []string `json:"ips"`
 }
 
-// Manifest describes a module and the actions it offers.
-type Manifest struct {
-	Name        string       `json:"name"`
-	Version     string       `json:"version"`
-	Title       string       `json:"title"`
-	Description string       `json:"description"`
-	Actions     []ActionSpec `json:"actions"`
-}
-
-// ActionSpec describes one action of a module.
+// ActionSpec describes one action of a built-in feature.
 type ActionSpec struct {
 	Name     string `json:"name"`
 	Title    string `json:"title"`
@@ -47,25 +36,24 @@ type ActionSpec struct {
 	Mutating bool   `json:"mutating"` // changes the system
 }
 
+// FeatureInfo is reported by the agent for every built-in feature.
+type FeatureInfo struct {
+	Name    string       `json:"name"`
+	Title   string       `json:"title"`
+	Actions []ActionSpec `json:"actions"`
+}
+
 // Action returns the spec for the named action, or nil.
-func (m *Manifest) Action(name string) *ActionSpec {
-	if m == nil {
+func (f *FeatureInfo) Action(name string) *ActionSpec {
+	if f == nil {
 		return nil
 	}
-	for i := range m.Actions {
-		if m.Actions[i].Name == name {
-			return &m.Actions[i]
+	for i := range f.Actions {
+		if f.Actions[i].Name == name {
+			return &f.Actions[i]
 		}
 	}
 	return nil
-}
-
-// ModuleInfo is reported by the agent for every installed module.
-type ModuleInfo struct {
-	Name     string    `json:"name"`
-	Version  string    `json:"version"`
-	Manifest *Manifest `json:"manifest,omitempty"`
-	Error    string    `json:"error,omitempty"`
 }
 
 // EnrollRequest is sent once, with the one-time enrollment token.
@@ -84,41 +72,42 @@ type EnrollResponse struct {
 
 // PollRequest is the agent heartbeat; the master answers with commands.
 type PollRequest struct {
-	Protocol    int          `json:"protocol"`
-	CoreVersion string       `json:"core_version"`
-	Facts       Facts        `json:"facts"`
-	Modules     []ModuleInfo `json:"modules"`
-	Running     []string     `json:"running"` // command IDs still executing
+	Protocol    int           `json:"protocol"`
+	CoreVersion string        `json:"core_version"`
+	Facts       Facts         `json:"facts"`
+	Features    []FeatureInfo `json:"features"`
+	Running     []string      `json:"running"` // command IDs still executing
 }
 
-// PollResponse carries zero or more commands.
+// PollResponse carries zero or more commands. Heartbeat is the longest the
+// master holds a poll open, in seconds; the agent sizes its timeout by it.
 type PollResponse struct {
-	Commands []Command `json:"commands"`
+	Commands  []Command `json:"commands"`
+	Heartbeat int       `json:"heartbeat,omitempty"`
 }
 
-// Command types.
+// Command types. "core.update" and "agent.uninstall" are unchanged since
+// protocol 1, so a new master can still update an old agent.
 const (
-	CmdModuleCall    = "module.call"    // run Module/Action with Params
-	CmdModuleInstall = "module.install" // install Artifact
-	CmdModuleRemove  = "module.remove"  // remove Module
-	CmdCoreUpdate    = "core.update"    // replace agent-core with Artifact
-	CmdUninstall     = "agent.uninstall"
+	CmdAction     = "action"      // run Feature/Action with Params
+	CmdCoreUpdate = "core.update" // replace the agent with Artifact (up- or downgrade)
+	CmdUninstall  = "agent.uninstall"
 )
 
 // Command is an instruction from master to agent.
 type Command struct {
 	ID       string          `json:"id"`
 	Type     string          `json:"type"`
-	Module   string          `json:"module,omitempty"`
+	Feature  string          `json:"feature,omitempty"`
 	Action   string          `json:"action,omitempty"`
 	Params   json.RawMessage `json:"params,omitempty"`
 	Artifact *Artifact       `json:"artifact,omitempty"`
 	Timeout  int             `json:"timeout,omitempty"` // seconds
 }
 
-// Artifact is a signed binary (agent-core or a module).
+// Artifact is a signed agent binary.
 type Artifact struct {
-	Kind      string `json:"kind"` // "core" or "module"
+	Kind      string `json:"kind"` // "core"
 	Name      string `json:"name"`
 	Version   string `json:"version"`
 	OS        string `json:"os"`
@@ -139,21 +128,11 @@ type OutputItem struct {
 	Data      string `json:"data"`
 }
 
-// Result is the final outcome of a command.
+// Result is the final outcome of a command. By convention, a "state" key in
+// Data is stored by the master as that feature's current state.
 type Result struct {
 	CommandID string          `json:"command_id"`
 	OK        bool            `json:"ok"`
 	Error     string          `json:"error,omitempty"`
 	Data      json.RawMessage `json:"data,omitempty"`
-}
-
-// Module stdio protocol: the agent runs `<module> manifest` (prints Manifest
-// JSON) or `<module> run <action>` with params JSON on stdin. The module
-// writes JSON lines (ModuleEvent) to stdout.
-type ModuleEvent struct {
-	T     string          `json:"t"`           // "log" or "result"
-	D     string          `json:"d,omitempty"` // log line
-	OK    bool            `json:"ok,omitempty"`
-	Error string          `json:"error,omitempty"`
-	Data  json.RawMessage `json:"data,omitempty"`
 }

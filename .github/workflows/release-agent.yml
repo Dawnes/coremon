@@ -1,0 +1,58 @@
+# Builds, signs and publishes an agent release when an agent tag is pushed:
+#
+#   git tag agent-v0.2.1 && git push origin agent-v0.2.1
+#
+# Then adds it to the signed version index (release "index", file
+# versions.json), which keeps the newest 3 agent versions. Masters pick it
+# up on their next check. The signing key lives only in the "release"
+# environment's secret COREMON_SIGNING_KEY; add a required reviewer to that
+# environment to approve every release by hand.
+name: release-agent
+
+on:
+  push:
+    tags: ["agent-v*.*.*"]
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-index # never update the index twice at the same time
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    environment: release
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          check-latest: true
+          cache: false
+
+      - name: Build, test, sign
+        env:
+          COREMON_SIGNING_KEY: ${{ secrets.COREMON_SIGNING_KEY }}
+        run: |
+          VERSION="${GITHUB_REF_NAME#agent-v}"
+          echo "VERSION=$VERSION" >> "$GITHUB_ENV"
+          sh ./build.sh agent "$VERSION"
+
+      - name: Publish GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" dist/assets/* \
+            --repo "$GITHUB_REPOSITORY" --title "Coremon agent $VERSION" --latest=false \
+            --notes "Agent $VERSION. Masters download it automatically from the version index; roll it out per system on the dashboard (Releases or the system's Agent tab)."
+
+      - name: Update version index
+        env:
+          GH_TOKEN: ${{ github.token }}
+          COREMON_SIGNING_KEY: ${{ secrets.COREMON_SIGNING_KEY }}
+        run: sh ./deploy/update-index.sh agent "$VERSION"

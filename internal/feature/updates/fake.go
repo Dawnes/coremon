@@ -1,6 +1,6 @@
 //go:build fake
 
-package main
+package updates
 
 // fakeBackend simulates a Debian system with pending updates. Only compiled
 // with `-tags fake` and enabled with COREMON_FAKE=1; used for UI
@@ -13,7 +13,7 @@ import (
 	"path/filepath"
 	"time"
 
-	"coremon/internal/modkit"
+	"coremon/internal/feature"
 )
 
 func init() {
@@ -56,7 +56,7 @@ func (fakeBackend) save(p []Package) {
 	_ = os.WriteFile(fakeFile(), b, 0o600)
 }
 
-func (f fakeBackend) Refresh(c *modkit.Ctx) error {
+func (f fakeBackend) Refresh(c *feature.Ctx) error {
 	for _, l := range []string{"Hit:1 http://deb.debian.org/debian bookworm InRelease", "Get:2 http://security.debian.org/debian-security bookworm-security InRelease [48.0 kB]", "Fetched 48.0 kB in 1s (52.1 kB/s)", "Reading package lists..."} {
 		c.Log("%s", l)
 		time.Sleep(300 * time.Millisecond)
@@ -64,12 +64,12 @@ func (f fakeBackend) Refresh(c *modkit.Ctx) error {
 	return nil
 }
 
-func (f fakeBackend) List(c *modkit.Ctx) (*Snapshot, error) {
+func (f fakeBackend) List(c *feature.Ctx) (*Snapshot, error) {
 	p := f.load()
 	return &Snapshot{Backend: "fake", Packages: p, RefreshedAt: time.Now().Unix(), RebootRequired: len(p) < len(fakeDefault()), RebootPkgs: []string{"libc6"}}, nil
 }
 
-func (f fakeBackend) Install(c *modkit.Ctx, pkgs []string) error {
+func (f fakeBackend) Install(c *feature.Ctx, pkgs []string) error {
 	want := map[string]bool{}
 	for _, n := range pkgs {
 		want[n] = true
@@ -91,7 +91,7 @@ func (f fakeBackend) Install(c *modkit.Ctx, pkgs []string) error {
 	return nil
 }
 
-func (f fakeBackend) UpgradeAll(c *modkit.Ctx) error {
+func (f fakeBackend) UpgradeAll(c *feature.Ctx) error {
 	var names []string
 	for _, p := range f.load() {
 		names = append(names, p.Name)

@@ -1,41 +1,42 @@
 #!/bin/sh
-# Builds, signs and packages a Coremon release. Used by the GitHub Actions
-# release workflow and for local builds on Linux/macOS.
+# Builds, signs and packages one Coremon release track. Used by the GitHub
+# Actions release workflows and for local builds on Linux/macOS.
 #
-#   ./build.sh                          # version from VERSION file
-#   VERSION=1.2.3 ./build.sh            # explicit version (CI: from the git tag)
-#   ARCHES=amd64 ./build.sh             # subset of architectures
+#   ./build.sh agent 0.2.0              # agent binaries
+#   ./build.sh master 0.2.0             # master package + installer
+#   ARCHES=amd64 ./build.sh agent 0.2.0 # subset of architectures
 #
+# Output in dist/: assets/ (files to attach to the GitHub release),
+# release/ (signed layout, input for `coremon-sign index`) and coremon-sign.
 # Signing key: $COREMON_SIGNING_KEY (CI secret) or keys/signing.key.
 # COREMON_REPO=owner/name bakes the GitHub repository into install-master.sh.
 set -eu
 cd "$(dirname "$0")"
 
-VERSION="${VERSION:-$(tr -d '[:space:]' < VERSION)}"
+TRACK="${1:-}"
+VERSION="${2:-}"
 ARCHES="${ARCHES:-amd64 arm64}"
 REPO="${COREMON_REPO:-}"
-NAME="coremon-$VERSION"
-OUT="dist/$NAME"
-rm -rf dist
-mkdir -p "$OUT/release"
+case "$TRACK" in agent|master) ;; *) echo "usage: $0 agent|master VERSION" >&2; exit 2 ;; esac
+echo "$VERSION" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$' || { echo "version must be X.Y.Z" >&2; exit 2; }
 
-gobuild() { # goarch pkg dst version
-  CGO_ENABLED=0 GOOS=linux GOARCH="$1" go build -trimpath -ldflags "-s -w -X main.version=$4" -o "$3" "$2"
+rm -rf dist
+mkdir -p dist/release dist/assets
+
+gobuild() { # goarch pkg dst
+  CGO_ENABLED=0 GOOS=linux GOARCH="$1" go build -trimpath -ldflags "-s -w -X main.version=$VERSION" -o "$3" "$2"
 }
 
 echo "Running tests..."
 go vet ./...
 go test ./...
 
+if [ "$TRACK" = agent ]; then KIND=core; BIN=coremon-agent; PKG=./cmd/coremon-agent
+else KIND=master; BIN=coremon-master; PKG=./cmd/coremon-master; fi
+
 for A in $ARCHES; do
-  echo "Building linux/$A ..."
-  gobuild "$A" ./cmd/coremon-master "$OUT/release/master/$VERSION/linux-$A/coremon-master" "$VERSION"
-  gobuild "$A" ./cmd/coremon-agent "$OUT/release/core/$VERSION/linux-$A/coremon-agent" "$VERSION"
-  for M in modules/*/; do
-    M="$(basename "$M")"
-    MV="$(tr -d '[:space:]' < "modules/$M/VERSION")"
-    gobuild "$A" "./modules/$M" "$OUT/release/modules/$M/$MV/linux-$A/$M" "$MV"
-  done
+  echo "Building $BIN $VERSION linux/$A ..."
+  gobuild "$A" "$PKG" "dist/release/$KIND/$VERSION/linux-$A/$BIN"
 done
 
 go build -o dist/coremon-sign ./cmd/coremon-sign
@@ -44,18 +45,30 @@ if [ -z "${COREMON_SIGNING_KEY:-}" ] && [ ! -f keys/signing.key ]; then
   echo "Creating local signing key in keys/ ..."
   dist/coremon-sign keygen -key keys/signing.key -pub keys/signing.pub
 fi
-dist/coremon-sign release -key keys/signing.key -dir "$OUT/release"
+dist/coremon-sign release -key keys/signing.key -dir dist/release
 
-subst() { # src dst sha
-  sed -e "s|@REPO@|$REPO|g" -e "s|@VERSION@|$VERSION|g" -e "s|@SHA256@|$3|g" "$1" > "$2"
-}
-cp deploy/coremon-master.service deploy/coremon-master-update.service deploy/coremon-master-update.path "$OUT/"
-subst deploy/install-master.sh "$OUT/install-master.sh" ""
+# Raw binaries + signatures as release assets (downloaded by the master
+# via the version index).
+for A in $ARCHES; do
+  cp "dist/release/$KIND/$VERSION/linux-$A/$BIN" "dist/assets/$BIN-$VERSION-linux-$A"
+  cp "dist/release/$KIND/$VERSION/linux-$A/$BIN.sig" "dist/assets/$BIN-$VERSION-linux-$A.sig"
+done
 
-tar -C dist -czf "dist/$NAME.tar.gz" "$NAME"
-SHA="$(sha256sum "dist/$NAME.tar.gz" | cut -d' ' -f1)"
-subst deploy/install-master.sh dist/install-master.sh "$SHA"
-(cd dist && sha256sum "$NAME.tar.gz" install-master.sh > SHA256SUMS)
+if [ "$TRACK" = master ]; then
+  NAME="coremon-master-$VERSION"
+  PK="dist/$NAME"
+  mkdir -p "$PK/release"
+  cp -R dist/release/master "$PK/release/"
+  cp dist/release/signing.pub "$PK/release/"
+  cp deploy/coremon-master.service deploy/coremon-master-update.service deploy/coremon-master-update.path "$PK/"
+  subst() { sed -e "s|@REPO@|$REPO|g" -e "s|@VERSION@|$VERSION|g" -e "s|@SHA256@|$2|g" deploy/install-master.sh > "$1"; }
+  subst "$PK/install-master.sh" ""
+  tar -C dist -czf "dist/assets/$NAME.tar.gz" "$NAME"
+  SHA="$(sha256sum "dist/assets/$NAME.tar.gz" | cut -d' ' -f1)"
+  subst dist/assets/install-master.sh "$SHA"
+fi
 
+(cd dist/assets && sha256sum $(ls | grep -v '\.sig$') > SHA256SUMS)
 echo
-echo "Release ready: dist/$NAME.tar.gz (+ dist/install-master.sh, dist/SHA256SUMS)"
+echo "Release assets ready in dist/assets:"
+ls -l dist/assets

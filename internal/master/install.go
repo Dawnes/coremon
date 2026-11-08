@@ -18,14 +18,12 @@ PIN="{{.Pin}}"
 SHA_AMD64="{{.SHAAmd64}}"
 SHA_ARM64="{{.SHAArm64}}"
 TOKEN=""
-ALLOW="*"
 
 die() { echo "coremon: $*" >&2; exit 1; }
 
 while [ $# -gt 0 ]; do
   case "$1" in
     --token) TOKEN="${2:-}"; shift 2 ;;
-    --allow-modules) ALLOW="${2:-}"; shift 2 ;;
     *) die "unknown argument: $1" ;;
   esac
 done
@@ -36,7 +34,6 @@ command -v curl >/dev/null 2>&1 || die "curl is required (apt-get install -y cur
 command -v sha256sum >/dev/null 2>&1 || die "sha256sum is required"
 
 case "$TOKEN" in ""|*[!a-f0-9]*) [ -f /var/lib/coremon/identity.json ] || die "a valid --token is required" ;; esac
-case "$ALLOW" in *[!a-z0-9_,*-]*) die "invalid --allow-modules value" ;; esac
 
 case "$(uname -m)" in
   x86_64|amd64) ARCH=amd64; SHA="$SHA_AMD64" ;;
@@ -55,12 +52,6 @@ install -m 0755 "$TMP" /usr/local/bin/coremon-agent
 mkdir -p /etc/coremon /var/lib/coremon
 chmod 700 /etc/coremon /var/lib/coremon
 
-if [ "$ALLOW" = "none" ]; then
-  ALLOW_JSON="[]"
-else
-  ALLOW_JSON="[$(echo "$ALLOW" | sed 's/[^,][^,]*/"&"/g')]"
-fi
-
 if [ -f /var/lib/coremon/identity.json ]; then
   echo "coremon: already enrolled - updating binary and service only"
 else
@@ -69,8 +60,7 @@ else
 {
   "master_url": "$MASTER",
   "master_pin": "$PIN",
-  "token": "$TOKEN",
-  "allow_modules": $ALLOW_JSON
+  "token": "$TOKEN"
 }
 EOF
 fi
@@ -128,10 +118,10 @@ func (s *Server) derivedURL(r *http.Request) string {
 func (s *Server) handleInstallScript(w http.ResponseWriter, r *http.Request) {
 	latest := s.repo.coreLatest()
 	data := struct{ URL, Pin, SHAAmd64, SHAArm64 string }{URL: s.baseURL(r), Pin: s.pin}
-	if e := s.repo.find("core", "coremon-agent", latest, "linux", "amd64"); e != nil {
+	if e := s.repo.find("core", latest, "linux", "amd64"); e != nil {
 		data.SHAAmd64 = e.SHA256
 	}
-	if e := s.repo.find("core", "coremon-agent", latest, "linux", "arm64"); e != nil {
+	if e := s.repo.find("core", latest, "linux", "arm64"); e != nil {
 		data.SHAArm64 = e.SHA256
 	}
 	w.Header().Set("Content-Type", "text/x-shellscript; charset=utf-8")

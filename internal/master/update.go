@@ -21,7 +21,9 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"time"
 
+	"coremon/internal/release"
 	"coremon/internal/sign"
 )
 
@@ -35,7 +37,7 @@ func (s *Server) handleMasterUpdate(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "no newer master version in the repository", http.StatusBadRequest)
 		return
 	}
-	if s.repo.find("master", "coremon-master", v, runtime.GOOS, runtime.GOARCH) == nil {
+	if s.repo.find("master", v, runtime.GOOS, runtime.GOARCH) == nil {
 		http.Error(w, "no master build for this platform", http.StatusBadRequest)
 		return
 	}
@@ -49,6 +51,13 @@ func (s *Server) handleMasterUpdate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.audit.write(actorAdmin, clientIP(r), "master.update", v, "from "+s.cfg.Version)
+	go func() {
+		// The root service restarts us; if it refused, say so.
+		time.Sleep(20 * time.Second)
+		if _, err := os.Stat(p); err == nil {
+			log.Printf("master update request not picked up; is coremon-master-update.path enabled?")
+		}
+	}()
 	writeJSON(w, map[string]string{"requested": v})
 }
 
@@ -68,8 +77,9 @@ func readLimited(p string, max int64) ([]byte, error) {
 	return b, nil
 }
 
-// ApplyUpdate runs as root (from coremon-master-update.service).
-func ApplyUpdate(dataDir, keyPath, target string) error {
+// ApplyUpdate runs as root (from coremon-master-update.service). current is
+// the version of the installed master; the master is never downgraded.
+func ApplyUpdate(dataDir, keyPath, target, current string) error {
 	reqPath := updateRequestPath(dataDir)
 	b, err := readLimited(reqPath, 64)
 	os.Remove(reqPath) // never loop on the same request
@@ -77,8 +87,11 @@ func ApplyUpdate(dataDir, keyPath, target string) error {
 		return fmt.Errorf("read request: %w", err)
 	}
 	version := strings.TrimSpace(string(b))
-	if !versionRe.MatchString(version) {
+	if !release.VersionRe.MatchString(version) {
 		return errors.New("invalid version in update request")
+	}
+	if !versionLess(current, version) {
+		return fmt.Errorf("refusing %s: not newer than the installed master %s (the master is never downgraded)", version, current)
 	}
 	kb, err := readLimited(keyPath, 1024)
 	if err != nil {

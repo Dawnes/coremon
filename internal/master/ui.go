@@ -15,7 +15,10 @@ import (
 	"coremon/internal/proto"
 )
 
-const actorAdmin = "admin"
+const (
+	actorAdmin     = "admin"
+	minPasswordLen = 5
+)
 
 // requireUI checks the session cookie and the anti-CSRF header.
 func (s *Server) requireUI(h http.HandlerFunc) http.HandlerFunc {
@@ -37,7 +40,7 @@ func (s *Server) handleSession(w http.ResponseWriter, r *http.Request) {
 	c, err := r.Cookie(cookieName)
 	authed := err == nil && s.sess.valid(c.Value)
 	_, statErr := os.Stat(s.initialPwPath())
-	writeJSON(w, map[string]any{"authenticated": authed, "version": s.cfg.Version, "initial_password": statErr == nil})
+	writeJSON(w, map[string]any{"authenticated": authed, "version": s.cfg.Version, "initial_password": statErr == nil, "min_password": minPasswordLen})
 }
 
 func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
@@ -88,8 +91,8 @@ func (s *Server) handlePassword(w http.ResponseWriter, r *http.Request) {
 	if !readJSON(w, r, &req, 4096) {
 		return
 	}
-	if len(req.New) < 10 {
-		http.Error(w, "new password must be at least 10 characters", http.StatusBadRequest)
+	if len(req.New) < minPasswordLen {
+		http.Error(w, fmt.Sprintf("new password must be at least %d characters", minPasswordLen), http.StatusBadRequest)
 		return
 	}
 	s.st.mu.Lock()
@@ -121,64 +124,42 @@ type updatesSummary struct {
 	CheckedAt      int64 `json:"checked_at"`
 }
 
-type moduleView struct {
-	proto.ModuleInfo
-	Desired  string `json:"desired"`
-	Latest   string `json:"latest"`
-	Upgrade  bool   `json:"upgrade"`
-	Deployed bool   `json:"deployed"` // reported by agent
-}
-
 type agentView struct {
-	ID          string                     `json:"id"`
-	Name        string                     `json:"name"`
-	Tags        []string                   `json:"tags"`
-	Status      string                     `json:"status"`
-	Online      bool                       `json:"online"`
-	LastSeen    int64                      `json:"last_seen"`
-	EnrolledAt  int64                      `json:"enrolled_at"`
-	CoreVersion string                     `json:"core_version"`
-	CoreLatest  string                     `json:"core_latest"`
-	CoreUpgrade bool                       `json:"core_upgrade"`
-	DesiredCore string                     `json:"desired_core"`
-	Facts       proto.Facts                `json:"facts"`
-	Modules     []moduleView               `json:"modules"`
-	Updates     *updatesSummary            `json:"updates,omitempty"`
-	Busy        int                        `json:"busy"` // open jobs
-	Removing    bool                       `json:"removing"`
-	State       map[string]json.RawMessage `json:"state,omitempty"`
-	StateAt     map[string]int64           `json:"state_at,omitempty"`
+	ID           string                     `json:"id"`
+	Name         string                     `json:"name"`
+	GroupID      string                     `json:"group_id"`
+	Order        int                        `json:"order"`
+	Status       string                     `json:"status"`
+	Online       bool                       `json:"online"`
+	LastSeen     int64                      `json:"last_seen"`
+	EnrolledAt   int64                      `json:"enrolled_at"`
+	CoreVersion  string                     `json:"core_version"`
+	CoreLatest   string                     `json:"core_latest"`
+	CoreIsLatest bool                       `json:"core_is_latest"`
+	DesiredCore  string                     `json:"desired_core"`
+	Legacy       bool                       `json:"legacy"` // agent before 0.2: no built-in features
+	Facts        proto.Facts                `json:"facts"`
+	Features     []string                   `json:"features"`
+	Updates      *updatesSummary            `json:"updates,omitempty"`
+	Busy         int                        `json:"busy"` // open jobs
+	Removing     bool                       `json:"removing"`
+	State        map[string]json.RawMessage `json:"state,omitempty"`
+	StateAt      map[string]int64           `json:"state_at,omitempty"`
 }
 
 // view builds the UI representation. Caller holds s.st.mu.
 func (s *Server) view(a *Agent, full bool) agentView {
 	now := time.Now().Unix()
 	v := agentView{
-		ID: a.ID, Name: a.Name, Tags: a.Tags, Status: a.Status, Online: a.online(now),
+		ID: a.ID, Name: a.Name, GroupID: a.GroupID, Order: a.Order, Status: a.Status, Online: s.online(a, now),
 		LastSeen: a.LastSeen, EnrolledAt: a.EnrolledAt, CoreVersion: a.CoreVersion,
-		Facts: a.Facts, Removing: a.Removing, DesiredCore: a.DesiredCore,
+		Facts: a.Facts, Removing: a.Removing, DesiredCore: a.DesiredCore, Features: []string{},
 	}
 	v.CoreLatest = s.repo.coreLatest()
-	v.CoreUpgrade = v.CoreLatest != "" && a.CoreVersion != "" && versionLess(a.CoreVersion, v.CoreLatest)
-	if v.Tags == nil {
-		v.Tags = []string{}
-	}
-	seen := map[string]bool{}
-	for _, m := range a.Modules {
-		mv := moduleView{ModuleInfo: m, Deployed: true, Latest: s.repo.moduleLatest(m.Name)}
-		mv.Desired = a.DesiredModules[m.Name]
-		mv.Upgrade = mv.Latest != "" && m.Version != "" && versionLess(m.Version, mv.Latest)
-		v.Modules = append(v.Modules, mv)
-		seen[m.Name] = true
-	}
-	for name, want := range a.DesiredModules {
-		if !seen[name] {
-			v.Modules = append(v.Modules, moduleView{ModuleInfo: proto.ModuleInfo{Name: name}, Desired: want, Latest: s.repo.moduleLatest(name)})
-		}
-	}
-	sort.Slice(v.Modules, func(i, j int) bool { return v.Modules[i].Name < v.Modules[j].Name })
-	if v.Modules == nil {
-		v.Modules = []moduleView{}
+	v.CoreIsLatest = v.CoreLatest != "" && a.CoreVersion == v.CoreLatest
+	v.Legacy = a.CoreVersion != "" && versionLess(a.CoreVersion, minAgentVersion)
+	for _, f := range a.Features {
+		v.Features = append(v.Features, f.Name)
 	}
 	if raw, ok := a.State["updates"]; ok {
 		var u updatesSummary
@@ -197,14 +178,37 @@ func (s *Server) view(a *Agent, full bool) agentView {
 	return v
 }
 
+// orderedAgents returns agents in display order: by group (in group order,
+// ungrouped last), then by position. Caller holds s.st.mu.
+func (s *Server) orderedAgents() []*Agent {
+	gpos := map[string]int{"": len(s.st.st.Groups)}
+	for i, g := range s.st.st.Groups {
+		gpos[g.ID] = i
+	}
+	out := make([]*Agent, 0, len(s.st.st.Agents))
+	for _, a := range s.st.st.Agents {
+		out = append(out, a)
+	}
+	sort.Slice(out, func(i, j int) bool {
+		a, b := out[i], out[j]
+		if gpos[a.GroupID] != gpos[b.GroupID] {
+			return gpos[a.GroupID] < gpos[b.GroupID]
+		}
+		if a.Order != b.Order {
+			return a.Order < b.Order
+		}
+		return strings.ToLower(a.Name) < strings.ToLower(b.Name)
+	})
+	return out
+}
+
 func (s *Server) handleOverview(w http.ResponseWriter, r *http.Request) {
 	s.st.mu.Lock()
 	defer s.st.mu.Unlock()
 	agents := []agentView{}
-	for _, a := range s.st.st.Agents {
+	for _, a := range s.orderedAgents() {
 		agents = append(agents, s.view(a, false))
 	}
-	sort.Slice(agents, func(i, j int) bool { return strings.ToLower(agents[i].Name) < strings.ToLower(agents[j].Name) })
 	active := 0
 	for _, j := range s.st.st.Jobs {
 		if !j.done() {
@@ -212,7 +216,7 @@ func (s *Server) handleOverview(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	writeJSON(w, map[string]any{
-		"agents": agents, "active_jobs": active, "server_time": time.Now().Unix(),
+		"agents": agents, "groups": s.st.st.Groups, "active_jobs": active, "server_time": time.Now().Unix(),
 		"settings": s.st.st.Settings, "repo": s.repo.summary(),
 	})
 }
@@ -243,26 +247,8 @@ func (s *Server) handleAgentGet(w http.ResponseWriter, r *http.Request) {
 	if a == nil {
 		return
 	}
-	writeJSON(w, map[string]any{"agent": s.view(a, true), "jobs": s.jobsFor(a.ID, 50, false), "repo": s.repo.summary()})
-}
-
-var tagRe = regexp.MustCompile(`^[A-Za-z0-9._-]{1,32}$`)
-
-func cleanTags(in []string) ([]string, error) {
-	out := []string{}
-	seen := map[string]bool{}
-	for _, t := range in {
-		t = strings.TrimSpace(t)
-		if t == "" || seen[t] {
-			continue
-		}
-		if !tagRe.MatchString(t) {
-			return nil, fmt.Errorf("invalid tag %q (letters, digits, . _ - only)", t)
-		}
-		seen[t] = true
-		out = append(out, t)
-	}
-	return out, nil
+	writeJSON(w, map[string]any{"agent": s.view(a, true), "jobs": s.jobsFor(a.ID, 50, false),
+		"repo": s.repo.summary(), "groups": s.st.st.Groups})
 }
 
 func cleanName(n string) string {
@@ -273,11 +259,23 @@ func cleanName(n string) string {
 	return n
 }
 
+// setGroup moves an agent to the end of a group. Caller holds s.st.mu.
+func (s *Server) setGroup(a *Agent, groupID string) error {
+	if groupID != "" && s.st.group(groupID) == nil {
+		return fmt.Errorf("group not found")
+	}
+	if a.GroupID != groupID {
+		a.Order = s.st.nextOrder(groupID)
+		a.GroupID = groupID
+	}
+	return nil
+}
+
 func (s *Server) handleAgentUpdate(w http.ResponseWriter, r *http.Request) {
 	var req struct {
-		Name   *string   `json:"name"`
-		Tags   *[]string `json:"tags"`
-		Paused *bool     `json:"paused"`
+		Name    *string `json:"name"`
+		GroupID *string `json:"group_id"`
+		Paused  *bool   `json:"paused"`
 	}
 	if !readJSON(w, r, &req, 16<<10) {
 		return
@@ -293,13 +291,11 @@ func (s *Server) handleAgentUpdate(w http.ResponseWriter, r *http.Request) {
 			a.Name = n
 		}
 	}
-	if req.Tags != nil {
-		t, err := cleanTags(*req.Tags)
-		if err != nil {
+	if req.GroupID != nil {
+		if err := s.setGroup(a, *req.GroupID); err != nil {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
-		a.Tags = t
 	}
 	if req.Paused != nil && a.Status != "pending" {
 		if *req.Paused {
@@ -308,19 +304,16 @@ func (s *Server) handleAgentUpdate(w http.ResponseWriter, r *http.Request) {
 			a.Status = "active"
 			s.wake(a.ID)
 		}
-		s.audit.write(actorAdmin, clientIP(r), "agent."+a.Status, a.ID, a.Name)
+		s.audit.writeAgent(actorAdmin, clientIP(r), "agent."+a.Status, a, "")
 	}
 	s.st.markDirty()
 	writeJSON(w, s.view(a, false))
 }
 
-var moduleNameRe = regexp.MustCompile(`^[a-z][a-z0-9_-]{0,31}$`)
-
 func (s *Server) handleApprove(w http.ResponseWriter, r *http.Request) {
 	var req struct {
-		Name    string   `json:"name"`
-		Tags    []string `json:"tags"`
-		Modules []string `json:"modules"`
+		Name    string `json:"name"`
+		GroupID string `json:"group_id"`
 	}
 	if !readJSON(w, r, &req, 16<<10) {
 		return
@@ -335,27 +328,18 @@ func (s *Server) handleApprove(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "agent is not pending", http.StatusConflict)
 		return
 	}
-	tags, err := cleanTags(req.Tags)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
-		return
-	}
 	if n := cleanName(req.Name); n != "" {
 		a.Name = n
 	}
-	a.Tags = tags
-	for _, m := range req.Modules {
-		if !moduleNameRe.MatchString(m) {
-			continue
-		}
-		if l := s.repo.moduleLatest(m); l != "" {
-			a.DesiredModules[m] = l
-		}
+	if err := s.setGroup(a, req.GroupID); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
 	}
 	a.Status = "active"
 	s.st.markDirty()
 	s.wake(a.ID)
-	s.audit.write(actorAdmin, clientIP(r), "agent.approved", a.ID, fmt.Sprintf("%s modules=%v", a.Name, req.Modules))
+	s.audit.writeAgent(actorAdmin, clientIP(r), "agent.approved", a, "")
+	go s.schedulerTick() // run the first check right away
 	writeJSON(w, s.view(a, false))
 }
 
@@ -372,82 +356,72 @@ func (s *Server) handleRemove(w http.ResponseWriter, r *http.Request) {
 	if a == nil {
 		return
 	}
-	if req.Uninstall && a.online(time.Now().Unix()) {
+	if req.Uninstall && s.online(a, time.Now().Unix()) {
 		a.Removing = true
 		j := s.enqueue(a, &Job{Type: proto.CmdUninstall, Actor: actorAdmin, Timeout: 120})
-		s.audit.write(actorAdmin, clientIP(r), "agent.uninstall", a.ID, a.Name)
+		s.audit.writeAgent(actorAdmin, clientIP(r), "agent.uninstall", a, "")
 		writeJSON(w, map[string]any{"job": j.ID})
 		return
 	}
 	delete(s.st.st.Agents, a.ID)
 	delete(s.wakes, a.ID)
 	s.st.markDirty()
-	s.audit.write(actorAdmin, clientIP(r), "agent.removed", a.ID, a.Name)
+	s.audit.writeAgent(actorAdmin, clientIP(r), "agent.removed", a, "")
 	writeJSON(w, map[string]any{"removed": true})
 }
 
-func (s *Server) handleModuleOp(w http.ResponseWriter, r *http.Request) {
+// handleCoreUpdate up- or downgrades one agent to a version from the
+// release store.
+func (s *Server) handleCoreUpdate(w http.ResponseWriter, r *http.Request) {
 	var req struct {
-		Name string `json:"name"`
-		Op   string `json:"op"` // deploy | upgrade | remove
+		Version string `json:"version"`
 	}
 	if !readJSON(w, r, &req, 4096) {
 		return
 	}
-	if !moduleNameRe.MatchString(req.Name) {
-		http.Error(w, "invalid module name", http.StatusBadRequest)
-		return
-	}
 	s.st.mu.Lock()
 	defer s.st.mu.Unlock()
 	a := s.agentOr404(w, r)
 	if a == nil {
 		return
 	}
-	switch req.Op {
-	case "deploy", "upgrade":
-		l := s.repo.moduleLatest(req.Name)
-		if l == "" {
-			http.Error(w, "module not in repository", http.StatusBadRequest)
-			return
-		}
-		a.DesiredModules[req.Name] = l
-	case "remove":
-		delete(a.DesiredModules, req.Name)
-	default:
-		http.Error(w, "invalid op", http.StatusBadRequest)
+	if req.Version == "" {
+		req.Version = s.repo.coreLatest()
+	}
+	goos, arch := a.Facts.OS, a.Facts.Arch
+	if goos == "" {
+		goos = "linux"
+	}
+	if s.repo.find("core", req.Version, goos, arch) == nil {
+		http.Error(w, fmt.Sprintf("agent %s for %s-%s is not available on the master", req.Version, goos, arch), http.StatusBadRequest)
 		return
 	}
+	if req.Version == a.CoreVersion {
+		a.DesiredCore = ""
+		s.st.markDirty()
+		writeJSON(w, map[string]any{"agent": s.view(a, false)})
+		return
+	}
+	a.DesiredCore = req.Version
 	s.st.markDirty()
-	s.audit.write(actorAdmin, clientIP(r), "module."+req.Op, a.ID, a.Name+": "+req.Name)
-	go s.schedulerTick()
-	writeJSON(w, s.view(a, false))
+	from := a.CoreVersion
+	verb := "upgrade"
+	if versionLess(req.Version, from) {
+		verb = "downgrade"
+	}
+	s.audit.writeAgent(actorAdmin, clientIP(r), "agent."+verb, a, from+" → "+req.Version)
+	res := map[string]any{"agent": s.view(a, false)}
+	if j := s.requestCore(a, req.Version, actorAdmin); j != nil {
+		res["job"] = j.ID
+	}
+	writeJSON(w, res)
 }
 
-func (s *Server) handleCoreUpdate(w http.ResponseWriter, r *http.Request) {
-	s.st.mu.Lock()
-	defer s.st.mu.Unlock()
-	a := s.agentOr404(w, r)
-	if a == nil {
-		return
-	}
-	l := s.repo.coreLatest()
-	if l == "" {
-		http.Error(w, "no agent-core in repository", http.StatusBadRequest)
-		return
-	}
-	a.DesiredCore = l
-	s.st.markDirty()
-	s.audit.write(actorAdmin, clientIP(r), "core.update", a.ID, a.Name+" -> "+l)
-	go s.schedulerTick()
-	writeJSON(w, s.view(a, false))
-}
-
-// handleActions runs a module action on one or more agents.
+// handleActions runs a feature action on one or more agents.
 func (s *Server) handleActions(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		AgentIDs []string        `json:"agent_ids"`
-		Module   string          `json:"module"`
+		Feature  string          `json:"feature"`
 		Action   string          `json:"action"`
 		Params   json.RawMessage `json:"params"`
 	}
@@ -471,20 +445,20 @@ func (s *Server) handleActions(w http.ResponseWriter, r *http.Request) {
 			errs = append(errs, a.Name+": agent is "+a.Status)
 			continue
 		}
-		m := a.module(req.Module)
-		if m == nil || m.Manifest == nil {
-			errs = append(errs, a.Name+": module "+req.Module+" not installed")
+		f := a.feature(req.Feature)
+		if f == nil {
+			errs = append(errs, a.Name+": agent "+a.CoreVersion+" has no "+req.Feature+" function (update the agent)")
 			continue
 		}
-		spec := m.Manifest.Action(req.Action)
+		spec := f.Action(req.Action)
 		if spec == nil {
 			errs = append(errs, a.Name+": unknown action "+req.Action)
 			continue
 		}
-		j := s.enqueue(a, &Job{Type: proto.CmdModuleCall, Module: req.Module, Action: req.Action, Params: req.Params, Actor: actorAdmin, Timeout: spec.Timeout})
+		j := s.enqueue(a, &Job{Type: proto.CmdAction, Feature: req.Feature, Action: req.Action, Params: req.Params, Actor: actorAdmin, Timeout: spec.Timeout})
 		jobs = append(jobs, j.ID)
 		if spec.Mutating {
-			s.audit.write(actorAdmin, clientIP(r), req.Module+"."+req.Action, a.ID, a.Name+" "+string(req.Params))
+			s.audit.writeAgent(actorAdmin, clientIP(r), req.Feature+"."+req.Action, a, string(req.Params))
 		}
 	}
 	writeJSON(w, map[string]any{"jobs": jobs, "errors": errs})
@@ -581,55 +555,228 @@ func (s *Server) handleTokenDelete(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, map[string]bool{"ok": true})
 }
 
-func (s *Server) handleRepo(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, s.repo.summary())
-}
-
-func (s *Server) handleRepoRescan(w http.ResponseWriter, r *http.Request) {
-	s.repo.scan()
-	s.audit.write(actorAdmin, clientIP(r), "repo.rescan", "", "")
-	writeJSON(w, s.repo.summary())
-}
-
 func (s *Server) handleSettingsGet(w http.ResponseWriter, r *http.Request) {
+	url := s.indexURL()
 	s.st.mu.Lock()
 	defer s.st.mu.Unlock()
-	writeJSON(w, map[string]any{"settings": s.st.st.Settings, "pin": s.pin, "suggested_url": s.derivedURL(r)})
+	writeJSON(w, map[string]any{"settings": s.st.st.Settings, "pin": s.pin, "suggested_url": s.derivedURL(r), "index_url": url,
+		"limits": map[string]int{"heartbeat_min": minHeartbeat, "heartbeat_max": maxHeartbeat, "retention_min": minRetention, "retention_max": maxRetention}})
 }
+
+var masterURLRe = regexp.MustCompile(`^https://[A-Za-z0-9.\-\[\]:]+$`)
 
 func (s *Server) handleSettingsSave(w http.ResponseWriter, r *http.Request) {
 	var req Settings
 	if !readJSON(w, r, &req, 4096) {
 		return
 	}
+	bad := func(msg string) { http.Error(w, msg, http.StatusBadRequest) }
 	if req.CheckIntervalHours < 1 || req.CheckIntervalHours > 168 {
-		http.Error(w, "check interval must be 1-168 hours", http.StatusBadRequest)
+		bad("check interval must be 1-168 hours")
+		return
+	}
+	if req.HeartbeatSec < minHeartbeat || req.HeartbeatSec > maxHeartbeat {
+		bad(fmt.Sprintf("heartbeat must be %d-%d seconds", minHeartbeat, maxHeartbeat))
+		return
+	}
+	if req.RetentionDays < minRetention || req.RetentionDays > maxRetention {
+		bad(fmt.Sprintf("retention must be %d-%d days", minRetention, maxRetention))
 		return
 	}
 	req.MasterURL = strings.TrimRight(strings.TrimSpace(req.MasterURL), "/")
-	if req.MasterURL != "" && !regexp.MustCompile(`^https://[A-Za-z0-9.\-\[\]:]+$`).MatchString(req.MasterURL) {
-		http.Error(w, "master URL must look like https://host:port", http.StatusBadRequest)
+	if req.MasterURL != "" && !masterURLRe.MatchString(req.MasterURL) {
+		bad("master URL must look like https://host:port")
 		return
 	}
 	req.GitHubRepo = strings.Trim(strings.TrimSpace(req.GitHubRepo), "/")
 	req.GitHubRepo = strings.TrimPrefix(req.GitHubRepo, "https://github.com/")
 	if req.GitHubRepo != "" && !ghRepoRe.MatchString(req.GitHubRepo) {
-		http.Error(w, "GitHub repository must look like owner/name", http.StatusBadRequest)
+		bad("GitHub repository must look like owner/name")
 		return
 	}
 	req.GitHubSeeded = true
 	s.st.mu.Lock()
+	old := s.st.st.Settings
 	s.st.st.Settings = req
 	s.st.markDirty()
 	s.st.mu.Unlock()
-	s.audit.write(actorAdmin, clientIP(r), "settings.saved", "", fmt.Sprintf("%+v", req))
-	select {
-	case s.gh.kick <- struct{}{}:
-	default:
+	s.audit.write(actorAdmin, clientIP(r), "settings.saved", "", fmt.Sprintf("check=%dh heartbeat=%ds retention=%dd url=%q repo=%q",
+		req.CheckIntervalHours, req.HeartbeatSec, req.RetentionDays, req.MasterURL, req.GitHubRepo))
+	if old.GitHubRepo != req.GitHubRepo {
+		s.kickIndex()
+	}
+	if old.RetentionDays != req.RetentionDays {
+		go s.purge()
 	}
 	writeJSON(w, req)
 }
 
 func (s *Server) handleAudit(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, s.audit.tail(300))
+	agentID := r.URL.Query().Get("agent")
+	rows := s.audit.list(agentID, 1000)
+	s.st.mu.Lock()
+	names := map[string]string{}
+	for _, a := range s.st.st.Agents {
+		names[a.ID] = a.Name
+	}
+	s.st.mu.Unlock()
+	writeJSON(w, map[string]any{"entries": rows, "names": names})
+}
+
+// ---- groups and ordering ----
+
+func cleanGroupName(n string) string {
+	n = strings.TrimSpace(n)
+	if len(n) > 48 {
+		n = n[:48]
+	}
+	return n
+}
+
+func (s *Server) handleGroupCreate(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Name string `json:"name"`
+	}
+	if !readJSON(w, r, &req, 4096) {
+		return
+	}
+	name := cleanGroupName(req.Name)
+	if name == "" {
+		http.Error(w, "group name is required", http.StatusBadRequest)
+		return
+	}
+	s.st.mu.Lock()
+	defer s.st.mu.Unlock()
+	for _, g := range s.st.st.Groups {
+		if strings.EqualFold(g.Name, name) {
+			http.Error(w, "a group with this name exists", http.StatusConflict)
+			return
+		}
+	}
+	g := &Group{ID: "g_" + randHex(6), Name: name}
+	s.st.st.Groups = append(s.st.st.Groups, g)
+	s.st.markDirty()
+	s.audit.write(actorAdmin, clientIP(r), "group.created", name, "")
+	writeJSON(w, g)
+}
+
+func (s *Server) handleGroupUpdate(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Name string `json:"name"`
+	}
+	if !readJSON(w, r, &req, 4096) {
+		return
+	}
+	name := cleanGroupName(req.Name)
+	if name == "" {
+		http.Error(w, "group name is required", http.StatusBadRequest)
+		return
+	}
+	s.st.mu.Lock()
+	defer s.st.mu.Unlock()
+	g := s.st.group(r.PathValue("id"))
+	if g == nil {
+		http.Error(w, "group not found", http.StatusNotFound)
+		return
+	}
+	old := g.Name
+	g.Name = name
+	s.st.markDirty()
+	s.audit.write(actorAdmin, clientIP(r), "group.renamed", name, "was "+old)
+	writeJSON(w, g)
+}
+
+func (s *Server) handleGroupDelete(w http.ResponseWriter, r *http.Request) {
+	s.st.mu.Lock()
+	defer s.st.mu.Unlock()
+	id := r.PathValue("id")
+	g := s.st.group(id)
+	if g == nil {
+		http.Error(w, "group not found", http.StatusNotFound)
+		return
+	}
+	// Its systems move to the end of "Ungrouped", in their current order.
+	members := []*Agent{}
+	for _, a := range s.orderedAgents() {
+		if a.GroupID == id {
+			members = append(members, a)
+		}
+	}
+	next := s.st.nextOrder("")
+	for _, a := range members {
+		a.GroupID, a.Order = "", next
+		next++
+	}
+	groups := s.st.st.Groups[:0]
+	for _, x := range s.st.st.Groups {
+		if x.ID != id {
+			groups = append(groups, x)
+		}
+	}
+	s.st.st.Groups = groups
+	s.st.markDirty()
+	s.audit.write(actorAdmin, clientIP(r), "group.deleted", g.Name, fmt.Sprintf("%d system(s) moved to Ungrouped", len(members)))
+	writeJSON(w, map[string]bool{"ok": true})
+}
+
+// handleLayout stores the complete arrangement in one go: the order of the
+// groups and, per group, which systems it holds in which order.
+func (s *Server) handleLayout(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Groups []struct {
+			ID     string   `json:"id"` // "" = ungrouped
+			Agents []string `json:"agents"`
+		} `json:"groups"`
+	}
+	if !readJSON(w, r, &req, 256<<10) {
+		return
+	}
+	s.st.mu.Lock()
+	defer s.st.mu.Unlock()
+	byID := map[string]*Group{}
+	for _, g := range s.st.st.Groups {
+		byID[g.ID] = g
+	}
+	var order []*Group
+	seenG := map[string]bool{}
+	seenA := map[string]bool{}
+	for _, gl := range req.Groups {
+		if gl.ID != "" {
+			g := byID[gl.ID]
+			if g == nil || seenG[gl.ID] {
+				http.Error(w, "unknown or duplicate group "+gl.ID, http.StatusBadRequest)
+				return
+			}
+			seenG[gl.ID] = true
+			order = append(order, g)
+		}
+		for _, id := range gl.Agents {
+			if s.st.st.Agents[id] == nil || seenA[id] {
+				http.Error(w, "unknown or duplicate system "+id, http.StatusBadRequest)
+				return
+			}
+			seenA[id] = true
+		}
+	}
+	// Groups not mentioned keep their relative order at the end.
+	for _, g := range s.st.st.Groups {
+		if !seenG[g.ID] {
+			order = append(order, g)
+		}
+	}
+	s.st.st.Groups = order
+	for _, gl := range req.Groups {
+		for i, id := range gl.Agents {
+			a := s.st.st.Agents[id]
+			a.GroupID, a.Order = gl.ID, i
+		}
+	}
+	// Systems not mentioned (e.g. enrolled meanwhile) go after the others.
+	for _, a := range s.st.st.Agents {
+		if !seenA[a.ID] {
+			a.Order += 100000
+		}
+	}
+	s.st.markDirty()
+	writeJSON(w, map[string]bool{"ok": true})
 }

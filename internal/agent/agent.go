@@ -1,6 +1,5 @@
-// Package agent implements agent-core: enrollment, the poll loop, command
-// dispatch, module management and self-update. It executes no system
-// commands itself beyond those needed to manage modules and itself.
+// Package agent implements the coremon agent: enrollment, the poll loop,
+// command dispatch, the built-in features and self-update.
 package agent
 
 import (
@@ -14,8 +13,15 @@ import (
 	"sync"
 	"time"
 
+	"coremon/internal/feature"
+	"coremon/internal/feature/updates"
 	"coremon/internal/proto"
 )
+
+// features are the agent's built-in functions.
+func features() []feature.Feature {
+	return []feature.Feature{updates.New()}
+}
 
 // Options configure the agent.
 type Options struct {
@@ -24,34 +30,46 @@ type Options struct {
 	Version    string
 }
 
-// Agent is a running agent-core.
+// Agent is a running agent.
 type Agent struct {
-	opt     Options
-	cfg     Config
-	id      Identity
-	cl      *client
-	mods    *moduleManager
-	out     *outputBuffer
-	mu      sync.Mutex
-	running map[string]bool
-	exitReq chan int
+	opt       Options
+	cfg       Config
+	id        Identity
+	cl        *client
+	out       *outputBuffer
+	feats     map[string]feature.Feature
+	infos     []proto.FeatureInfo
+	locks     map[string]*sync.Mutex // one action per feature at a time
+	mu        sync.Mutex
+	running   map[string]bool
+	heartbeat int // seconds, as told by the master
+	exitReq   chan int
 }
 
 // Run starts the agent and blocks until ctx is cancelled or the agent must
 // exit (self-update or uninstall). It returns the desired exit code.
 func Run(ctx context.Context, opt Options) (int, error) {
-	a := &Agent{opt: opt, running: map[string]bool{}, exitReq: make(chan int, 1)}
+	a := &Agent{opt: opt, running: map[string]bool{}, exitReq: make(chan int, 1),
+		feats: map[string]feature.Feature{}, locks: map[string]*sync.Mutex{}, heartbeat: 60}
+	for _, f := range features() {
+		info := f.Info()
+		a.feats[info.Name] = f
+		a.infos = append(a.infos, info)
+		a.locks[info.Name] = &sync.Mutex{}
+	}
 	if err := loadJSON(opt.ConfigPath, &a.cfg); err != nil {
 		return 1, fmt.Errorf("read config %s: %w", opt.ConfigPath, err)
 	}
 	if err := a.cfg.validate(); err != nil {
 		return 1, fmt.Errorf("config: %w", err)
 	}
-	if err := os.MkdirAll(filepath.Join(opt.StateDir, "modules"), 0o700); err != nil {
+	if err := os.MkdirAll(opt.StateDir, 0o700); err != nil {
 		return 1, err
 	}
+	// Agents before 0.2 installed separate modules here; everything is
+	// built in now.
+	os.RemoveAll(filepath.Join(opt.StateDir, "modules"))
 	a.cl = newClient(a.cfg.MasterURL, a.cfg.MasterPin)
-	a.mods = &moduleManager{dir: filepath.Join(opt.StateDir, "modules")}
 
 	if err := a.ensureEnrolled(ctx); err != nil {
 		return 1, err
@@ -127,13 +145,15 @@ func (a *Agent) pollLoop(ctx context.Context) {
 	backoff := 2 * time.Second
 	for ctx.Err() == nil {
 		var resp proto.PollResponse
+		// The master holds the request for up to one heartbeat.
+		timeout := time.Duration(a.heartbeat+30) * time.Second
 		err := a.cl.postJSON(ctx, "/api/agent/poll", proto.PollRequest{
 			Protocol:    proto.ProtocolVersion,
 			CoreVersion: a.opt.Version,
 			Facts:       collectFacts(),
-			Modules:     a.mods.list(),
+			Features:    a.infos,
 			Running:     a.runningIDs(),
-		}, &resp, 75*time.Second)
+		}, &resp, timeout)
 		if err != nil {
 			if ctx.Err() != nil {
 				return
@@ -157,6 +177,9 @@ func (a *Agent) pollLoop(ctx context.Context) {
 			continue
 		}
 		backoff = 2 * time.Second
+		if resp.Heartbeat >= 5 && resp.Heartbeat <= 600 {
+			a.heartbeat = resp.Heartbeat
+		}
 		for _, c := range resp.Commands {
 			a.mu.Lock()
 			dup := a.running[c.ID]
@@ -171,6 +194,33 @@ func (a *Agent) pollLoop(ctx context.Context) {
 	}
 }
 
+// callFeature runs one action of a built-in feature.
+func (a *Agent) callFeature(ctx context.Context, c proto.Command, timeout time.Duration) (data json.RawMessage, err error) {
+	f := a.feats[c.Feature]
+	if f == nil {
+		return nil, fmt.Errorf("this agent has no feature %q", c.Feature)
+	}
+	l := a.locks[c.Feature]
+	l.Lock()
+	defer l.Unlock()
+	ctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	defer func() {
+		if p := recover(); p != nil {
+			err = fmt.Errorf("internal error in %s.%s: %v", c.Feature, c.Action, p)
+		}
+	}()
+	fc := feature.NewCtx(ctx, c.Params, func(s string) { a.out.add(c.ID, s) })
+	res, err := f.Call(fc, c.Action)
+	if ctx.Err() == context.DeadlineExceeded {
+		return nil, fmt.Errorf("action timed out after %s", timeout)
+	}
+	if res != nil {
+		data, _ = json.Marshal(res)
+	}
+	return data, err
+}
+
 func (a *Agent) execute(ctx context.Context, c proto.Command) {
 	logf := func(format string, args ...any) { a.out.add(c.ID, fmt.Sprintf(format, args...)) }
 	timeout := time.Duration(c.Timeout) * time.Second
@@ -182,35 +232,12 @@ func (a *Agent) execute(ctx context.Context, c proto.Command) {
 	after := func() {}
 
 	switch c.Type {
-	case proto.CmdModuleCall:
-		data, err = a.mods.call(ctx, c.Module, c.Action, c.Params, timeout, func(s string) { a.out.add(c.ID, s) })
-	case proto.CmdModuleInstall:
-		name := ""
-		if c.Artifact != nil {
-			name = c.Artifact.Name
-		}
-		if !a.cfg.moduleAllowed(name) {
-			err = fmt.Errorf("module %q is not allowed by this agent's local policy (allow_modules in %s)", name, a.opt.ConfigPath)
-		} else {
-			err = a.mods.install(ctx, a.cl, a.id.SigningKey, c.Artifact, logf)
-		}
-		if err == nil {
-			// Report the new module right away instead of on the next poll.
-			for _, m := range a.mods.list() {
-				if m.Name == name {
-					data, _ = json.Marshal(m)
-				}
-			}
-		}
-	case proto.CmdModuleRemove:
-		err = a.mods.remove(c.Module)
-		if err == nil {
-			logf("module %s removed", c.Module)
-		}
+	case proto.CmdAction:
+		data, err = a.callFeature(ctx, c, timeout)
 	case proto.CmdCoreUpdate:
 		err = selfUpdate(ctx, a.cl, a.id.SigningKey, c.Artifact, logf)
 		if err == nil {
-			logf("agent-core replaced; restarting")
+			logf("agent replaced; restarting")
 			after = func() { a.requestExit(exitRestart) }
 		}
 	case proto.CmdUninstall:

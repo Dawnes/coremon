@@ -8,7 +8,6 @@ import (
 	"os/exec"
 	"strconv"
 	"strings"
-	"syscall"
 
 	"coremon/internal/proto"
 )
@@ -43,32 +42,19 @@ func collectFacts() proto.Facts {
 			f.UptimeSec = int64(v)
 		}
 	}
-	if b, err := os.ReadFile("/proc/loadavg"); err == nil {
-		if fs := strings.Fields(string(b)); len(fs) > 0 {
-			f.Load1, _ = strconv.ParseFloat(fs[0], 64)
-		}
-	}
+	// Assigned memory. Inside an LXC container, lxcfs shows the container's
+	// limit here, not the host's memory.
 	if m, err := os.Open("/proc/meminfo"); err == nil {
 		sc := bufio.NewScanner(m)
 		for sc.Scan() {
 			fs := strings.Fields(sc.Text())
-			if len(fs) < 2 {
-				continue
-			}
-			v, _ := strconv.ParseUint(fs[1], 10, 64)
-			switch fs[0] {
-			case "MemTotal:":
+			if len(fs) >= 2 && fs[0] == "MemTotal:" {
+				v, _ := strconv.ParseUint(fs[1], 10, 64)
 				f.MemTotal = v * 1024
-			case "MemAvailable:":
-				f.MemAvail = v * 1024
+				break
 			}
 		}
 		m.Close()
-	}
-	var st syscall.Statfs_t
-	if syscall.Statfs("/", &st) == nil {
-		f.DiskTotal = st.Blocks * uint64(st.Bsize)
-		f.DiskFree = st.Bavail * uint64(st.Bsize)
 	}
 	f.Virt = detectVirt()
 	return f

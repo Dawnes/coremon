@@ -29,7 +29,8 @@ func main() {
 	release := fs.String("release", "", "release directory (default <data>/release)")
 	sans := fs.String("san", "", "extra comma-separated DNS names/IPs for the TLS certificate (first start only)")
 	key := fs.String("signing-key", "/etc/coremon-master/signing.pub", "release signing public key (root-owned)")
-	github := fs.String("github", os.Getenv("COREMON_GITHUB_REPO"), "GitHub repository (owner/name) to mirror releases from; first start only, then editable in Settings")
+	github := fs.String("github", os.Getenv("COREMON_GITHUB_REPO"), "GitHub repository (owner/name) publishing the version index; first start only, then editable in Settings")
+	indexURL := fs.String("index-url", "", "override the version index URL (testing)")
 	target := fs.String("target", "/usr/local/bin/coremon-master", "apply-update: binary to replace")
 	fs.Parse(args)
 	log.SetFlags(0)
@@ -44,7 +45,7 @@ func main() {
 		}
 		fmt.Printf("New admin password: %s\n(restart the master service to end existing sessions)\n", pw)
 	case "apply-update":
-		if err := master.ApplyUpdate(*data, *key, *target); err != nil {
+		if err := master.ApplyUpdate(*data, *key, *target, version); err != nil {
 			log.Fatalf("apply-update: %v", err)
 		}
 	case "serve":
@@ -54,7 +55,7 @@ func main() {
 		}
 		s, err := master.New(master.Config{
 			Listen: *listen, HTTPListen: *httpListen, DataDir: *data, ReleaseDir: *release,
-			SANs: sanList, Version: version, SigningKeyPath: *key, GitHubRepo: *github,
+			SANs: sanList, Version: version, SigningKeyPath: *key, GitHubRepo: *github, IndexURL: *indexURL,
 		})
 		if err != nil {
 			log.Fatal(err)

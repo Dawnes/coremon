@@ -1,4 +1,4 @@
-package main
+package updates
 
 import (
 	"bufio"
@@ -8,7 +8,7 @@ import (
 	"sort"
 	"strings"
 
-	"coremon/internal/modkit"
+	"coremon/internal/feature"
 )
 
 type aptBackend struct{}
@@ -30,12 +30,12 @@ var aptOpts = []string{
 
 func (aptBackend) Name() string { return "apt" }
 
-func (aptBackend) Refresh(c *modkit.Ctx) error {
+func (aptBackend) Refresh(c *feature.Ctx) error {
 	_, err := c.Run(aptEnv, "apt-get", "update", "-q", "-o", "DPkg::Lock::Timeout=300")
 	return err
 }
 
-func (aptBackend) List(c *modkit.Ctx) (*Snapshot, error) {
+func (aptBackend) List(c *feature.Ctx) (*Snapshot, error) {
 	out, err := c.Output(aptEnv, "apt-get", "-s", "-o", "Debug::NoLocking=1", "dist-upgrade")
 	if err != nil {
 		return nil, err
@@ -49,7 +49,7 @@ func (aptBackend) List(c *modkit.Ctx) (*Snapshot, error) {
 	return s, nil
 }
 
-func (aptBackend) Install(c *modkit.Ctx, pkgs []string) error {
+func (aptBackend) Install(c *feature.Ctx, pkgs []string) error {
 	args := append([]string{"install", "--only-upgrade"}, aptOpts...)
 	args = append(args, "--")
 	args = append(args, pkgs...)
@@ -57,7 +57,7 @@ func (aptBackend) Install(c *modkit.Ctx, pkgs []string) error {
 	return err
 }
 
-func (aptBackend) UpgradeAll(c *modkit.Ctx) error {
+func (aptBackend) UpgradeAll(c *feature.Ctx) error {
 	args := append([]string{"dist-upgrade"}, aptOpts...)
 	_, err := c.Run(aptEnv, "apt-get", args...)
 	return err

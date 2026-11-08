@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"os"
 	"strings"
@@ -13,13 +14,16 @@ import (
 	"coremon/internal/proto"
 )
 
-const (
-	onlineWindow = 90 // seconds since last poll
-	pollHold     = 25 * time.Second
-	maxJobLog    = 20 << 20
-)
+const maxJobLog = 20 << 20
 
-func (a *Agent) online(now int64) bool { return now-a.LastSeen < onlineWindow }
+// heartbeat returns the configured heartbeat in seconds. Caller holds s.st.mu.
+func (s *Server) heartbeat() int { return s.st.st.Settings.HeartbeatSec }
+
+// online: an agent is online while it was heard from within three
+// heartbeats. Caller holds s.st.mu.
+func (s *Server) online(a *Agent, now int64) bool {
+	return now-a.LastSeen < int64(3*s.heartbeat())
+}
 
 // authAgent validates "Authorization: Bearer <id>:<secret>". Caller must
 // hold s.st.mu.
@@ -85,10 +89,10 @@ func (s *Server) enqueue(a *Agent, j *Job) *Job {
 }
 
 // openJob reports whether a queued or running job matches.
-func (s *Server) openJob(agentID, typ, module string) bool {
+func (s *Server) openJob(agentID, typ, feature string) bool {
 	for i := len(s.st.st.Jobs) - 1; i >= 0; i-- {
 		j := s.st.st.Jobs[i]
-		if j.AgentID == agentID && j.Type == typ && j.Module == module && !j.done() {
+		if j.AgentID == agentID && j.Type == typ && j.Feature == feature && !j.done() {
 			return true
 		}
 	}
@@ -96,30 +100,14 @@ func (s *Server) openJob(agentID, typ, module string) bool {
 }
 
 // recentFailure reports whether a matching job failed within d.
-func (s *Server) recentFailure(agentID, typ, module string, d time.Duration) bool {
+func (s *Server) recentFailure(agentID, typ, feature string, d time.Duration) bool {
 	cut := time.Now().Add(-d).Unix()
 	for i := len(s.st.st.Jobs) - 1; i >= 0; i-- {
 		j := s.st.st.Jobs[i]
 		if j.Created < cut {
 			break
 		}
-		if j.AgentID == agentID && j.Type == typ && j.Module == module && j.done() && j.Status != JobSuccess {
-			return true
-		}
-	}
-	return false
-}
-
-// recentJob reports whether any matching job was created within d. Guards
-// against acting on a module list that predates a just-finished job.
-func (s *Server) recentJob(agentID, typ, module string, d time.Duration) bool {
-	cut := time.Now().Add(-d).Unix()
-	for i := len(s.st.st.Jobs) - 1; i >= 0; i-- {
-		j := s.st.st.Jobs[i]
-		if j.Created < cut {
-			break
-		}
-		if j.AgentID == agentID && j.Type == typ && j.Module == module {
+		if j.AgentID == agentID && j.Type == typ && j.Feature == feature && j.done() && j.Status != JobSuccess {
 			return true
 		}
 	}
@@ -143,26 +131,25 @@ func (s *Server) handleEnroll(w http.ResponseWriter, r *http.Request) {
 	delete(s.st.st.Tokens, h)
 	secret := randHex(32)
 	a := &Agent{
-		ID:             "a_" + randHex(8),
-		Name:           req.Facts.Hostname,
-		Tags:           []string{},
-		Status:         "pending",
-		SecretHash:     sha256hex(secret),
-		EnrolledAt:     time.Now().Unix(),
-		LastSeen:       time.Now().Unix(),
-		CoreVersion:    req.CoreVersion,
-		Facts:          req.Facts,
-		Modules:        []proto.ModuleInfo{},
-		DesiredModules: map[string]string{},
-		State:          map[string]json.RawMessage{},
-		StateAt:        map[string]int64{},
+		ID:          "a_" + randHex(8),
+		Name:        req.Facts.Hostname,
+		Status:      "pending",
+		SecretHash:  sha256hex(secret),
+		EnrolledAt:  time.Now().Unix(),
+		LastSeen:    time.Now().Unix(),
+		CoreVersion: req.CoreVersion,
+		Facts:       req.Facts,
+		Features:    []proto.FeatureInfo{},
+		State:       map[string]json.RawMessage{},
+		StateAt:     map[string]int64{},
 	}
 	if tok.Note != "" && a.Name == "" {
 		a.Name = tok.Note
 	}
+	a.Order = s.st.nextOrder("")
 	s.st.st.Agents[a.ID] = a
 	s.st.markDirty()
-	s.audit.write("agent", clientIP(r), "agent.enrolled", a.ID, fmt.Sprintf("%s (token %s…)", a.Name, tok.Prefix))
+	s.audit.writeAgent("agent", clientIP(r), "agent.enrolled", a, fmt.Sprintf("token %s…", tok.Prefix))
 	writeJSON(w, proto.EnrollResponse{AgentID: a.ID, Secret: secret, SigningKey: s.signingKeyB64})
 }
 
@@ -182,8 +169,14 @@ func (s *Server) handlePoll(w http.ResponseWriter, r *http.Request) {
 	a.LastSeen = now
 	a.Facts = req.Facts
 	a.CoreVersion = req.CoreVersion
-	if req.Modules != nil {
-		a.Modules = req.Modules
+	a.Protocol = req.Protocol
+	// Agents before protocol 2 have no built-in features.
+	a.Features = req.Features
+	if a.Features == nil {
+		a.Features = []proto.FeatureInfo{}
+	}
+	if a.DesiredCore != "" && a.DesiredCore == a.CoreVersion {
+		a.DesiredCore = ""
 	}
 	// Commands the agent no longer runs but never reported: lost (e.g. the
 	// agent restarted mid-command).
@@ -193,6 +186,12 @@ func (s *Server) handlePoll(w http.ResponseWriter, r *http.Request) {
 	}
 	for _, j := range s.st.st.Jobs {
 		if j.AgentID == a.ID && j.Status == JobRunning && !running[j.ID] && now-j.Started > 45 {
+			if j.Type == proto.CmdCoreUpdate && j.Artifact != nil && a.CoreVersion == j.Artifact.Version {
+				// The agent restarted into the new version before its result
+				// reached us.
+				j.Status, j.Finished = JobSuccess, now
+				continue
+			}
 			j.Status, j.Finished, j.Error = JobFailed, now, "agent lost this command (restarted?)"
 		}
 	}
@@ -203,22 +202,23 @@ func (s *Server) handlePoll(w http.ResponseWriter, r *http.Request) {
 		s.wakes[a.ID] = ch
 	}
 	agentID := a.ID
+	hb := s.heartbeat()
 	s.st.mu.Unlock()
 
-	deadline := time.NewTimer(pollHold)
+	deadline := time.NewTimer(time.Duration(hb) * time.Second)
 	defer deadline.Stop()
 	for {
 		s.st.mu.Lock()
 		cmds := s.takeCommands(agentID)
 		s.st.mu.Unlock()
 		if len(cmds) > 0 {
-			writeJSON(w, proto.PollResponse{Commands: cmds})
+			writeJSON(w, proto.PollResponse{Commands: cmds, Heartbeat: hb})
 			return
 		}
 		select {
 		case <-ch:
 		case <-deadline.C:
-			writeJSON(w, proto.PollResponse{Commands: []proto.Command{}})
+			writeJSON(w, proto.PollResponse{Commands: []proto.Command{}, Heartbeat: hb})
 			return
 		case <-r.Context().Done():
 			return
@@ -245,7 +245,7 @@ func (s *Server) takeCommands(agentID string) []proto.Command {
 		}
 		j.Status, j.Started = JobRunning, now
 		out = append(out, proto.Command{
-			ID: j.ID, Type: j.Type, Module: j.Module, Action: j.Action,
+			ID: j.ID, Type: j.Type, Feature: j.Feature, Action: j.Action,
 			Params: j.Params, Artifact: j.Artifact, Timeout: j.Timeout,
 		})
 	}
@@ -301,11 +301,7 @@ func (s *Server) handleResult(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	j := s.st.jobByID(res.CommandID)
-	if j == nil || j.AgentID != a.ID {
-		w.WriteHeader(http.StatusNoContent)
-		return
-	}
-	if j.done() {
+	if j == nil || j.AgentID != a.ID || j.done() {
 		w.WriteHeader(http.StatusNoContent)
 		return
 	}
@@ -316,36 +312,20 @@ func (s *Server) handleResult(w http.ResponseWriter, r *http.Request) {
 	} else {
 		j.Status, j.Error = JobFailed, res.Error
 	}
-	if j.Type == proto.CmdModuleCall && len(res.Data) > 0 {
+	switch {
+	case j.Type == proto.CmdAction && len(res.Data) > 0:
 		var d struct {
 			State json.RawMessage `json:"state"`
 		}
 		if json.Unmarshal(res.Data, &d) == nil && len(d.State) > 0 && string(d.State) != "null" {
-			a.State[j.Module] = d.State
-			a.StateAt[j.Module] = now
+			a.State[j.Feature] = d.State
+			a.StateAt[j.Feature] = now
 		}
-	}
-	if j.Type == proto.CmdModuleInstall && res.OK && len(res.Data) > 0 {
-		var mi proto.ModuleInfo
-		if json.Unmarshal(res.Data, &mi) == nil && mi.Name == j.Module {
-			if cur := a.module(mi.Name); cur != nil {
-				*cur = mi
-			} else {
-				a.Modules = append(a.Modules, mi)
-			}
-			go s.schedulerTick() // e.g. run the first check immediately
-		}
-	}
-	if j.Type == proto.CmdModuleRemove && res.OK {
-		for i, m := range a.Modules {
-			if m.Name == j.Module {
-				a.Modules = append(a.Modules[:i], a.Modules[i+1:]...)
-				break
-			}
-		}
-	}
-	if j.Type == proto.CmdUninstall && res.OK {
-		s.audit.write("agent", clientIP(r), "agent.uninstalled", a.ID, a.Name)
+	case j.Type == proto.CmdCoreUpdate && !res.OK:
+		// Do not retry a failed up/downgrade on our own.
+		a.DesiredCore = ""
+	case j.Type == proto.CmdUninstall && res.OK:
+		s.audit.writeAgent("agent", clientIP(r), "agent.uninstalled", a, "")
 		delete(s.st.st.Agents, a.ID)
 		delete(s.wakes, a.ID)
 	}
@@ -378,28 +358,55 @@ func (s *Server) handleDownload(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
 		return
 	}
-	s.serveArtifact(w, r, s.repo.find(r.PathValue("kind"), r.PathValue("name"), r.PathValue("version"), r.PathValue("os"), r.PathValue("arch")))
+	if r.PathValue("kind") != "core" {
+		http.NotFound(w, r)
+		return
+	}
+	s.serveArtifact(w, r, s.repo.find("core", r.PathValue("version"), r.PathValue("os"), r.PathValue("arch")))
 }
 
-// handlePublicAgent serves the latest agent-core binary to the install
-// script. Binaries are not secret; integrity is enforced by the checksum
-// embedded in the (pinned-TLS) install script.
+// handlePublicAgent serves the latest agent binary to the install script.
+// Binaries are not secret; integrity is enforced by the checksum embedded
+// in the (pinned-TLS) install script.
 func (s *Server) handlePublicAgent(w http.ResponseWriter, r *http.Request) {
 	goos, arch, ok := strings.Cut(r.PathValue("plat"), "-")
 	if !ok {
 		http.NotFound(w, r)
 		return
 	}
-	s.serveArtifact(w, r, s.repo.find("core", "coremon-agent", s.repo.coreLatest(), goos, arch))
+	s.serveArtifact(w, r, s.repo.find("core", s.repo.coreLatest(), goos, arch))
 }
 
-// scheduler reconciles desired modules/core, triggers periodic checks and
-// expires stale jobs.
+// requestCore queues an agent up/downgrade to version if possible. Caller
+// holds s.st.mu.
+func (s *Server) requestCore(a *Agent, version, actor string) *Job {
+	if a.Status != "active" || a.Removing || !s.online(a, time.Now().Unix()) || s.openJob(a.ID, proto.CmdCoreUpdate, "") {
+		return nil
+	}
+	goos, arch := a.Facts.OS, a.Facts.Arch
+	if goos == "" {
+		goos = "linux"
+	}
+	e := s.repo.find("core", version, goos, arch)
+	if e == nil {
+		return nil
+	}
+	art := e.Artifact
+	return s.enqueue(a, &Job{Type: proto.CmdCoreUpdate, Artifact: &art, Actor: actor, Timeout: 900})
+}
+
+// scheduler applies requested agent versions, triggers periodic checks,
+// expires stale jobs and purges old history.
 func (s *Server) schedulerLoop(stop <-chan struct{}) {
 	t := time.NewTicker(15 * time.Second)
 	defer t.Stop()
+	var lastPurge time.Time
 	for {
 		s.schedulerTick()
+		if time.Since(lastPurge) > time.Hour {
+			s.purge()
+			lastPurge = time.Now()
+		}
 		select {
 		case <-stop:
 			return
@@ -411,62 +418,29 @@ func (s *Server) schedulerLoop(stop <-chan struct{}) {
 func (s *Server) schedulerTick() {
 	s.st.mu.Lock()
 	defer s.st.mu.Unlock()
-	now := time.Now()
-	nowU := now.Unix()
+	nowU := time.Now().Unix()
 	interval := int64(s.st.st.Settings.CheckIntervalHours) * 3600
 
 	for _, a := range s.st.st.Agents {
-		if a.Status != "active" || a.Removing || !a.online(nowU) {
+		if a.Status != "active" || a.Removing || !s.online(a, nowU) {
 			continue
 		}
-		goos, arch := a.Facts.OS, a.Facts.Arch
-		if goos == "" {
-			goos = "linux"
-		}
-		// Desired modules.
-		for name, want := range a.DesiredModules {
-			if want == "" {
-				want = s.repo.moduleLatest(name)
-			}
-			have := a.module(name)
-			if have != nil && have.Version == want {
-				continue
-			}
-			if s.openJob(a.ID, proto.CmdModuleInstall, name) || s.recentFailure(a.ID, proto.CmdModuleInstall, name, 10*time.Minute) ||
-				s.recentJob(a.ID, proto.CmdModuleInstall, name, 2*time.Minute) {
-				continue
-			}
-			e := s.repo.find("module", name, want, goos, arch)
-			if e == nil {
-				continue
-			}
-			art := e.Artifact
-			s.enqueue(a, &Job{Type: proto.CmdModuleInstall, Module: name, Artifact: &art, Actor: "scheduler", Timeout: 900})
-		}
-		for _, m := range a.Modules {
-			if _, ok := a.DesiredModules[m.Name]; !ok && !s.openJob(a.ID, proto.CmdModuleRemove, m.Name) && !s.recentFailure(a.ID, proto.CmdModuleRemove, m.Name, 10*time.Minute) &&
-				!s.recentJob(a.ID, proto.CmdModuleRemove, m.Name, 2*time.Minute) {
-				s.enqueue(a, &Job{Type: proto.CmdModuleRemove, Module: m.Name, Actor: "scheduler", Timeout: 120})
-			}
-		}
-		// Desired core version.
+		// Requested agent version (set while the agent was offline).
 		if a.DesiredCore != "" && a.CoreVersion != a.DesiredCore &&
-			!s.openJob(a.ID, proto.CmdCoreUpdate, "") && !s.recentFailure(a.ID, proto.CmdCoreUpdate, "", 10*time.Minute) {
-			if e := s.repo.find("core", "coremon-agent", a.DesiredCore, goos, arch); e != nil {
-				art := e.Artifact
-				s.enqueue(a, &Job{Type: proto.CmdCoreUpdate, Artifact: &art, Actor: "scheduler", Timeout: 900})
-			}
+			!s.recentFailure(a.ID, proto.CmdCoreUpdate, "", 10*time.Minute) {
+			s.requestCore(a, a.DesiredCore, "scheduler")
 		}
-		// Periodic checks: any module offering a "check" action.
-		for _, m := range a.Modules {
-			spec := m.Manifest.Action("check")
-			if spec == nil || nowU-a.StateAt[m.Name] < interval {
+		// Periodic checks: any feature offering a "check" action.
+		for i := range a.Features {
+			f := &a.Features[i]
+			spec := f.Action("check")
+			if spec == nil || nowU-a.StateAt[f.Name] < interval {
 				continue
 			}
-			if s.openJob(a.ID, proto.CmdModuleCall, m.Name) || s.recentFailure(a.ID, proto.CmdModuleCall, m.Name, 15*time.Minute) {
+			if s.openJob(a.ID, proto.CmdAction, f.Name) || s.recentFailure(a.ID, proto.CmdAction, f.Name, 15*time.Minute) {
 				continue
 			}
-			s.enqueue(a, &Job{Type: proto.CmdModuleCall, Module: m.Name, Action: "check", Params: json.RawMessage("{}"), Actor: "scheduler", Timeout: spec.Timeout})
+			s.enqueue(a, &Job{Type: proto.CmdAction, Feature: f.Name, Action: "check", Params: json.RawMessage("{}"), Actor: "scheduler", Timeout: spec.Timeout})
 		}
 	}
 	// Expire jobs.
@@ -486,5 +460,22 @@ func (s *Server) schedulerTick() {
 			delete(s.st.st.Tokens, h)
 			s.st.markDirty()
 		}
+	}
+}
+
+// purge removes audit entries, jobs and job output older than the
+// retention period.
+func (s *Server) purge() {
+	s.st.mu.Lock()
+	days := s.st.st.Settings.RetentionDays
+	cutoff := time.Now().Add(-time.Duration(days) * 24 * time.Hour).Unix()
+	jobs := s.st.purgeJobs(cutoff)
+	s.st.mu.Unlock()
+	entries, err := s.audit.purge(cutoff)
+	if err != nil {
+		log.Printf("audit purge: %v", err)
+	}
+	if jobs > 0 || entries > 0 {
+		log.Printf("retention (%d days): removed %d job(s) and %d audit entries", days, jobs, entries)
 	}
 }

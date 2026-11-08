@@ -33,8 +33,10 @@ type Config struct {
 	Version    string
 	// SigningKeyPath is the release signing public key (root-owned).
 	SigningKeyPath string
-	// GitHubRepo ("owner/name") is the default release source.
+	// GitHubRepo ("owner/name") publishes the version index.
 	GitHubRepo string
+	// IndexURL overrides the version index location (testing).
+	IndexURL string
 }
 
 // Server is the master.
@@ -48,7 +50,7 @@ type Server struct {
 	cert          tls.Certificate
 	signingKeyB64 string
 	wakes         map[string]chan struct{} // guarded by st.mu
-	gh            *github
+	idx           *indexSync
 }
 
 func (s *Server) initialPwPath() string { return filepath.Join(s.cfg.DataDir, "initial-password.txt") }
@@ -89,13 +91,13 @@ func New(cfg Config) (*Server, error) {
 		s.repo.pub = pub
 		s.signingKeyB64 = base64.StdEncoding.EncodeToString(pub)
 	} else {
-		log.Printf("WARNING: no signing key at %s - modules cannot be deployed", pubPath)
+		log.Printf("WARNING: no signing key at %s - no releases can be verified", pubPath)
 	}
+	s.cleanupLegacy()
 	s.repo.scan()
-	s.gh = newGitHub()
+	s.idx = newIndexSync()
 	if !st.st.Settings.GitHubSeeded && cfg.GitHubRepo != "" && ghRepoRe.MatchString(cfg.GitHubRepo) {
 		st.st.Settings.GitHubRepo = cfg.GitHubRepo
-		st.st.Settings.GitHubAutoImport = true
 		st.st.Settings.GitHubSeeded = true
 		st.markDirty()
 	}
@@ -161,7 +163,6 @@ func (s *Server) routes() http.Handler {
 	ui("POST /api/ui/agents/{id}", s.handleAgentUpdate)
 	ui("POST /api/ui/agents/{id}/approve", s.handleApprove)
 	ui("POST /api/ui/agents/{id}/remove", s.handleRemove)
-	ui("POST /api/ui/agents/{id}/modules", s.handleModuleOp)
 	ui("POST /api/ui/agents/{id}/core", s.handleCoreUpdate)
 	ui("POST /api/ui/actions", s.handleActions)
 	ui("GET /api/ui/jobs", s.handleJobs)
@@ -169,14 +170,15 @@ func (s *Server) routes() http.Handler {
 	ui("GET /api/ui/tokens", s.handleTokens)
 	ui("POST /api/ui/tokens", s.handleTokenCreate)
 	ui("POST /api/ui/tokens/{hash}/delete", s.handleTokenDelete)
-	ui("GET /api/ui/repo", s.handleRepo)
-	ui("POST /api/ui/repo/rescan", s.handleRepoRescan)
+	ui("POST /api/ui/groups", s.handleGroupCreate)
+	ui("POST /api/ui/groups/{id}", s.handleGroupUpdate)
+	ui("POST /api/ui/groups/{id}/delete", s.handleGroupDelete)
+	ui("POST /api/ui/layout", s.handleLayout)
 	ui("GET /api/ui/settings", s.handleSettingsGet)
 	ui("POST /api/ui/settings", s.handleSettingsSave)
 	ui("GET /api/ui/audit", s.handleAudit)
-	ui("GET /api/ui/github", s.handleGitHub)
-	ui("POST /api/ui/github/check", s.handleGitHubCheck)
-	ui("POST /api/ui/github/import", s.handleGitHubImport)
+	ui("GET /api/ui/releases", s.handleReleases)
+	ui("POST /api/ui/releases/check", s.handleReleasesCheck)
 	ui("POST /api/ui/master/update", s.handleMasterUpdate)
 
 	// Static UI.
@@ -196,7 +198,7 @@ func (s *Server) Run(ctx context.Context) error {
 	stop := make(chan struct{})
 	go s.st.flushLoop(stop)
 	go s.schedulerLoop(stop)
-	go s.githubLoop(stop)
+	go s.indexLoop(stop)
 	srv := &http.Server{
 		Addr:              s.cfg.Listen,
 		Handler:           s.routes(),

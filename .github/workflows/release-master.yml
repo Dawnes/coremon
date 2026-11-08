@@ -1,0 +1,59 @@
+# Builds, signs and publishes a master release (server + website) when a
+# master tag is pushed:
+#
+#   git tag master-v0.2.1 && git push origin master-v0.2.1
+#
+# The release becomes GitHub's "latest" release, so the one-line installer
+# (releases/latest/download/install-master.sh) always installs the newest
+# master. It is also added to the signed version index, where running
+# masters find it and offer "Update master".
+name: release-master
+
+on:
+  push:
+    tags: ["master-v*.*.*"]
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-index # never update the index twice at the same time
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    environment: release
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          check-latest: true
+          cache: false
+
+      - name: Build, test, sign, package
+        env:
+          COREMON_SIGNING_KEY: ${{ secrets.COREMON_SIGNING_KEY }}
+          COREMON_REPO: ${{ github.repository }}
+        run: |
+          VERSION="${GITHUB_REF_NAME#master-v}"
+          echo "VERSION=$VERSION" >> "$GITHUB_ENV"
+          sh ./build.sh master "$VERSION"
+
+      - name: Publish GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" dist/assets/* \
+            --repo "$GITHUB_REPOSITORY" --title "Coremon master $VERSION" --latest \
+            --notes "Master $VERSION (server and website). New install: curl -fsSL https://github.com/$GITHUB_REPOSITORY/releases/latest/download/install-master.sh | sh — existing masters offer Update master under Releases."
+
+      - name: Update version index
+        env:
+          GH_TOKEN: ${{ github.token }}
+          COREMON_SIGNING_KEY: ${{ secrets.COREMON_SIGNING_KEY }}
+        run: sh ./deploy/update-index.sh master "$VERSION"

@@ -5,6 +5,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -14,35 +15,77 @@ import (
 // Settings are editable in the UI.
 type Settings struct {
 	CheckIntervalHours int    `json:"check_interval_hours"`
-	MasterURL          string `json:"master_url"` // used in install commands; empty = derive from browser
-	GitHubRepo         string `json:"github_repo"`        // owner/name to mirror releases from
-	GitHubAutoImport   bool   `json:"github_auto_import"` // import new releases automatically (never rolls out)
+	HeartbeatSec       int    `json:"heartbeat_sec"`  // longest gap between agent contacts
+	RetentionDays      int    `json:"retention_days"` // audit log and job history
+	MasterURL          string `json:"master_url"`     // used in install commands; empty = derive from browser
+	GitHubRepo         string `json:"github_repo"`    // owner/name publishing the version index
 	GitHubSeeded       bool   `json:"github_seeded"`
+}
+
+const (
+	defaultHeartbeat = 30
+	minHeartbeat     = 10
+	maxHeartbeat     = 300
+	defaultRetention = 3
+	minRetention     = 1
+	maxRetention     = 30
+)
+
+func (s *Settings) normalize() {
+	if s.CheckIntervalHours <= 0 {
+		s.CheckIntervalHours = 6
+	}
+	if s.HeartbeatSec == 0 {
+		s.HeartbeatSec = defaultHeartbeat
+	}
+	s.HeartbeatSec = clamp(s.HeartbeatSec, minHeartbeat, maxHeartbeat)
+	if s.RetentionDays == 0 {
+		s.RetentionDays = defaultRetention
+	}
+	s.RetentionDays = clamp(s.RetentionDays, minRetention, maxRetention)
+}
+
+func clamp(v, lo, hi int) int {
+	if v < lo {
+		return lo
+	}
+	if v > hi {
+		return hi
+	}
+	return v
+}
+
+// Group is an admin-defined group of systems. The order of State.Groups is
+// the display order.
+type Group struct {
+	ID   string `json:"id"`
+	Name string `json:"name"`
 }
 
 // Agent is a registered system.
 type Agent struct {
-	ID             string                     `json:"id"`
-	Name           string                     `json:"name"`
-	Tags           []string                   `json:"tags"`
-	Status         string                     `json:"status"` // pending | active | paused
-	SecretHash     string                     `json:"secret_hash"`
-	EnrolledAt     int64                      `json:"enrolled_at"`
-	LastSeen       int64                      `json:"last_seen"`
-	CoreVersion    string                     `json:"core_version"`
-	Facts          proto.Facts                `json:"facts"`
-	Modules        []proto.ModuleInfo         `json:"modules"`
-	DesiredModules map[string]string          `json:"desired_modules"` // name -> version
-	DesiredCore    string                     `json:"desired_core"`
-	State          map[string]json.RawMessage `json:"state"` // module name -> state
-	StateAt        map[string]int64           `json:"state_at"`
-	Removing       bool                       `json:"removing"`
+	ID          string                     `json:"id"`
+	Name        string                     `json:"name"`
+	GroupID     string                     `json:"group_id"` // "" = ungrouped
+	Order       int                        `json:"order"`    // position within its group
+	Status      string                     `json:"status"`   // pending | active | paused
+	SecretHash  string                     `json:"secret_hash"`
+	EnrolledAt  int64                      `json:"enrolled_at"`
+	LastSeen    int64                      `json:"last_seen"`
+	CoreVersion string                     `json:"core_version"`
+	Protocol    int                        `json:"protocol"`
+	Facts       proto.Facts                `json:"facts"`
+	Features    []proto.FeatureInfo        `json:"features"`
+	DesiredCore string                     `json:"desired_core"` // requested agent version, cleared once reached
+	State       map[string]json.RawMessage `json:"state"`        // feature name -> state
+	StateAt     map[string]int64           `json:"state_at"`
+	Removing    bool                       `json:"removing"`
 }
 
-func (a *Agent) module(name string) *proto.ModuleInfo {
-	for i := range a.Modules {
-		if a.Modules[i].Name == name {
-			return &a.Modules[i]
+func (a *Agent) feature(name string) *proto.FeatureInfo {
+	for i := range a.Features {
+		if a.Features[i].Name == name {
+			return &a.Features[i]
 		}
 	}
 	return nil
@@ -71,7 +114,7 @@ type Job struct {
 	ID       string          `json:"id"`
 	AgentID  string          `json:"agent_id"`
 	Type     string          `json:"type"`
-	Module   string          `json:"module,omitempty"`
+	Feature  string          `json:"feature,omitempty"`
 	Action   string          `json:"action,omitempty"`
 	Params   json.RawMessage `json:"params,omitempty"`
 	Artifact *proto.Artifact `json:"artifact,omitempty"`
@@ -91,6 +134,7 @@ func (j *Job) done() bool { return j.Status != JobQueued && j.Status != JobRunni
 type State struct {
 	PasswordHash string                  `json:"password_hash"`
 	Settings     Settings                `json:"settings"`
+	Groups       []*Group                `json:"groups"`
 	Agents       map[string]*Agent       `json:"agents"`
 	Tokens       map[string]*EnrollToken `json:"tokens"`
 	Jobs         []*Job                  `json:"jobs"` // oldest first
@@ -124,8 +168,20 @@ func openStore(dir string) (*store, error) {
 	if s.st.Tokens == nil {
 		s.st.Tokens = map[string]*EnrollToken{}
 	}
-	if s.st.Settings.CheckIntervalHours <= 0 {
-		s.st.Settings.CheckIntervalHours = 6
+	if s.st.Groups == nil {
+		s.st.Groups = []*Group{}
+	}
+	s.st.Settings.normalize()
+	for _, a := range s.st.Agents {
+		if a.State == nil {
+			a.State = map[string]json.RawMessage{}
+		}
+		if a.StateAt == nil {
+			a.StateAt = map[string]int64{}
+		}
+		if a.GroupID != "" && s.group(a.GroupID) == nil {
+			a.GroupID = ""
+		}
 	}
 	// Jobs in flight when the master stopped will never get a result.
 	for _, j := range s.st.Jobs {
@@ -134,6 +190,26 @@ func openStore(dir string) (*store, error) {
 		}
 	}
 	return s, s.writeNow()
+}
+
+func (s *store) group(id string) *Group {
+	for _, g := range s.st.Groups {
+		if g.ID == id {
+			return g
+		}
+	}
+	return nil
+}
+
+// nextOrder returns the position after the last system of a group.
+func (s *store) nextOrder(groupID string) int {
+	n := 0
+	for _, a := range s.st.Agents {
+		if a.GroupID == groupID && a.Order >= n {
+			n = a.Order + 1
+		}
+	}
+	return n
 }
 
 func (s *store) markDirty() { s.dirty = true }
@@ -196,4 +272,39 @@ func (s *store) addJob(j *Job) {
 		s.st.Jobs = append([]*Job(nil), s.st.Jobs[n:]...)
 	}
 	s.markDirty()
+}
+
+// purgeJobs removes finished jobs (and their output) older than cutoff,
+// plus output files of jobs that no longer exist. Caller holds s.mu.
+func (s *store) purgeJobs(cutoff int64) int {
+	keep := s.st.Jobs[:0]
+	removed := 0
+	for _, j := range s.st.Jobs {
+		end := j.Finished
+		if end == 0 {
+			end = j.Created
+		}
+		if j.done() && end < cutoff {
+			os.Remove(s.jobLogPath(j.ID))
+			removed++
+			continue
+		}
+		keep = append(keep, j)
+	}
+	s.st.Jobs = keep
+	known := map[string]bool{}
+	for _, j := range s.st.Jobs {
+		known[j.ID+".log"] = true
+	}
+	if entries, err := os.ReadDir(filepath.Join(s.dir, "jobs")); err == nil {
+		for _, e := range entries {
+			if strings.HasSuffix(e.Name(), ".log") && !known[e.Name()] {
+				os.Remove(filepath.Join(s.dir, "jobs", e.Name()))
+			}
+		}
+	}
+	if removed > 0 {
+		s.markDirty()
+	}
+	return removed
 }

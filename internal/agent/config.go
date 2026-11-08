@@ -13,9 +13,6 @@ type Config struct {
 	MasterURL string `json:"master_url"` // https://host:8443
 	MasterPin string `json:"master_pin"` // base64 sha256 of the master's SPKI
 	Token     string `json:"token,omitempty"`
-	// AllowModules is the local policy: which modules the master may install.
-	// ["*"] = any signed module, [] = none, or a list of names.
-	AllowModules []string `json:"allow_modules"`
 }
 
 // Identity is created at enrollment (/var/lib/coremon/identity.json).
@@ -58,13 +55,4 @@ func (c *Config) validate() error {
 		return errors.New("master_pin is required")
 	}
 	return nil
-}
-
-func (c *Config) moduleAllowed(name string) bool {
-	for _, a := range c.AllowModules {
-		if a == "*" || a == name {
-			return true
-		}
-	}
-	return false
 }

@@ -37,14 +37,14 @@ if [ -z "$HERE" ] || [ ! -d "$HERE/release" ]; then
   command -v curl >/dev/null 2>&1 || die "curl is required (apt-get install -y curl)"
   TMPD="$(mktemp -d)"
   trap 'rm -rf "$TMPD"' EXIT
-  URL="https://github.com/$REPO/releases/download/v$VERSION/coremon-$VERSION.tar.gz"
+  URL="https://github.com/$REPO/releases/download/master-v$VERSION/coremon-master-$VERSION.tar.gz"
   echo "coremon: downloading $URL"
   curl -fsSL -o "$TMPD/coremon.tar.gz" "$URL"
   if [ -n "$TARBALL_SHA256" ] && [ "${TARBALL_SHA256#@}" = "$TARBALL_SHA256" ]; then
     echo "$TARBALL_SHA256  $TMPD/coremon.tar.gz" | sha256sum -c - >/dev/null 2>&1 || die "checksum mismatch - aborting"
   fi
   tar -xzf "$TMPD/coremon.tar.gz" -C "$TMPD"
-  HERE="$TMPD/coremon-$VERSION"
+  HERE="$TMPD/coremon-master-$VERSION"
 fi
 
 BIN="$HERE/release/master/$VERSION/linux-$ARCH/coremon-master"
@@ -68,11 +68,15 @@ if ! id coremon >/dev/null 2>&1; then
   useradd --system --home-dir "$DATA" --shell /usr/sbin/nologin coremon
 fi
 
+if [ -x /usr/local/bin/coremon-master ]; then
+  OLD="$(/usr/local/bin/coremon-master version 2>/dev/null || true)"
+  echo "coremon: replacing master ${OLD:-?} with $VERSION"
+fi
 install -m 0755 "$BIN" /usr/local/bin/coremon-master
 mkdir -p "$DATA/release" "$DATA/update"
-for sub in core master modules; do
-  [ -d "$HERE/release/$sub" ] && cp -R "$HERE/release/$sub" "$DATA/release/"
-done
+# Agent versions are downloaded by the master itself from the version index.
+# Masters before 0.2 also stored separate modules; those are not used anymore.
+rm -rf "$DATA/release/modules"
 chown -R coremon:coremon "$DATA"
 chmod 700 "$DATA"
 
@@ -109,7 +113,8 @@ echo "  UI:       https://${IP:-<this-host>}:8443"
 if [ -f "$DATA/initial-password.txt" ]; then
   echo "  password: $(cat "$DATA/initial-password.txt")   (initial; change it under Settings)"
 fi
-[ -s /etc/coremon-master/master.env ] && echo "  releases: mirrored from https://github.com/$REPO"
+[ -s /etc/coremon-master/master.env ] && echo "  releases: version index of https://github.com/$REPO"
 echo
+echo "The master downloads the agent versions within a minute (see Releases)."
 echo "To monitor this container too, open Systems > Add a system in the UI and"
 echo "run the generated command here as root."
