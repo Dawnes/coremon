@@ -118,23 +118,34 @@ function toast(msg, kind = '') {
 const fail = (e) => toast(e.message || String(e), 'err');
 
 // ---------- modals ----------
+// Windows stack: one opened from another window (over: true) lies on top of
+// it, and closing it returns to the one below. `modal` is the top window.
+const modals = [];
 let modal = null;
-function openModal(content, { wide = false, acts = {}, onClose } = {}) {
-  closeModal();
-  const root = $('#modal-root');
-  root.innerHTML = `<div class="modal-back"><div class="modal ${wide ? 'wide' : ''}">${r(content)}</div></div>`;
-  modal = { el: root.firstElementChild, acts, onClose };
-  modal.el.addEventListener('mousedown', (e) => { if (e.target === modal?.el) closeModal(); });
-  const f = modal.el.querySelector('[autofocus]');
+function openModal(content, { wide = false, acts = {}, onClose, over = false } = {}) {
+  if (!over) closeAllModals();
+  const el = document.createElement('div');
+  el.className = 'modal-back';
+  el.innerHTML = `<div class="modal ${wide ? 'wide' : ''}">${r(content)}</div>`;
+  $('#modal-root').appendChild(el);
+  const m = { el, acts, onClose };
+  modals.push(m);
+  modal = m;
+  el.addEventListener('mousedown', (e) => { if (e.target === el && modal === m) closeModal(); });
+  const f = el.querySelector('[autofocus]');
   if (f) f.focus();
-  return modal;
+  return m;
 }
+// closeModal closes the top window only.
 function closeModal() {
-  if (!modal) return;
-  const m = modal;
-  modal = null;
-  $('#modal-root').innerHTML = '';
+  const m = modals.pop();
+  modal = modals[modals.length - 1] || null;
+  if (!m) return;
+  m.el.remove();
   m.onClose && m.onClose();
+}
+function closeAllModals() {
+  while (modals.length) closeModal();
 }
 function confirmBox(title, body, { okText = 'Confirm', danger = false } = {}) {
   return new Promise((resolve) => {
@@ -142,6 +153,7 @@ function confirmBox(title, body, { okText = 'Confirm', danger = false } = {}) {
     openModal(html`<h3>${title}</h3><div class="muted" style="margin-top:8px">${body}</div>
       <div class="actions"><button class="btn ghost" data-act="no">Cancel</button>
       <button class="btn ${danger ? 'danger' : 'primary'}" data-act="yes" autofocus>${okText}</button></div>`, {
+      over: !!modal,
       acts: { yes: () => { done = true; closeModal(); resolve(true); }, no: () => closeModal() },
       onClose: () => { if (!done) resolve(false); },
     });
@@ -183,7 +195,7 @@ function openJob(id) {
     <div class="muted small" id="jm-sub" style="margin:4px 0 14px"></div>
     <div class="term" id="jm-term"></div>
     <div class="row small muted" style="margin-top:10px"><span id="jm-time"></span><span class="spacer"></span><span id="jm-err" class="err"></span></div>`,
-  { wide: true, acts: { close: () => closeModal() }, onClose: () => { stopped = true; clearTimeout(timer); } });
+  { wide: true, over: !!modal, acts: { close: () => closeModal() }, onClose: () => { stopped = true; clearTimeout(timer); } });
   const term = $('#jm-term', m.el);
   const tick = async () => {
     if (stopped) return;
@@ -266,7 +278,7 @@ let pendingCount = 0;
 function showLogin() {
   clearInterval(refreshTimer);
   view = null;
-  closeModal();
+  closeAllModals();
   setHTML($('#app'), html`
     <div class="login"><div class="panel">
       <div class="brand"><img src="favicon.svg" alt=""><span>Coremon</span></div>
@@ -355,7 +367,7 @@ function setPending(n) {
 }
 
 function route() {
-  closeModal();
+  closeAllModals();
   clearInterval(refreshTimer);
   if (view?.unmount) view.unmount();
   const parts = location.hash.replace(/^#\/?/, '').split('/');
@@ -752,7 +764,7 @@ function Dashboard() {
 
 // ---------- Ping ----------
 const canPing = (a) => !!a.core_version && !versionLess(a.core_version, '0.3.1');
-const shortKey = (p) => (p ? `${p.slice(0, 6)}…${p.slice(-6)}` : '');
+const shortKey = (p) => (p ? p.slice(0, 5) + '…' : ''); // the master already sends the short form
 function clockText(ms) {
   const s = Math.abs(ms) / 1000;
   if (s < 2) return html`<span class="badge ok">${icon('check')} in sync</span>`;
@@ -790,7 +802,7 @@ async function pingModal(a) {
   }
   openModal(html`<h3>Ping ${a.name}</h3>${body}
     <div class="actions"><button class="btn ghost" data-act="job">Show job</button><button class="btn primary" data-act="close" autofocus>Close</button></div>`,
-  { acts: { close: () => closeModal(), job: () => { closeModal(); openJob(p.job_id); } } });
+  { acts: { close: () => closeModal(), job: () => openJob(p.job_id) } });
 }
 
 // ---------- Agent page ----------
@@ -810,10 +822,10 @@ function AgentPage([id]) {
         ${a.busy ? html`<span class="row muted"><span class="spin"></span>${a.busy} job(s) active</span>` : ''}
         ${!a.removing ? html`<button class="btn sm" data-act="ping" ${canPing(a) ? '' : 'disabled'}
           title="${canPing(a) ? 'Check the connection and keys with the agent now; nothing is done on the system' : `Agent ${a.core_version || '?'} cannot answer a ping; update the agent first`}">${icon('pulse')} Ping</button>` : ''}
-        ${a.status === 'active' && canChange() ? html`<button class="btn warn sm" data-act="reboot" ${a.online && canReboot(a) ? '' : 'disabled'}
-          title="${canReboot(a) ? (a.online ? 'Reboot this system' : 'The system is offline') : `Agent ${a.core_version} cannot reboot; update the agent first`}">${icon('refresh')} Reboot</button>` : ''}
         ${a.status === 'active' && canChange() ? html`<button class="btn sm" data-act="report-only">${icon('pause')} Report only</button>` : ''}
         ${a.status === 'report_only' && canChange() ? html`<button class="btn sm" data-act="allow-changes">${icon('play')} Allow changes</button>` : ''}
+        ${a.status === 'active' && canChange() ? html`<button class="btn warn sm" data-act="reboot" ${a.online && canReboot(a) ? '' : 'disabled'}
+          title="${canReboot(a) ? (a.online ? 'Reboot this system' : 'The system is offline') : `Agent ${a.core_version} cannot reboot; update the agent first`}">${icon('refresh')} Reboot</button>` : ''}
       </div>
       ${a.status === 'report_only' ? html`<div class="notice blue"><b>Report only:</b> this system only reports.
         <span class="small">${!a.mode_support ? html`Enforced by the master only — agent ${a.core_version} cannot enforce it itself; update the agent.`
@@ -1290,6 +1302,22 @@ function SettingsGeneral() {
       ? html`<div class="notice" style="margin:0">After saving, the first cleanup with ${days} day${days === 1 ? '' : 's'} runs at <b>${fmtDate(p.at)}</b> and removes ${what}.</div>`
       : html`Cleanup runs every full hour. Next cleanup: <b>${fmtDate(p.at)}</b>, removing ${what}.`);
   }
+  // Master URL: locked; administrators can Change it or go back to automatic.
+  // Takes effect on Save, like the other fields.
+  function urlBox() {
+    const d = st.d, auto = !st.url;
+    const lbl = 'Master URL used in install commands';
+    const autoBtn = html`<button type="button" class="btn ghost sm" data-act="url-auto">Use automatic</button>`;
+    setHTML($('#url-box'), st.editing
+      ? html`<label class="field">${lbl}<input type="text" name="url" value="${st.url || d.suggested_url}" placeholder="https://host:${d.agent_port}" autofocus></label>
+          <div class="row">${autoBtn}<span class="dim small">Saved with the Save button.</span></div>`
+      : html`<label class="field">${lbl}<div class="row">
+          <input type="text" readonly tabindex="-1" style="flex:1;opacity:.75" value="${auto ? (d.suggested_url || 'not available: open this page by host name or IP, or set it by hand') : st.url}">
+          ${auto ? html`<span class="badge mute">automatic</span>` : html`<span class="badge upd">set by hand</span>`}
+          ${ifChange(html`<button type="button" class="btn sm" data-act="url-change">${icon('edit')} Change</button>`)}
+          ${!auto ? ifChange(autoBtn) : ''}</div></label>`);
+    if (st.editing) $('#url-box input[name=url]').focus();
+  }
   return {
     async mount(el) {
       const d = await GET('settings');
@@ -1309,13 +1337,17 @@ function SettingsGeneral() {
               <option value="443" ${s.ui_port === 443 ? 'selected' : ''}>443 (https)</option></select></label>
             <div class="dim small">Agents always connect on port ${d.agent_port}; this only changes where the website is offered. With 443 the website is also still reachable on ${d.agent_port}.</div>
             ${d.ui_port_error ? html`<div class="notice red" style="margin:0">${d.ui_port_error}</div>` : ''}
-            <label class="field">Master URL used in install commands<input type="text" name="url" placeholder="${d.suggested_url} (auto)" value="${s.master_url}"></label>
-            <div class="dim small">Set this if agents reach the master under a different name than your browser does.</div>
+            <div id="url-box"></div>
+            <div class="dim small">Automatic: the address your browser uses, with the agent port. Change it only if agents reach the master under a different name.</div>
             <label class="field">GitHub repository for releases<input type="text" name="gh" placeholder="owner/name" value="${s.github_repo}"></label>
             <div class="dim small mono" style="word-break:break-all">${d.index_url ? 'Version index: ' + d.index_url : ''}</div>
             ${ifChange(html`<div><button class="btn primary">Save</button></div>`)}
           </fieldset></form>
         </div>`);
+      st.d = d;
+      st.url = s.master_url || '';
+      st.editing = false;
+      urlBox();
       const f = $('form[data-submit=save]', el);
       const upd = () => {
         const days = +f.ret.value;
@@ -1330,9 +1362,15 @@ function SettingsGeneral() {
     },
     unmount() { clearTimeout(st.timer); },
     acts: {
+      'url-change': () => { st.editing = true; urlBox(); },
+      'url-auto': () => { st.url = ''; st.editing = false; urlBox(); toast('Automatic address — press Save to apply'); },
       save: async (f) => {
+        const url = st.editing ? f.url.value.trim() : st.url;
         const res = await POST('settings', { check_interval_hours: +f.interval.value, heartbeat_sec: +f.hb.value, retention_days: +f.ret.value,
-          ui_port: +f.port.value, master_url: f.url.value, github_repo: f.gh.value });
+          ui_port: +f.port.value, master_url: url, github_repo: f.gh.value });
+        st.url = res.settings.master_url || '';
+        st.editing = false;
+        urlBox();
         st.saved = res.settings.retention_days;
         if (res.ui_port_error) toast(res.ui_port_error, 'err');
         else toast('Saved', 'ok');
@@ -1438,21 +1476,19 @@ function SettingsLogin() {
 
 function SettingsIdentity() {
   const st = { d: null };
-  const short = (p) => (p ? `${p.slice(0, 6)}…${p.slice(-6)}` : '');
-  function slot(p, d) {
-    if (!p) return html`<span class="dim">empty</span>`;
-    const lbl = p === d.current ? html`<span class="badge ok">${icon('check')} current</span>`
-      : p === d.next ? html`<span class="badge info">${icon('check')} new</span>`
-      : html`<span class="badge sec" title="A key this master does not have">✗ unknown</span>`;
-    return html`<span class="mono small" title="sha256//${p}">${short(p)}</span> ${lbl}`;
+  // Slots arrive as a status (current | new | unknown | ""), never as keys.
+  function slot(s) {
+    if (s === 'current') return html`<span class="badge ok">${icon('check')} current</span>`;
+    if (s === 'new') return html`<span class="badge info">${icon('check')} new</span>`;
+    if (s) return html`<span class="badge sec">✗ unknown</span>`;
+    return html`<span class="dim">—</span>`;
   }
   function status(a, d) {
     if (!a.sealed) return html`<span class="badge sec" title="Agents before 0.3.0 can no longer connect">agent ${a.core_version || '?'}: old method — run a new install command</span>`;
     if (!a.reported_at) return html`<span class="dim">not reported yet</span>`;
-    const known = (p) => !p || p === d.current || p === d.next;
-    if (!known(a.slots[0]) || !known(a.slots[1])) return html`<span class="badge sec">trusts an unknown key</span>`;
-    if (d.next) return a.has_next ? html`<span class="badge ok">ready to switch</span>` : html`<span class="badge upd">waiting for the new key</span>`;
-    return a.slots.includes(d.current) && !a.slots.some((p) => p && p !== d.current) ? html`<span class="badge ok">${icon('check')} correct</span>` : html`<span class="badge upd">updating keys</span>`;
+    if (a.slots.includes('unknown')) return html`<span class="badge sec">trusts an unknown key</span>`;
+    if (d.rotating) return a.has_next ? html`<span class="badge ok">ready to switch</span>` : html`<span class="badge upd">waiting for the new key</span>`;
+    return a.slots.includes('current') && !a.slots.some((s) => s && s !== 'current') ? html`<span class="badge ok">${icon('check')} correct</span>` : html`<span class="badge upd">updating keys</span>`;
   }
   function render() {
     const d = st.d;
@@ -1461,10 +1497,11 @@ function SettingsIdentity() {
     setHTML($('#id-keys'), html`
       <div class="panel panel-pad"><h2>Master payload key</h2>
         <div class="muted small">All traffic between master and agents is encrypted and signed with this key, independent of the HTTPS certificate. Agents only accept messages signed by a key they trust. Each agent has two key slots, so a new key can be handed over in a message signed with the current one.</div>
-        <div class="keyrow"><span class="klbl">Current key</span><code class="mono">sha256//${d.current}</code></div>
-        ${d.next ? html`<div class="keyrow"><span class="klbl">New key</span><code class="mono">sha256//${d.next}</code><span class="dim small">generated ${fmtDate(d.next_at)}</span></div>` : ''}
+        ${d.full ? html`<div class="keyrow"><span class="klbl">Current key</span><code class="mono">sha256//${d.current}</code></div>
+          ${d.next ? html`<div class="keyrow"><span class="klbl">New key</span><code class="mono">sha256//${d.next}</code><span class="dim small">generated ${fmtDate(d.next_at)}</span></div>` : ''}`
+        : html`<div class="dim small" style="margin-top:12px">Key fingerprints are shown to administrators only.${d.rotating ? ` A new key was generated ${fmtDate(d.next_at)} and is being handed to the systems.` : ''}</div>`}
         ${canChange() ? html`<div class="row" style="margin-top:14px">
-          ${d.next ? html`<span class="muted small">${ready} of ${d.agents.length} system(s) have the new key.</span><span class="spacer"></span>
+          ${d.rotating ? html`<span class="muted small">${ready} of ${d.agents.length} system(s) have the new key.</span><span class="spacer"></span>
               <button class="btn ghost" data-act="cancel-key">Cancel</button>
               <button class="btn primary" data-act="switch-key">${icon('refresh')} Switch to new key</button>`
             : html`<span class="muted small">Generate a new key if the current one may have leaked. Nothing changes until you switch.</span><span class="spacer"></span>
@@ -1473,14 +1510,14 @@ function SettingsIdentity() {
         <div class="dim small" style="margin-top:12px">If this key is ever lost (for example a new master without a backup), agents stop connecting. Run a new install command from Settings → Systems on each system; it updates the stored key.</div>
       </div>
       <div class="panel panel-pad" style="margin-top:18px"><h2>Website certificate (HTTPS)</h2>
-        <div class="muted small">Carries the traffic; self-signed for now. Agents 0.3.0 and later do not rely on it.${d.agents.some((a) => !a.sealed) ? ' Agents of the old method still trust it until they are updated.' : ''}</div>
-        <div class="keyrow"><span class="klbl">Fingerprint</span><code class="mono">sha256//${d.https}</code></div>
+        <div class="muted small">Carries the traffic; self-signed for now. Agents do not rely on it.</div>
+        ${d.full ? html`<div class="keyrow"><span class="klbl">Fingerprint</span><code class="mono">sha256//${d.https}</code></div>` : ''}
       </div>`);
     setHTML($('#id-agents'), d.agents.length ? html`<div class="panel"><table class="tbl">
       <thead><tr><th>System</th><th>Slot 1</th><th>Slot 2</th><th>Status</th><th>Reported</th></tr></thead>
       <tbody>${d.agents.map((a) => html`<tr><td>${agentDot(a)} <a href="#/agent/${a.id}"><b>${a.name}</b></a></td>
-        <td>${a.sealed ? slot(a.slots[0], d) : html`<span class="dim">—</span>`}</td>
-        <td>${a.sealed ? slot(a.slots[1], d) : html`<span class="dim">—</span>`}</td>
+        <td>${a.sealed ? slot(a.slots[0]) : html`<span class="dim">—</span>`}</td>
+        <td>${a.sealed ? slot(a.slots[1]) : html`<span class="dim">—</span>`}</td>
         <td>${status(a, d)}</td>
         <td class="muted small">${a.reported_at ? when(a.reported_at) : '—'}</td></tr>`)}</tbody></table></div>`
       : html`<div class="panel empty">No systems yet.</div>`);
@@ -1510,7 +1547,7 @@ function SettingsIdentity() {
       'switch-key': async () => {
         const missing = st.d.agents.filter((a) => !a.has_next);
         if (!missing.length) {
-          if (!(await confirmBox('Switch to the new key?', 'The master starts using the new key and the old key is deleted. Systems reconnect with the new key and remove the old one. Your browser will warn once about the new certificate.', { okText: 'Switch' }))) return;
+          if (!(await confirmBox('Switch to the new key?', 'The master starts using the new key and the old key is deleted. Systems reconnect with the new key and remove the old one.', { okText: 'Switch' }))) return;
           await act('switch'); toast('Switched to the new key', 'ok'); return;
         }
         // Not everyone has the new key: the safe choice (Cancel) has focus.

@@ -186,12 +186,27 @@ type agentKeys struct {
 	LastSeen   int64     `json:"last_seen"`
 	Version    string    `json:"core_version"`
 	Sealed     bool      `json:"sealed"` // uses the payload key (0.3.0+)
-	Slots      [2]string `json:"slots"`  // fingerprints of the keys it trusts
+	Slots      [2]string `json:"slots"`  // per slot: current | new | unknown | "" (empty); no fingerprints
 	ReportedAt int64     `json:"reported_at"`
 	HasNext    bool      `json:"has_next"`
 }
 
-func (s *Server) identityView() map[string]any {
+// slotStatus says what a key an agent trusts is to this master.
+func slotStatus(k, cur, next string) string {
+	switch {
+	case k == "":
+		return ""
+	case k == cur:
+		return "current"
+	case next != "" && k == next:
+		return "new"
+	}
+	return "unknown"
+}
+
+// identityView is the Identity page. full: with the key fingerprints
+// (administrators); read-only users only see the status per system.
+func (s *Server) identityView(full bool) map[string]any {
 	s.keyMu.Lock()
 	cur, next, nextAt, tlsPin := s.keys.curStr, s.keys.nextStr, s.keys.nextAt, s.keys.tlsPin
 	s.keyMu.Unlock()
@@ -203,19 +218,22 @@ func (s *Server) identityView() map[string]any {
 		k := agentKeys{ID: a.ID, Name: a.Name, Status: a.Status, Online: s.online(a, now), LastSeen: a.LastSeen,
 			Version: a.CoreVersion, Sealed: a.Protocol >= 5}
 		if k.Sealed {
-			k.Slots = [2]string{seal.Fingerprint(a.Pins[0]), seal.Fingerprint(a.Pins[1])}
+			k.Slots = [2]string{slotStatus(a.Pins[0], cur, next), slotStatus(a.Pins[1], cur, next)}
 			k.ReportedAt = a.PinsAt
 			k.HasNext = next != "" && (a.Pins[0] == next || a.Pins[1] == next)
 		}
 		list = append(list, k)
 	}
 	sort.Slice(list, func(i, j int) bool { return strings.ToLower(list[i].Name) < strings.ToLower(list[j].Name) })
-	return map[string]any{"current": seal.Fingerprint(cur), "next": seal.Fingerprint(next), "next_at": nextAt,
-		"https": tlsPin, "agents": list}
+	v := map[string]any{"rotating": next != "", "next_at": nextAt, "agents": list, "full": full}
+	if full {
+		v["current"], v["next"], v["https"] = seal.Fingerprint(cur), seal.Fingerprint(next), tlsPin
+	}
+	return v
 }
 
 func (s *Server) handleIdentity(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, s.identityView())
+	writeJSON(w, s.identityView(can(userFrom(r), permChange)))
 }
 
 func (s *Server) handleIdentityAction(w http.ResponseWriter, r *http.Request) {
@@ -264,7 +282,7 @@ func (s *Server) handleIdentityAction(w http.ResponseWriter, r *http.Request) {
 		s.wake(a.ID)
 	}
 	s.st.mu.Unlock()
-	writeJSON(w, s.identityView())
+	writeJSON(w, s.identityView(true)) // administrators only
 }
 
 // missingNextKey lists systems that have not confirmed the new key.
@@ -285,9 +303,11 @@ func (s *Server) missingNextKey() []string {
 	return out
 }
 
+// shortPin is the short form of a fingerprint shown to people: the first
+// five characters.
 func shortPin(p string) string {
-	if len(p) > 12 {
-		return p[:6] + "…" + p[len(p)-6:]
+	if len(p) > 5 {
+		return p[:5] + "…"
 	}
 	return p
 }

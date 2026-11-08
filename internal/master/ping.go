@@ -23,9 +23,9 @@ type pingResult struct {
 	JobID      string    `json:"job_id"`
 	RTTMs      int64     `json:"rtt_ms"`
 	Version    string    `json:"version,omitempty"`
-	KeyUsed    string    `json:"key_used,omitempty"` // fingerprint of the payload key of the connection
+	KeyUsed    string    `json:"key_used,omitempty"` // short fingerprint of the payload key of the connection
 	KeyCurrent bool      `json:"key_current"`        // that key is the master's current key
-	Slots      [2]string `json:"slots"`              // fingerprints of the agent's slots
+	Slots      [2]string `json:"slots"`              // short fingerprints of the agent's slots
 	SlotsOK    bool      `json:"slots_ok"`           // the slots hold what the master wants
 	ClockMs    int64     `json:"clock_ms"`           // agent clock minus master clock
 	Error      string    `json:"error,omitempty"`
@@ -111,9 +111,11 @@ func (s *Server) handlePing(w http.ResponseWriter, r *http.Request) {
 	want := s.desiredPins()
 	out.RTTMs = rtt.Milliseconds()
 	out.Version = clip(p.Version, 32)
-	out.KeyUsed = seal.Fingerprint(p.KeyUsed)
+	// Fingerprints in their short form only: that is all the pop-up shows,
+	// and read-only users must not receive more.
+	out.KeyUsed = shortPin(seal.Fingerprint(p.KeyUsed))
 	out.KeyCurrent = p.KeyUsed != "" && p.KeyUsed == want[0]
-	out.Slots = [2]string{seal.Fingerprint(p.Keys[0]), seal.Fingerprint(p.Keys[1])}
+	out.Slots = [2]string{shortPin(seal.Fingerprint(p.Keys[0])), shortPin(seal.Fingerprint(p.Keys[1]))}
 	out.SlotsOK = samePair(p.Keys, want)
 	// The agent's clock was read about halfway through the round trip.
 	if p.TimeMs > 0 {
@@ -142,7 +144,7 @@ func (s *Server) pingAnswered(j *Job, res proto.Result) {
 	} else {
 		var p proto.PingReply
 		if json.Unmarshal(res.Data, &p) == nil {
-			line = fmt.Sprintf("pong from agent %s (connection key %s)\n", clip(p.Version, 32), seal.Fingerprint(p.KeyUsed))
+			line = fmt.Sprintf("pong from agent %s (connection key %s)\n", clip(p.Version, 32), shortPin(seal.Fingerprint(p.KeyUsed)))
 		}
 	}
 	if f, err := os.OpenFile(s.st.jobLogPath(j.ID), os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600); err == nil {

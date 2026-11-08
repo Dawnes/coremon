@@ -107,7 +107,9 @@ func TestSealedAgentLifecycle(t *testing.T) {
 		s.st.st.Agents[newID].Status = status
 		s.st.mu.Unlock()
 		p := ping()
-		if !p.Answered || p.Version != "0.3.1" || !p.KeyCurrent || !p.SlotsOK || p.ClockMs > 5000 || p.ClockMs < -5000 {
+		short := seal.Fingerprint(s.desiredPins()[0])[:5] + "…"
+		if !p.Answered || p.Version != "0.3.1" || !p.KeyCurrent || !p.SlotsOK || p.ClockMs > 5000 || p.ClockMs < -5000 ||
+			p.KeyUsed != short || p.Slots != [2]string{short, ""} {
 			t.Fatalf("ping while %s: %+v", status, p)
 		}
 	}

@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"coremon/internal/proto"
+	"coremon/internal/seal"
 )
 
 func TestPayloadKeyRotation(t *testing.T) {
@@ -101,8 +102,20 @@ func TestReadOnlyCannotRotate(t *testing.T) {
 	admin.do("POST", "/api/ui/users", `{"name":"ro","role":"viewer","password":"abcde"}`)
 	ro := newUIClient(t, srv.URL)
 	ro.do("POST", "/api/ui/login", `{"username":"ro","password":"abcde"}`)
-	if code, _ := ro.do("GET", "/api/ui/identity", ""); code != 200 {
-		t.Error("read-only users may see the keys")
+	cur := s.desiredPins()[0]
+	s.st.mu.Lock()
+	s.st.st.Agents["a_1"] = &Agent{ID: "a_1", Name: "web-01", Status: StatusActive, Protocol: 5, Pins: [2]string{cur, "x"}, PinsAt: 1}
+	s.st.mu.Unlock()
+	fp, tlsPin := seal.Fingerprint(cur), s.currentPin()
+	code, body := ro.do("GET", "/api/ui/identity", "")
+	if code != 200 || !strings.Contains(body, `"slots":["current","unknown"]`) {
+		t.Errorf("read-only users see the key status per system: %d %s", code, body)
+	}
+	if strings.Contains(body, fp) || strings.Contains(body, tlsPin) || strings.Contains(body, fp[:5]) {
+		t.Errorf("read-only user received a fingerprint: %s", body)
+	}
+	if _, body := admin.do("GET", "/api/ui/identity", ""); !strings.Contains(body, fp) || !strings.Contains(body, tlsPin) {
+		t.Errorf("administrators see the fingerprints: %s", body)
 	}
 	if code, _ := ro.do("POST", "/api/ui/identity/generate", `{}`); code != 403 {
 		t.Errorf("read-only user generated a key: %d", code)

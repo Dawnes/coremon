@@ -122,7 +122,7 @@ The master needs outbound HTTPS to `github.com` and
   headers to arrange; fold groups; select a whole group). Filters for updates,
   security, reboot, offline, pending and outdated agents; bulk *Check now*,
   *Upgrade all packages* and *Agent → latest*.
-* **System page** (for operating a system) — *Ping*, *Reboot* and *Report only*.
+* **System page** (for operating a system) — *Ping*, *Report only* and *Reboot*.
   *Ping* (every user, agents 0.3.1+) asks the agent to answer at once without
   doing anything: it shows the round trip, the agent version, which payload
   key the connection used, the agent's key slots and its clock difference —
@@ -145,7 +145,7 @@ The master needs outbound HTTPS to `github.com` and
   GitHub repository), *Systems* (enrollment, approvals, rename, group and
   remove systems; create, rename, delete and reorder groups), *Users*
   (administrators: add users, set role, reset password, remove), *Login*
-  (your own password) and *Identity* (the fingerprint agents pin).
+  (your own password) and *Identity* (payload key rotation and the key status of every system; key fingerprints are shown to administrators only). The *Master URL* used in install commands is automatic (the address your browser uses, with the agent port); administrators can *Change* it, e.g. for a DNS name agents use.
 * **Users** — sign in with user name and password; the first user is
   `admin`. *Read-only* users see everything (except enrollment tokens) and
   change nothing but their own password. The last administrator cannot be
