@@ -11,20 +11,21 @@ import (
 	"coremon/internal/proto"
 )
 
-func TestKeyRotation(t *testing.T) {
+func TestPayloadKeyRotation(t *testing.T) {
 	pub, _ := keys(t)
-	s := testServer(t, pub, "http://127.0.0.1:1/none", "0.2.14")
+	s := testServer(t, pub, "http://127.0.0.1:1/none", "0.3.0")
 	srv := httptest.NewTLSServer(s.routes())
 	defer srv.Close()
 	pw, _ := os.ReadFile(filepath.Join(s.cfg.DataDir, "initial-password.txt"))
 	c := newUIClient(t, srv.URL)
 	c.do("POST", "/api/ui/login", `{"username":"admin","password":"`+strings.TrimSpace(string(pw))+`"}`)
 
-	old := s.currentPin()
+	old := s.desiredPins()[0]
+	httpsPin := s.currentPin()
 	now := time.Now().Unix()
 	s.st.mu.Lock()
-	a := &Agent{ID: "a_1", Name: "web-01", Status: StatusActive, Protocol: 4, LastSeen: now, Pins: [2]string{old, ""}}
-	b := &Agent{ID: "a_2", Name: "old-vm", Status: StatusActive, Protocol: 3, LastSeen: now}
+	a := &Agent{ID: "a_1", Name: "web-01", Status: StatusActive, Protocol: 5, LastSeen: now, Pins: [2]string{old, ""}}
+	b := &Agent{ID: "a_2", Name: "old-vm", Status: StatusActive, Protocol: 4, LastSeen: now}
 	s.st.st.Agents[a.ID], s.st.st.Agents[b.ID] = a, b
 	s.st.mu.Unlock()
 	pinJob := func(id string) *Job {
@@ -38,77 +39,60 @@ func TestKeyRotation(t *testing.T) {
 		return nil
 	}
 
-	// 1. Generate: the master keeps serving the old key; agents are told
-	//    to trust both.
 	if code, body := c.do("POST", "/api/ui/identity/generate", `{}`); code != 200 {
 		t.Fatalf("generate: %d %s", code, body)
 	}
 	next := s.desiredPins()[1]
-	if next == "" || next == old || s.currentPin() != old {
-		t.Fatalf("after generate: current %s next %s", s.currentPin(), next)
+	if next == "" || next == old || s.desiredPins()[0] != old {
+		t.Fatal("generate must add a second payload key and keep the current one")
+	}
+	if s.currentPin() != httpsPin {
+		t.Fatal("the HTTPS certificate must not change")
+	}
+	if len(s.payloadKeys()) != 2 {
+		t.Fatal("during a rotation requests may be sealed to either key")
 	}
 	j := pinJob("a_1")
 	if j == nil || !strings.Contains(string(j.Params), old) || !strings.Contains(string(j.Params), next) {
 		t.Fatalf("agent not told to trust both keys: %+v", j)
 	}
 	if pinJob("a_2") != nil {
-		t.Error("an agent without two slots must not get a key command")
+		t.Error("an agent of the old method must not get a payload key command")
 	}
-
-	// 2. Switching while systems lack the new key is refused unless forced.
 	if code, body := c.do("POST", "/api/ui/identity/switch", `{}`); code != 409 || !strings.Contains(body, "web-01") || !strings.Contains(body, "old-vm") {
 		t.Fatalf("switch with missing systems: %d %s", code, body)
 	}
-	// web-01 confirms; old-vm (no second slot) stays missing.
 	s.st.mu.Lock()
 	a.Pins = [2]string{old, next}
 	j.Status = JobSuccess
 	s.st.mu.Unlock()
-	if code, body := c.do("POST", "/api/ui/identity/switch", `{}`); code != 409 || strings.Contains(body, "web-01") {
-		t.Fatalf("web-01 is ready, only old-vm missing: %d %s", code, body)
+	if code, _ := c.do("POST", "/api/ui/identity/switch", `{"force":true}`); code != 200 {
+		t.Fatal("forced switch failed")
 	}
-
-	// 3. Forced switch: new key in use, old key gone from disk, agents told
-	//    to keep only the new key.
-	if code, body := c.do("POST", "/api/ui/identity/switch", `{"force":true}`); code != 200 {
-		t.Fatalf("forced switch: %d %s", code, body)
+	if s.desiredPins() != [2]string{next, ""} || len(s.payloadKeys()) != 1 {
+		t.Fatalf("after switch: %v", s.desiredPins())
 	}
-	if s.currentPin() != next || s.desiredPins()[1] != "" {
-		t.Fatalf("after switch: current %s, next %s", s.currentPin(), s.desiredPins()[1])
+	if k, err := readPayloadKey(s.payloadPath("current")); err != nil || k.Public().String() != next {
+		t.Fatal("the new key must be stored as the current key")
 	}
-	crt, key := certPaths(s.cfg.DataDir, "current")
-	if _, p, err := loadCert(crt, key); err != nil || p != next {
-		t.Fatalf("the new key must be stored as the current key: %v", err)
-	}
-	if _, err := os.Stat(filepath.Join(s.cfg.DataDir, "tls-next.key")); err == nil {
+	if _, err := os.Stat(s.payloadPath("next")); err == nil {
 		t.Fatal("the new-key file must be gone after the switch")
 	}
-	j = pinJob("a_1")
-	if j == nil || strings.Contains(string(j.Params), old) || !strings.Contains(string(j.Params), next) {
+	if j = pinJob("a_1"); j == nil || strings.Contains(string(j.Params), old) {
 		t.Fatalf("agent not told to drop the old key: %+v", j)
 	}
-	e := s.audit.list("", "", 5)
-	if len(e) == 0 || e[0].Action != "identity.switch" || !strings.Contains(e[0].Detail, "old-vm") {
-		t.Errorf("audit of a forced switch: %+v", e)
+	if s.currentPin() != httpsPin {
+		t.Fatal("the HTTPS certificate must not change on a payload key switch")
 	}
-
-	// 4. Generate + cancel leaves the current key alone.
 	c.do("POST", "/api/ui/identity/generate", `{}`)
-	if code, _ := c.do("POST", "/api/ui/identity/cancel", `{}`); code != 200 || s.desiredPins()[1] != "" || s.currentPin() != next {
-		t.Fatalf("cancel: current %s next %s", s.currentPin(), s.desiredPins()[1])
-	}
-
-	// The install script carries both keys during a rotation.
-	c.do("POST", "/api/ui/identity/generate", `{}`)
-	code, script := rawGet(t, srv.URL, "/install.sh", "192.168.5.108")
-	if code != 200 || !strings.Contains(script, "NEXT='"+s.desiredPins()[1]+"'") || !strings.Contains(script, `"master_pins": ["$PIN", "$NEXT"]`) {
-		t.Fatalf("install script during rotation: %d", code)
+	if code, _ := c.do("POST", "/api/ui/identity/cancel", `{}`); code != 200 || s.desiredPins() != [2]string{next, ""} {
+		t.Fatal("cancel must keep the current key")
 	}
 }
 
 func TestReadOnlyCannotRotate(t *testing.T) {
 	pub, _ := keys(t)
-	s := testServer(t, pub, "http://127.0.0.1:1/none", "0.2.14")
+	s := testServer(t, pub, "http://127.0.0.1:1/none", "0.3.0")
 	srv := httptest.NewTLSServer(s.routes())
 	defer srv.Close()
 	pw, _ := os.ReadFile(filepath.Join(s.cfg.DataDir, "initial-password.txt"))

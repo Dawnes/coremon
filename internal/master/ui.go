@@ -46,6 +46,7 @@ type agentView struct {
 	IsMaster     bool                       `json:"is_master"`         // the system the master itself runs on
 	ModeSupport  bool                       `json:"mode_support"`      // agent enforces report-only itself (protocol 3+)
 	AgentReport  bool                       `json:"agent_report_only"` // mode the agent itself confirmed
+	Sealed       bool                       `json:"sealed"`            // uses the payload key (0.3.0+)
 	Facts        proto.Facts                `json:"facts"`
 	Features     []string                   `json:"features"`
 	Updates      *updatesSummary            `json:"updates,omitempty"`
@@ -67,6 +68,7 @@ func (s *Server) view(a *Agent, full bool) agentView {
 	v.CoreIsLatest = v.CoreLatest != "" && a.CoreVersion == v.CoreLatest
 	v.Legacy = a.CoreVersion != "" && versionLess(a.CoreVersion, minAgentVersion)
 	v.ModeSupport, v.AgentReport = a.Protocol >= 3, a.ReportOnly
+	v.Sealed = a.Protocol >= 5 || a.AgentKey != ""
 	for _, f := range a.Features {
 		v.Features = append(v.Features, f.Name)
 	}
@@ -326,6 +328,10 @@ func (s *Server) handleCoreUpdate(w http.ResponseWriter, r *http.Request) {
 	}
 	if s.repo.find("core", req.Version, goos, arch) == nil {
 		http.Error(w, fmt.Sprintf("agent %s for %s-%s is not available on the master", req.Version, goos, arch), http.StatusBadRequest)
+		return
+	}
+	if (a.Protocol >= 5 || a.AgentKey != "") && versionLess(req.Version, sealedAgentVersion) {
+		http.Error(w, fmt.Sprintf("agent %s uses the old connection method; a system on %s or later cannot go back to it", req.Version, sealedAgentVersion), http.StatusBadRequest)
 		return
 	}
 	if req.Version == a.CoreVersion {

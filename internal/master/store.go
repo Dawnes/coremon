@@ -83,6 +83,7 @@ type Agent struct {
 	ReportOnly  bool                       `json:"agent_report_only"` // mode the agent itself confirmed (protocol 3+)
 	Pins        [2]string                  `json:"pins"`              // master keys the agent reports trusting, per slot (protocol 4+)
 	PinsAt      int64                      `json:"pins_at"`
+	AgentKey    string                     `json:"agent_key,omitempty"` // the agent's own ed25519 public key (0.3.0+)
 	SecretHash  string                     `json:"secret_hash"`
 	EnrolledAt  int64                      `json:"enrolled_at"`
 	LastSeen    int64                      `json:"last_seen"`

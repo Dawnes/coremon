@@ -86,7 +86,8 @@ func (r *repo) scan() {
 		if kind == "master" {
 			m = masters
 		} else {
-			e.URL = fmt.Sprintf("/api/agent/download/core/%s/%s/%s/%s", e.Name, version, e.OS, e.Arch)
+			// Public: agents check the release signature and checksum.
+			e.URL = fmt.Sprintf("/dl/core/%s/%s-%s", version, e.OS, e.Arch)
 		}
 		if m[version] == nil {
 			m[version] = map[string]*artifactEntry{}

@@ -1,14 +1,16 @@
 package master
 
-// Master key rotation. The master has one key in use (its TLS key, which
-// agents pin) and during a rotation a second, generated key. Agents have two
-// key slots:
+// Master keys.
 //
-//  1. Generate: a new key is created; the master keeps serving the old one.
-//  2. Distribute: every agent is told, over its connection verified with the
-//     old key, to trust [old, new]. Agents report what they stored.
-//  3. Switch: the master serves the new key, closes existing connections so
-//     agents reconnect with it, and tells agents to keep only [new].
+// The HTTPS certificate (tls.crt/tls.key) only carries traffic; it is not
+// rotated here and agents 0.3.0+ do not rely on it. Agents trust the
+// master's payload key (payload.key), in two slots, which allows rotation:
+//
+//  1. Generate: a new payload key; the master keeps answering with the old.
+//  2. Distribute: every agent is told, in a reply signed with a key it
+//     trusts, to trust [current, new]. Agents report what they stored.
+//  3. Switch: the master answers with the new key and deletes the old one;
+//     agents are told to keep only [new].
 //  Cancel before the switch discards the new key; agents drop it again.
 
 import (
@@ -17,22 +19,33 @@ import (
 	"errors"
 	"fmt"
 	"log"
-	"net"
 	"net/http"
 	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 	"time"
 
 	"coremon/internal/proto"
+	"coremon/internal/seal"
 )
 
-// keyState is the master's view of its keys.
+// keyState holds the HTTPS certificate and the payload keys.
 type keyState struct {
-	cert, next   *tls.Certificate
-	pin, nextPin string
-	nextAt       int64
-	conns        map[net.Conn]struct{} // agent-port connections, closed on a switch
+	cert    *tls.Certificate // HTTPS
+	tlsPin  string           // its fingerprint; agents before 0.3.0 pin it
+	cur     *seal.KeyPair    // payload key in use
+	curStr  string
+	next    *seal.KeyPair // during a rotation
+	nextStr string
+	nextAt  int64
+}
+
+func (s *Server) payloadPath(slot string) string {
+	if slot == "next" {
+		return filepath.Join(s.cfg.DataDir, "payload-next.key")
+	}
+	return filepath.Join(s.cfg.DataDir, "payload.key")
 }
 
 func (s *Server) currentCert(*tls.ClientHelloInfo) (*tls.Certificate, error) {
@@ -41,43 +54,68 @@ func (s *Server) currentCert(*tls.ClientHelloInfo) (*tls.Certificate, error) {
 	return s.keys.cert, nil
 }
 
+// currentPin is the HTTPS certificate fingerprint (agents before 0.3.0).
 func (s *Server) currentPin() string {
 	s.keyMu.Lock()
 	defer s.keyMu.Unlock()
-	return s.keys.pin
+	return s.keys.tlsPin
 }
 
-// desiredPins is what every agent should trust right now.
+// desiredPins is what every agent should trust: [payload key, new key].
 func (s *Server) desiredPins() [2]string {
 	s.keyMu.Lock()
 	defer s.keyMu.Unlock()
-	return [2]string{s.keys.pin, s.keys.nextPin}
+	return [2]string{s.keys.curStr, s.keys.nextStr}
 }
 
-func (s *Server) loadNextKey() {
-	crt, key := certPaths(s.cfg.DataDir, "next")
-	st, err := os.Stat(crt)
-	if err != nil {
-		return
-	}
-	cert, pin, err := loadCert(crt, key)
-	if err != nil {
-		log.Printf("key rotation: cannot load the new key: %v", err)
-		return
-	}
-	s.keys.next, s.keys.nextPin, s.keys.nextAt = &cert, pin, st.ModTime().Unix()
-}
-
-// trackConn remembers agent-port connections (http.Server.ConnState).
-func (s *Server) trackConn(c net.Conn, state http.ConnState) {
+// payloadKeys are the keys requests may be sealed to.
+func (s *Server) payloadKeys() map[string]*seal.KeyPair {
 	s.keyMu.Lock()
 	defer s.keyMu.Unlock()
-	switch state {
-	case http.StateNew:
-		s.keys.conns[c] = struct{}{}
-	case http.StateClosed, http.StateHijacked:
-		delete(s.keys.conns, c)
+	m := map[string]*seal.KeyPair{s.keys.curStr: s.keys.cur}
+	if s.keys.next != nil {
+		m[s.keys.nextStr] = s.keys.next
 	}
+	return m
+}
+
+func readPayloadKey(path string) (*seal.KeyPair, error) {
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	return seal.ParsePrivate(b)
+}
+
+func writePayloadKey(path string, k *seal.KeyPair) error {
+	tmp := path + ".tmp"
+	if err := os.WriteFile(tmp, k.MarshalPrivate(), 0o600); err != nil {
+		return err
+	}
+	return os.Rename(tmp, path)
+}
+
+// loadKeys loads (or on first start creates) the payload key, picks up a
+// rotation in progress, and retires files of the old HTTPS-key rotation.
+func (s *Server) loadKeys() error {
+	cur, err := readPayloadKey(s.payloadPath("current"))
+	if os.IsNotExist(err) {
+		if cur, err = seal.GenerateKeyPair(); err == nil {
+			err = writePayloadKey(s.payloadPath("current"), cur)
+		}
+	}
+	if err != nil {
+		return fmt.Errorf("payload key: %w", err)
+	}
+	s.keys.cur, s.keys.curStr = cur, cur.Public().String()
+	if next, err := readPayloadKey(s.payloadPath("next")); err == nil {
+		st, _ := os.Stat(s.payloadPath("next"))
+		s.keys.next, s.keys.nextStr, s.keys.nextAt = next, next.Public().String(), st.ModTime().Unix()
+	}
+	for _, f := range []string{"tls-next.crt", "tls-next.key"} {
+		os.Remove(filepath.Join(s.cfg.DataDir, f))
+	}
+	return nil
 }
 
 func (s *Server) generateKey() error {
@@ -86,15 +124,14 @@ func (s *Server) generateKey() error {
 	if s.keys.next != nil {
 		return errors.New("a new key was already generated; switch to it or cancel first")
 	}
-	crt, key := certPaths(s.cfg.DataDir, "next")
-	if err := createCert(crt, key, s.cfg.SANs); err != nil {
-		return err
-	}
-	cert, pin, err := loadCert(crt, key)
+	k, err := seal.GenerateKeyPair()
 	if err != nil {
 		return err
 	}
-	s.keys.next, s.keys.nextPin, s.keys.nextAt = &cert, pin, time.Now().Unix()
+	if err := writePayloadKey(s.payloadPath("next"), k); err != nil {
+		return err
+	}
+	s.keys.next, s.keys.nextStr, s.keys.nextAt = k, k.Public().String(), time.Now().Unix()
 	return nil
 }
 
@@ -104,51 +141,31 @@ func (s *Server) cancelKey() error {
 	if s.keys.next == nil {
 		return errors.New("no new key to cancel")
 	}
-	crt, key := certPaths(s.cfg.DataDir, "next")
-	os.Remove(crt)
-	os.Remove(key)
-	s.keys.next, s.keys.nextPin, s.keys.nextAt = nil, "", 0
+	os.Remove(s.payloadPath("next"))
+	s.keys.next, s.keys.nextStr, s.keys.nextAt = nil, "", 0
 	return nil
 }
 
-// switchKey makes the new key current and deletes the old one.
+// switchKey makes the new payload key current and deletes the old one.
 func (s *Server) switchKey() (old, cur string, err error) {
 	s.keyMu.Lock()
+	defer s.keyMu.Unlock()
 	if s.keys.next == nil {
-		s.keyMu.Unlock()
 		return "", "", errors.New("generate a new key first")
 	}
-	nc, nk := certPaths(s.cfg.DataDir, "next")
-	cc, ck := certPaths(s.cfg.DataDir, "current")
-	if err := os.Rename(nk, ck); err != nil {
-		s.keyMu.Unlock()
+	if err := os.Rename(s.payloadPath("next"), s.payloadPath("current")); err != nil {
 		return "", "", err
 	}
-	if err := os.Rename(nc, cc); err != nil {
-		s.keyMu.Unlock()
-		return "", "", err
-	}
-	old = s.keys.pin
-	s.keys.cert, s.keys.pin = s.keys.next, s.keys.nextPin
-	s.keys.next, s.keys.nextPin, s.keys.nextAt = nil, "", 0
-	cur = s.keys.pin
-	conns := make([]net.Conn, 0, len(s.keys.conns))
-	for c := range s.keys.conns {
-		conns = append(conns, c)
-	}
-	s.keyMu.Unlock()
-	// Existing connections were set up with the old key; close them so every
-	// agent reconnects (and is then told to drop the old key).
-	for _, c := range conns {
-		c.Close()
-	}
-	return old, cur, nil
+	old = s.keys.curStr
+	s.keys.cur, s.keys.curStr = s.keys.next, s.keys.nextStr
+	s.keys.next, s.keys.nextStr, s.keys.nextAt = nil, "", 0
+	return old, s.keys.curStr, nil
 }
 
-// syncPins tells an agent which keys to trust, until it reports exactly
-// that. Caller holds s.st.mu.
+// syncPins tells an agent which payload keys to trust, until it reports
+// exactly that. Caller holds s.st.mu.
 func (s *Server) syncPins(a *Agent, actor string) *Job {
-	if a.Protocol < 4 || a.Removing {
+	if a.Protocol < 5 || a.Removing {
 		return nil
 	}
 	want := s.desiredPins()
@@ -168,15 +185,16 @@ type agentKeys struct {
 	Online     bool      `json:"online"`
 	LastSeen   int64     `json:"last_seen"`
 	Version    string    `json:"core_version"`
-	Slots      bool      `json:"slots"` // agent has two key slots (0.2.5+)
-	Pins       [2]string `json:"pins"`
+	Sealed     bool      `json:"sealed"` // uses the payload key (0.3.0+)
+	Migrating  bool      `json:"migrating"`
+	Slots      [2]string `json:"slots"` // fingerprints of the keys it trusts
 	ReportedAt int64     `json:"reported_at"`
 	HasNext    bool      `json:"has_next"`
 }
 
 func (s *Server) identityView() map[string]any {
 	s.keyMu.Lock()
-	cur, next, nextAt := s.keys.pin, s.keys.nextPin, s.keys.nextAt
+	cur, next, nextAt, tlsPin := s.keys.curStr, s.keys.nextStr, s.keys.nextAt, s.keys.tlsPin
 	s.keyMu.Unlock()
 	s.st.mu.Lock()
 	defer s.st.mu.Unlock()
@@ -184,12 +202,17 @@ func (s *Server) identityView() map[string]any {
 	list := []agentKeys{}
 	for _, a := range s.st.st.Agents {
 		k := agentKeys{ID: a.ID, Name: a.Name, Status: a.Status, Online: s.online(a, now), LastSeen: a.LastSeen,
-			Version: a.CoreVersion, Slots: a.Protocol >= 4, Pins: a.Pins, ReportedAt: a.PinsAt}
-		k.HasNext = next != "" && (a.Pins[0] == next || a.Pins[1] == next)
+			Version: a.CoreVersion, Sealed: a.Protocol >= 5, Migrating: a.AgentKey != "" && a.SecretHash != ""}
+		if k.Sealed {
+			k.Slots = [2]string{seal.Fingerprint(a.Pins[0]), seal.Fingerprint(a.Pins[1])}
+			k.ReportedAt = a.PinsAt
+			k.HasNext = next != "" && (a.Pins[0] == next || a.Pins[1] == next)
+		}
 		list = append(list, k)
 	}
 	sort.Slice(list, func(i, j int) bool { return strings.ToLower(list[i].Name) < strings.ToLower(list[j].Name) })
-	return map[string]any{"current": cur, "next": next, "next_at": nextAt, "agents": list}
+	return map[string]any{"current": seal.Fingerprint(cur), "next": seal.Fingerprint(next), "next_at": nextAt,
+		"https": tlsPin, "agents": list}
 }
 
 func (s *Server) handleIdentity(w http.ResponseWriter, r *http.Request) {
@@ -207,11 +230,11 @@ func (s *Server) handleIdentityAction(w http.ResponseWriter, r *http.Request) {
 	switch r.PathValue("action") {
 	case "generate":
 		if err = s.generateKey(); err == nil {
-			s.audit.write(actor(r), clientIP(r), "identity.generate", "", "new key "+shortPin(s.desiredPins()[1]))
+			s.audit.write(actor(r), clientIP(r), "identity.generate", "", "new payload key "+shortPin(seal.Fingerprint(s.desiredPins()[1])))
 		}
 	case "cancel":
 		if err = s.cancelKey(); err == nil {
-			s.audit.write(actor(r), clientIP(r), "identity.cancel", "", "new key discarded")
+			s.audit.write(actor(r), clientIP(r), "identity.cancel", "", "new payload key discarded")
 		}
 	case "switch":
 		missing := s.missingNextKey()
@@ -221,12 +244,12 @@ func (s *Server) handleIdentityAction(w http.ResponseWriter, r *http.Request) {
 		}
 		var old, cur string
 		if old, cur, err = s.switchKey(); err == nil {
-			detail := fmt.Sprintf("%s → %s", shortPin(old), shortPin(cur))
+			detail := fmt.Sprintf("%s → %s", shortPin(seal.Fingerprint(old)), shortPin(seal.Fingerprint(cur)))
 			if len(missing) > 0 {
 				detail += "; switched anyway, without: " + strings.Join(missing, ", ")
 			}
 			s.audit.write(actor(r), clientIP(r), "identity.switch", "", detail)
-			log.Printf("key rotation: switched to %s", shortPin(cur))
+			log.Printf("key rotation: switched to payload key %s", shortPin(seal.Fingerprint(cur)))
 		}
 	default:
 		http.NotFound(w, r)
@@ -239,6 +262,7 @@ func (s *Server) handleIdentityAction(w http.ResponseWriter, r *http.Request) {
 	s.st.mu.Lock()
 	for _, a := range s.st.st.Agents {
 		s.syncPins(a, actor(r))
+		s.wake(a.ID)
 	}
 	s.st.mu.Unlock()
 	writeJSON(w, s.identityView())
@@ -254,7 +278,7 @@ func (s *Server) missingNextKey() []string {
 		if a.Removing {
 			continue
 		}
-		if next == "" || (a.Pins[0] != next && a.Pins[1] != next) {
+		if next == "" || a.Protocol < 5 || (a.Pins[0] != next && a.Pins[1] != next) {
 			out = append(out, a.Name)
 		}
 	}

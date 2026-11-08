@@ -1,8 +1,10 @@
 package master
 
 import (
+	"context"
 	"crypto/subtle"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -38,7 +40,7 @@ func (s *Server) authAgent(r *http.Request) *Agent {
 		return nil
 	}
 	a := s.st.st.Agents[id]
-	if a == nil {
+	if a == nil || a.SecretHash == "" { // moved to the sealed method: secret retired
 		return nil
 	}
 	if subtle.ConstantTimeCompare([]byte(a.SecretHash), []byte(sha256hex(secret))) != 1 {
@@ -166,11 +168,19 @@ func (s *Server) recentFailure(agentID, typ, feature string, d time.Duration) bo
 	return false
 }
 
-func (s *Server) handleEnroll(w http.ResponseWriter, r *http.Request) {
-	var req proto.EnrollRequest
-	if !readJSON(w, r, &req, maxEnrollBody) {
-		return
-	}
+// ---- agent API: shared logic for the old (TLS-pinned, shared secret) and
+// the sealed (payload key, agent key) method ----
+
+type apiError struct {
+	code int
+	msg  string
+}
+
+func (e *apiError) Error() string { return e.msg }
+
+// enrollCore registers a new system. With agentKey (sealed method) no
+// secret is created. Caller must not hold s.st.mu.
+func (s *Server) enrollCore(req proto.EnrollRequest, ip, agentKey string) (*proto.EnrollResponse, error) {
 	req.Facts = sanitizeFacts(req.Facts)
 	req.CoreVersion = clip(req.CoreVersion, 32)
 	s.st.mu.Lock()
@@ -178,17 +188,14 @@ func (s *Server) handleEnroll(w http.ResponseWriter, r *http.Request) {
 	h := sha256hex(strings.TrimSpace(req.Token))
 	tok := s.st.st.Tokens[h]
 	if tok == nil || time.Now().Unix() > tok.Expires {
-		s.audit.write("agent", clientIP(r), "enroll.rejected", clip(req.Facts.Hostname, 64), "invalid or expired token")
-		http.Error(w, "invalid or expired enrollment token", http.StatusForbidden)
-		return
+		s.audit.write("agent", ip, "enroll.rejected", clip(req.Facts.Hostname, 64), "invalid or expired token")
+		return nil, &apiError{http.StatusForbidden, "invalid or expired enrollment token"}
 	}
 	delete(s.st.st.Tokens, h)
-	secret := randHex(32)
 	a := &Agent{
 		ID:          "a_" + randHex(8),
 		Name:        cleanName(req.Facts.Hostname),
-		Status:      "pending",
-		SecretHash:  sha256hex(secret),
+		Status:      StatusPending,
 		EnrolledAt:  time.Now().Unix(),
 		LastSeen:    time.Now().Unix(),
 		CoreVersion: req.CoreVersion,
@@ -196,6 +203,12 @@ func (s *Server) handleEnroll(w http.ResponseWriter, r *http.Request) {
 		Features:    []proto.FeatureInfo{},
 		State:       map[string]json.RawMessage{},
 		StateAt:     map[string]int64{},
+		AgentKey:    agentKey,
+	}
+	resp := &proto.EnrollResponse{AgentID: a.ID, SigningKey: s.signingKeyB64}
+	if agentKey == "" {
+		resp.Secret = randHex(32)
+		a.SecretHash = sha256hex(resp.Secret)
 	}
 	if tok.Note != "" && a.Name == "" {
 		a.Name = tok.Note
@@ -203,21 +216,17 @@ func (s *Server) handleEnroll(w http.ResponseWriter, r *http.Request) {
 	a.Order = s.st.nextOrder("")
 	s.st.st.Agents[a.ID] = a
 	s.st.markDirty()
-	s.audit.writeAgent("agent", clientIP(r), "agent.enrolled", a, fmt.Sprintf("token %s…", tok.Prefix))
-	writeJSON(w, proto.EnrollResponse{AgentID: a.ID, Secret: secret, SigningKey: s.signingKeyB64})
+	s.audit.writeAgent("agent", ip, "agent.enrolled", a, fmt.Sprintf("token %s…", tok.Prefix))
+	return resp, nil
 }
 
-func (s *Server) handlePoll(w http.ResponseWriter, r *http.Request) {
-	var req proto.PollRequest
-	if !readJSON(w, r, &req, maxPollBody) {
-		return
-	}
+// pollCore records a heartbeat and waits up to one heartbeat for commands.
+func (s *Server) pollCore(ctx context.Context, agentID string, req proto.PollRequest) (*proto.PollResponse, error) {
 	s.st.mu.Lock()
-	a := s.authAgent(r)
+	a := s.st.st.Agents[agentID]
 	if a == nil {
 		s.st.mu.Unlock()
-		http.Error(w, "unauthorized", http.StatusUnauthorized)
-		return
+		return nil, &apiError{http.StatusUnauthorized, "unauthorized"}
 	}
 	now := time.Now().Unix()
 	a.LastSeen = now
@@ -237,7 +246,7 @@ func (s *Server) handlePoll(w http.ResponseWriter, r *http.Request) {
 	}
 	a.ReportOnly = req.ReportOnly
 	if a.Protocol >= 4 {
-		a.Pins = [2]string{clip(req.Pins[0], 64), clip(req.Pins[1], 64)}
+		a.Pins = [2]string{clip(req.Pins[0], 256), clip(req.Pins[1], 256)}
 		a.PinsAt = now
 	}
 	s.syncMode(a, "scheduler") // the master's decision wins; sent in this same reply
@@ -265,7 +274,6 @@ func (s *Server) handlePoll(w http.ResponseWriter, r *http.Request) {
 		ch = make(chan struct{}, 1)
 		s.wakes[a.ID] = ch
 	}
-	agentID := a.ID
 	hb := s.heartbeat()
 	s.st.mu.Unlock()
 
@@ -276,16 +284,14 @@ func (s *Server) handlePoll(w http.ResponseWriter, r *http.Request) {
 		cmds := s.takeCommands(agentID)
 		s.st.mu.Unlock()
 		if len(cmds) > 0 {
-			writeJSON(w, proto.PollResponse{Commands: cmds, Heartbeat: hb})
-			return
+			return &proto.PollResponse{Commands: cmds, Heartbeat: hb}, nil
 		}
 		select {
 		case <-ch:
 		case <-deadline.C:
-			writeJSON(w, proto.PollResponse{Commands: []proto.Command{}, Heartbeat: hb})
-			return
-		case <-r.Context().Done():
-			return
+			return &proto.PollResponse{Commands: []proto.Command{}, Heartbeat: hb}, nil
+		case <-ctx.Done():
+			return nil, ctx.Err()
 		}
 	}
 }
@@ -318,21 +324,13 @@ func (s *Server) takeCommands(agentID string) []proto.Command {
 	return out
 }
 
-func (s *Server) handleOutput(w http.ResponseWriter, r *http.Request) {
-	var req proto.OutputBatch
-	if !readJSON(w, r, &req, 8<<20) {
-		return
-	}
+// outputCore appends streamed job output.
+func (s *Server) outputCore(agentID string, req proto.OutputBatch) {
 	s.st.mu.Lock()
 	defer s.st.mu.Unlock()
-	a := s.authAgent(r)
-	if a == nil {
-		http.Error(w, "unauthorized", http.StatusUnauthorized)
-		return
-	}
 	for _, it := range req.Items {
 		j := s.st.jobByID(it.CommandID)
-		if j == nil || j.AgentID != a.ID || j.Status != JobRunning || j.LogSize >= maxJobLog {
+		if j == nil || j.AgentID != agentID || j.Status != JobRunning || j.LogSize >= maxJobLog {
 			continue
 		}
 		data := it.Data
@@ -348,24 +346,15 @@ func (s *Server) handleOutput(w http.ResponseWriter, r *http.Request) {
 		j.LogSize += int64(n)
 	}
 	s.st.markDirty()
-	w.WriteHeader(http.StatusNoContent)
 }
 
-func (s *Server) handleResult(w http.ResponseWriter, r *http.Request) {
-	var res proto.Result
-	if !readJSON(w, r, &res, 8<<20) {
-		return
-	}
+// resultCore records a job's outcome.
+func (s *Server) resultCore(agentID string, res proto.Result, ip string) {
 	s.st.mu.Lock()
 	defer s.st.mu.Unlock()
-	a := s.authAgent(r)
-	if a == nil {
-		http.Error(w, "unauthorized", http.StatusUnauthorized)
-		return
-	}
+	a := s.st.st.Agents[agentID]
 	j := s.st.jobByID(res.CommandID)
-	if j == nil || j.AgentID != a.ID || j.done() {
-		w.WriteHeader(http.StatusNoContent)
+	if a == nil || j == nil || j.AgentID != a.ID || j.done() {
 		return
 	}
 	now := time.Now().Unix()
@@ -373,7 +362,7 @@ func (s *Server) handleResult(w http.ResponseWriter, r *http.Request) {
 	if res.OK {
 		j.Status = JobSuccess
 	} else {
-		j.Status, j.Error = JobFailed, res.Error
+		j.Status, j.Error = JobFailed, clip(res.Error, 2000)
 	}
 	switch {
 	case j.Type == proto.CmdAction && len(res.Data) > 0:
@@ -388,11 +377,92 @@ func (s *Server) handleResult(w http.ResponseWriter, r *http.Request) {
 		// Do not retry a failed up/downgrade on our own.
 		a.DesiredCore = ""
 	case j.Type == proto.CmdUninstall && res.OK:
-		s.audit.writeAgent("agent", clientIP(r), "agent.uninstalled", a, "")
+		s.audit.writeAgent("agent", ip, "agent.uninstalled", a, "")
 		delete(s.st.st.Agents, a.ID)
 		delete(s.wakes, a.ID)
 	}
 	s.st.markDirty()
+}
+
+func writeAPIError(w http.ResponseWriter, err error) {
+	var ae *apiError
+	if errors.As(err, &ae) {
+		http.Error(w, ae.msg, ae.code)
+		return
+	}
+	http.Error(w, err.Error(), http.StatusBadRequest)
+}
+
+// ---- old method (agents before 0.3.0): pinned HTTPS + shared secret ----
+
+// legacyAgent authenticates a request of the old method.
+func (s *Server) legacyAgent(r *http.Request) string {
+	s.st.mu.Lock()
+	defer s.st.mu.Unlock()
+	if a := s.authAgent(r); a != nil {
+		return a.ID
+	}
+	return ""
+}
+
+func (s *Server) handleEnroll(w http.ResponseWriter, r *http.Request) {
+	var req proto.EnrollRequest
+	if !readJSON(w, r, &req, maxEnrollBody) {
+		return
+	}
+	resp, err := s.enrollCore(req, clientIP(r), "")
+	if err != nil {
+		writeAPIError(w, err)
+		return
+	}
+	writeJSON(w, resp)
+}
+
+func (s *Server) handlePoll(w http.ResponseWriter, r *http.Request) {
+	var req proto.PollRequest
+	if !readJSON(w, r, &req, maxPollBody) {
+		return
+	}
+	id := s.legacyAgent(r)
+	if id == "" {
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		return
+	}
+	resp, err := s.pollCore(r.Context(), id, req)
+	if err != nil {
+		if r.Context().Err() == nil {
+			writeAPIError(w, err)
+		}
+		return
+	}
+	writeJSON(w, resp)
+}
+
+func (s *Server) handleOutput(w http.ResponseWriter, r *http.Request) {
+	var req proto.OutputBatch
+	if !readJSON(w, r, &req, 8<<20) {
+		return
+	}
+	id := s.legacyAgent(r)
+	if id == "" {
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		return
+	}
+	s.outputCore(id, req)
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (s *Server) handleResult(w http.ResponseWriter, r *http.Request) {
+	var res proto.Result
+	if !readJSON(w, r, &res, 8<<20) {
+		return
+	}
+	id := s.legacyAgent(r)
+	if id == "" {
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		return
+	}
+	s.resultCore(id, res, clientIP(r))
 	w.WriteHeader(http.StatusNoContent)
 }
 

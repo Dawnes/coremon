@@ -54,6 +54,7 @@ type Server struct {
 	signingKeyB64 string
 	wakes         map[string]chan struct{} // guarded by st.mu
 	idx           *indexSync
+	nonces        nonceCache // sealed requests already seen (replay)
 
 	handler http.Handler
 
@@ -139,8 +140,8 @@ func (s *Server) applyUIPort(handler http.Handler) {
 		return
 	}
 	srv := &http.Server{Handler: handler, ReadHeaderTimeout: 10 * time.Second, ReadTimeout: readTimeout, IdleTimeout: 120 * time.Second,
-		TLSConfig: &tls.Config{MinVersion: tls.VersionTLS12, GetCertificate: s.currentCert}, ConnState: s.trackConn,
-		ErrorLog: log.New(os.Stderr, "http: ", 0)}
+		TLSConfig: &tls.Config{MinVersion: tls.VersionTLS12, GetCertificate: s.currentCert},
+		ErrorLog:  log.New(os.Stderr, "http: ", 0)}
 	s.uiSrv, s.uiErr = srv, ""
 	go func() {
 		if err := srv.ServeTLS(ln, "", ""); err != nil && !errors.Is(err, http.ErrServerClosed) {
@@ -175,7 +176,7 @@ func New(cfg Config) (*Server, error) {
 	if err != nil {
 		return nil, fmt.Errorf("tls: %w", err)
 	}
-	s := &Server{cfg: cfg, st: st, sess: newSessions(), keys: keyState{cert: &cert, pin: pin, conns: map[net.Conn]struct{}{}},
+	s := &Server{cfg: cfg, st: st, sess: newSessions(), keys: keyState{cert: &cert, tlsPin: pin},
 		audit: &auditLog{path: filepath.Join(cfg.DataDir, "audit.jsonl")}, wakes: map[string]chan struct{}{}}
 
 	// Release signing public key. In production it lives in a root-owned
@@ -196,7 +197,9 @@ func New(cfg Config) (*Server, error) {
 	} else {
 		log.Printf("WARNING: no signing key at %s - no releases can be verified", pubPath)
 	}
-	s.loadNextKey() // a rotation in progress survives a restart
+	if err := s.loadKeys(); err != nil {
+		return nil, err
+	}
 	s.cleanupLegacy()
 	s.repo.scan()
 	s.idx = newIndexSync()
@@ -260,6 +263,9 @@ func securityHeaders(h http.Handler) http.Handler {
 func (s *Server) routes() http.Handler {
 	mux := http.NewServeMux()
 	// Agent API (authenticated per agent, except enroll which needs a token).
+	mux.HandleFunc("POST /api/agent/v5", s.handleSealed)       // sealed method (0.3.0+)
+	mux.HandleFunc("POST /api/agent/migrate", s.handleMigrate) // one-time hand-over from the old method
+	mux.HandleFunc("GET /dl/core/{version}/{plat}", s.handlePublicCore)
 	mux.HandleFunc("POST /api/agent/enroll", s.handleEnroll)
 	mux.HandleFunc("POST /api/agent/poll", s.handlePoll)
 	mux.HandleFunc("POST /api/agent/output", s.handleOutput)
@@ -335,7 +341,6 @@ func (s *Server) Run(ctx context.Context) error {
 		ReadTimeout:       readTimeout,
 		IdleTimeout:       120 * time.Second,
 		TLSConfig:         &tls.Config{MinVersion: tls.VersionTLS12, GetCertificate: s.currentCert},
-		ConnState:         s.trackConn,
 		ErrorLog:          log.New(os.Stderr, "http: ", 0),
 	}
 	errc := make(chan error, 2)

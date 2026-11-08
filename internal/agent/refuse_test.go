@@ -42,7 +42,7 @@ func TestAgentRefusesActionsInReportOnly(t *testing.T) {
 	defer srv.Close()
 
 	spy := &spyFeature{}
-	cl := &client{base: srv.URL, hc: srv.Client()}
+	cl := &client{base: srv.URL, hc: srv.Client(), legacy: true}
 	a := &Agent{opt: Options{StateDir: t.TempDir()}, cl: cl, out: newOutputBuffer(cl), running: map[string]bool{},
 		feats: map[string]feature.Feature{"updates": spy}, locks: map[string]*sync.Mutex{"updates": {}}}
 	ctx := context.Background()

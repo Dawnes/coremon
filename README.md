@@ -50,8 +50,8 @@ the latest, **orange** otherwise.
 | Signing key | Only in the `release` environment secret on GitHub. Add a required reviewer to that environment to approve each release by hand. |
 | Master's trust anchor | `/etc/coremon-master/signing.pub`, root-owned, written by the installer. The master service runs unprivileged and cannot change it. |
 | Master self-update | The unprivileged master can only *request* an update; a root systemd unit verifies the signature against the root-owned key and refuses anything not newer. |
-| Agent ↔ master | TLS with the master's public key pinned in each agent. Install script fetched with `curl --pinnedpubkey`, binary checked by sha256. |
-| Agent identity | Single-use enrollment token → per-agent secret (only a hash is stored). New systems stay **pending** until approved. |
+| Agent ↔ master | HTTPS only carries the traffic (self-signed; agents do not rely on it). Every message is encrypted end to end and signed with the master's **payload key** (ed25519 + X25519, AES-256-GCM), which agents trust in two key slots; replies are bound to their request (no replay). The install command carries the sha256 of the install script, which carries the payload key and the agent's checksum. |
+| Agent identity | Single-use enrollment token; each agent then has its **own key pair** and signs every request — no shared secret on the wire. New systems stay **pending** until approved. Agents before 0.3.0 (pinned HTTPS + shared secret) hand over automatically when updated. |
 | What agents can do | Fixed actions only; package names validated; no arbitrary shell. |
 | UI | User accounts with roles (Administrator, Read-only) checked by the master on every request; PBKDF2 passwords (min. 5 characters), HttpOnly/Secure/SameSite=Strict session, anti-CSRF header, login rate limiting, strict CSP, audit log per user. Read-only users cannot see enrollment tokens. |
 
@@ -189,17 +189,18 @@ actions `Mutating`.
 | Back up the master | `/var/lib/coremon-master` and `/etc/coremon-master` |
 | Reverse proxy | add `-http 127.0.0.1:8080` to the master's `ExecStart` (loopback-only plain HTTP for a local proxy); agents keep using the pinned HTTPS port |
 
-**Master key rotation** (Settings → Identity, agents 0.2.5+): *Generate new
-key* — every agent receives it over its connection verified with the current
-key and stores it in its second key slot; the page shows both slots of every
-system. *Switch to new key* — the master uses the new key, agents reconnect
-with it and drop the old one. If systems are missing the new key, the switch
-warns (default: don't switch). *Cancel* discards the new key.
+**Payload key rotation** (Settings → Identity, agents 0.3.0+): *Generate new
+key* — every agent receives it in a message signed with the current key and
+stores it in its second key slot; the page shows both slots of every system.
+*Switch to new key* — the master uses the new key and agents drop the old
+one. If systems are missing the new key, the switch warns (default: don't
+switch). *Cancel* discards the new key. The HTTPS certificate is separate and
+not touched by this.
 
-If the master's TLS key is ever lost, agents reject the new one by design.
-Run a new install command on each system: it updates the stored master
-address and keys (keeping the registration, or registering again if the
-master no longer knows the system).
+If the payload key is ever lost (`/var/lib/coremon-master/payload.key`),
+agents reject the new one by design. Run a new install command on each
+system: it updates the stored master address and keys (keeping the
+registration, or registering again if the master no longer knows the system).
 
 ## Development
 

@@ -11,7 +11,10 @@ import "encoding/json"
 // 2: built-in features instead of modules; heartbeat in poll responses.
 // 3: report-only mode (agent.mode command, report_only in polls).
 // 4: two master key slots (agent.pins command, pins in polls).
-const ProtocolVersion = 4
+// 5: sealed payloads (internal/seal): agents trust the master's payload key
+//
+//	instead of its HTTPS certificate, and have their own key pair.
+const ProtocolVersion = 5
 
 // Facts describe the system an agent runs on. Sent on every poll; the
 // master keeps only the latest value.
@@ -63,6 +66,7 @@ type EnrollRequest struct {
 	Token       string `json:"token"`
 	CoreVersion string `json:"core_version"`
 	Facts       Facts  `json:"facts"`
+	AgentKey    string `json:"agent_key,omitempty"` // the agent's ed25519 public key (protocol 5)
 }
 
 // EnrollResponse gives the agent its permanent credentials.

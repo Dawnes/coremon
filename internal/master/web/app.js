@@ -1145,7 +1145,7 @@ function Releases() {
         ${outdated.length && canChange() ? html`<button class="btn sm" data-act="all-latest">${icon('up')} Update ${outdated.length} outdated agent(s) to ${repo.core_latest}</button>` : ''}</div>
       <div class="panel"><table class="tbl"><thead><tr><th>System</th><th>Agent</th>${ifChange(html`<th>Change to</th>`)}</tr></thead>
       <tbody>${[...agents].sort(byName).map((a) => html`<tr><td>${agentDot(a)} <a href="#/agent/${a.id}"><b>${a.name}</b></a></td><td>${verPill(a)}</td>
-        ${ifChange(html`<td><form class="row" style="flex-wrap:nowrap" data-submit="set" data-id="${a.id}"><select name="v">${versionOptions({ core: repo.core.filter((v) => v.platforms.includes(`${a.facts.os}-${a.facts.arch}`)) }, a.core_version)}</select><button class="btn sm" ${a.status === 'active' ? '' : 'disabled'}>Apply</button></form></td>`)}</tr>`)}</tbody></table></div>` : '');
+        ${ifChange(html`<td><form class="row" style="flex-wrap:nowrap" data-submit="set" data-id="${a.id}"><select name="v">${versionOptions({ core: repo.core.filter((v) => v.platforms.includes(`${a.facts.os}-${a.facts.arch}`) && !(a.sealed && versionLess(v.version, '0.3.0'))) }, a.core_version)}</select><button class="btn sm" ${a.status === 'active' ? '' : 'disabled'}>Apply</button></form></td>`)}</tr>`)}</tbody></table></div>` : '');
   }
   return {
     interval: 5000,
@@ -1396,20 +1396,21 @@ function SettingsIdentity() {
     return html`<span class="mono small" title="sha256//${p}">${short(p)}</span> ${lbl}`;
   }
   function status(a, d) {
-    if (!a.slots) return html`<span class="badge upd">agent ${a.core_version || '?'}: no second slot</span>`;
+    if (a.migrating) return html`<span class="badge info">handing over to the payload key…</span>`;
+    if (!a.sealed) return html`<span class="badge upd" title="Trusts the HTTPS certificate (old method)">agent ${a.core_version || '?'}: old method — update the agent</span>`;
     if (!a.reported_at) return html`<span class="dim">not reported yet</span>`;
     const known = (p) => !p || p === d.current || p === d.next;
-    if (!known(a.pins[0]) || !known(a.pins[1])) return html`<span class="badge sec">trusts an unknown key</span>`;
+    if (!known(a.slots[0]) || !known(a.slots[1])) return html`<span class="badge sec">trusts an unknown key</span>`;
     if (d.next) return a.has_next ? html`<span class="badge ok">ready to switch</span>` : html`<span class="badge upd">waiting for the new key</span>`;
-    return a.pins.includes(d.current) && !a.pins.some((p) => p && p !== d.current) ? html`<span class="badge ok">${icon('check')} correct</span>` : html`<span class="badge upd">updating keys</span>`;
+    return a.slots.includes(d.current) && !a.slots.some((p) => p && p !== d.current) ? html`<span class="badge ok">${icon('check')} correct</span>` : html`<span class="badge upd">updating keys</span>`;
   }
   function render() {
     const d = st.d;
     if (!d) return;
     const ready = d.agents.filter((a) => a.has_next).length;
     setHTML($('#id-keys'), html`
-      <div class="panel panel-pad"><h2>Master keys</h2>
-        <div class="muted small">Agents only connect to a master whose key they trust. Each agent has two key slots, so a new key can be handed over while the connection is still secured by the current one.</div>
+      <div class="panel panel-pad"><h2>Master payload key</h2>
+        <div class="muted small">All traffic between master and agents is encrypted and signed with this key, independent of the HTTPS certificate. Agents only accept messages signed by a key they trust. Each agent has two key slots, so a new key can be handed over in a message signed with the current one.</div>
         <div class="keyrow"><span class="klbl">Current key</span><code class="mono">sha256//${d.current}</code></div>
         ${d.next ? html`<div class="keyrow"><span class="klbl">New key</span><code class="mono">sha256//${d.next}</code><span class="dim small">generated ${fmtDate(d.next_at)}</span></div>` : ''}
         ${canChange() ? html`<div class="row" style="margin-top:14px">
@@ -1420,12 +1421,16 @@ function SettingsIdentity() {
               <button class="btn" data-act="gen-key">${icon('plus')} Generate new key</button>`}
         </div>` : ''}
         <div class="dim small" style="margin-top:12px">If this key is ever lost (for example a new master without a backup), agents stop connecting. Run a new install command from Settings → Systems on each system; it updates the stored key.</div>
+      </div>
+      <div class="panel panel-pad" style="margin-top:18px"><h2>Website certificate (HTTPS)</h2>
+        <div class="muted small">Carries the traffic; self-signed for now. Agents 0.3.0 and later do not rely on it.${d.agents.some((a) => !a.sealed) ? ' Agents of the old method still trust it until they are updated.' : ''}</div>
+        <div class="keyrow"><span class="klbl">Fingerprint</span><code class="mono">sha256//${d.https}</code></div>
       </div>`);
     setHTML($('#id-agents'), d.agents.length ? html`<div class="panel"><table class="tbl">
       <thead><tr><th>System</th><th>Slot 1</th><th>Slot 2</th><th>Status</th><th>Reported</th></tr></thead>
       <tbody>${d.agents.map((a) => html`<tr><td>${agentDot(a)} <a href="#/agent/${a.id}"><b>${a.name}</b></a></td>
-        <td>${a.slots ? slot(a.pins[0], d) : html`<span class="dim">—</span>`}</td>
-        <td>${a.slots ? slot(a.pins[1], d) : html`<span class="dim">—</span>`}</td>
+        <td>${a.sealed ? slot(a.slots[0], d) : html`<span class="dim">—</span>`}</td>
+        <td>${a.sealed ? slot(a.slots[1], d) : html`<span class="dim">—</span>`}</td>
         <td>${status(a, d)}</td>
         <td class="muted small">${a.reported_at ? when(a.reported_at) : '—'}</td></tr>`)}</tbody></table></div>`
       : html`<div class="panel empty">No systems yet.</div>`);
@@ -1462,7 +1467,7 @@ function SettingsIdentity() {
         await new Promise((resolve) => {
           openModal(html`<h3>Not all systems have the new key</h3>
             <div class="notice red" style="margin:12px 0 0">These ${missing.length} system(s) have not reported the new key and will <b>lose contact</b> after the switch:
-              <ul>${missing.map((a) => html`<li><b>${a.name}</b> — ${!a.slots ? `agent ${a.core_version}: no second slot` : a.online ? 'waiting for the new key' : 'offline'}</li>`)}</ul>
+              <ul>${missing.map((a) => html`<li><b>${a.name}</b> — ${!a.sealed ? `agent ${a.core_version}: old method` : a.online ? 'waiting for the new key' : 'offline'}</li>`)}</ul>
               They can be reconnected later with a new install command.</div>
             <div class="actions"><button class="btn primary" data-act="no" autofocus>Cancel</button><button class="btn danger" data-act="yes">Switch anyway</button></div>`, {
             acts: {

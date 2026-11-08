@@ -13,10 +13,13 @@ import (
 	"sync"
 	"time"
 
+	"crypto/ed25519"
+
 	"coremon/internal/feature"
 	"coremon/internal/feature/system"
 	"coremon/internal/feature/updates"
 	"coremon/internal/proto"
+	"coremon/internal/seal"
 )
 
 // features are the agent's built-in functions.
@@ -45,7 +48,8 @@ type Agent struct {
 	running   map[string]bool
 	heartbeat int // seconds, as told by the master
 	exitReq   chan int
-	mode      Mode // stored on disk; guarded by mu
+	agentKey  ed25519.PrivateKey // the agent's own key (sealed method)
+	mode      Mode               // stored on disk; guarded by mu
 }
 
 // Mode is the agent's own record of report-only mode. It survives restarts
@@ -114,12 +118,24 @@ func Run(ctx context.Context, opt Options) (int, error) {
 	if a.mode.ReportOnly {
 		log.Printf("starting in report-only mode")
 	}
-	a.cl = newClient(a.cfg.MasterURL, a.cfg.MasterPins)
+	key, err := loadAgentKey(filepath.Join(opt.StateDir, "agent.key"))
+	if err != nil {
+		return 1, fmt.Errorf("agent key: %w", err)
+	}
+	a.agentKey = key
+	if !a.cfg.sealed() {
+		// Config from before 0.3.0: hand over to the payload key once,
+		// over the old pinned connection.
+		if err := a.handOver(ctx); err != nil {
+			return 1, err
+		}
+	}
+	a.cl = newSealedClient(a.cfg.MasterURL, a.cfg.MasterKeys, key)
 
 	if err := a.ensureEnrolled(ctx); err != nil {
 		return 1, err
 	}
-	a.cl.auth = a.id.AgentID + ":" + a.id.Secret
+	a.cl.setAgentID(a.id.AgentID)
 	a.out = newOutputBuffer(a.cl)
 
 	ctx, cancel := context.WithCancel(ctx)
@@ -150,9 +166,10 @@ func (a *Agent) ensureEnrolled(ctx context.Context) error {
 		var resp proto.EnrollResponse
 		err := a.cl.postJSON(ctx, "/api/agent/enroll", proto.EnrollRequest{
 			Token: a.cfg.Token, CoreVersion: a.opt.Version, Facts: collectFacts(),
+			AgentKey: seal.AgentKey(a.agentKey.Public().(ed25519.PublicKey)),
 		}, &resp, 30*time.Second)
 		if err == nil {
-			a.id = Identity{AgentID: resp.AgentID, Secret: resp.Secret, SigningKey: resp.SigningKey}
+			a.id = Identity{AgentID: resp.AgentID, SigningKey: resp.SigningKey}
 			if err := saveJSON(a.identityPath(), a.id, 0o600); err != nil {
 				return fmt.Errorf("save identity: %w", err)
 			}
@@ -238,6 +255,16 @@ func (a *Agent) pollLoop(ctx context.Context) {
 			// The master still knows this system: the token from a repeated
 			// install command is not needed.
 			a.dropToken()
+		}
+		if a.id.Secret != "" {
+			// The first sealed exchange worked: the hand-over is complete and
+			// the old shared secret is not needed anymore.
+			a.id.Secret = ""
+			if err := saveJSON(a.identityPath(), a.id, 0o600); err != nil {
+				log.Printf("warning: could not remove the old secret: %v", err)
+			} else {
+				log.Printf("now using the master's payload key; old shared secret removed")
+			}
 		}
 		// Mode changes are applied first and in order, so an action sent
 		// right after "allow changes" is not refused (and one sent after
