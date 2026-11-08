@@ -105,6 +105,12 @@ func (c *Ctx) Run(env []string, name string, args ...string) (string, error) {
 		sc.Buffer(make([]byte, 64*1024), 1024*1024)
 		for sc.Scan() {
 			line := sc.Text()
+			// Progress output (apt's "Reading database ... 5%\r...") rewrites
+			// one line with \r; keep only its final state, like a terminal.
+			if i := strings.LastIndexByte(strings.TrimRight(line, "\r"), '\r'); i >= 0 {
+				line = line[i+1:]
+			}
+			line = strings.TrimRight(line, "\r")
 			buf.WriteString(line)
 			buf.WriteByte('\n')
 			c.Log("%s", line)
