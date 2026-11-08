@@ -15,7 +15,10 @@ import (
 	"coremon/internal/proto"
 )
 
-const minPasswordLen = 5
+const (
+	minPasswordLen = 5
+	maxTokenHours  = 3 // validity of an install command
+)
 
 // ---- views ----
 
@@ -142,10 +145,16 @@ func (s *Server) agentOr404(w http.ResponseWriter, r *http.Request) *Agent {
 }
 
 func (s *Server) jobsFor(agentID string, limit int, activeOnly bool) []*Job {
+	return s.jobsFiltered(agentID, "", limit, activeOnly)
+}
+
+// jobsFiltered returns the newest matching jobs; filters are applied before
+// the limit. actor is a user name or "scheduler".
+func (s *Server) jobsFiltered(agentID, actor string, limit int, activeOnly bool) []*Job {
 	out := []*Job{}
 	for i := len(s.st.st.Jobs) - 1; i >= 0 && len(out) < limit; i-- {
 		j := s.st.st.Jobs[i]
-		if (agentID == "" || j.AgentID == agentID) && (!activeOnly || !j.done()) {
+		if (agentID == "" || j.AgentID == agentID) && (actor == "" || strings.EqualFold(j.Actor, actor)) && (!activeOnly || !j.done()) {
 			out = append(out, j)
 		}
 	}
@@ -397,16 +406,20 @@ func (s *Server) handleJobs(w http.ResponseWriter, r *http.Request) {
 	if limit <= 0 || limit > 500 {
 		limit = 100
 	}
+	q := r.URL.Query()
 	s.st.mu.Lock()
 	defer s.st.mu.Unlock()
-	jobs := s.jobsFor(r.URL.Query().Get("agent"), limit, r.URL.Query().Get("active") == "1")
+	jobs := s.jobsFiltered(q.Get("agent"), q.Get("user"), limit, q.Get("active") == "1")
 	names := map[string]string{}
-	for _, j := range jobs {
-		if a := s.st.st.Agents[j.AgentID]; a != nil {
-			names[j.AgentID] = a.Name
-		}
+	for _, a := range s.st.st.Agents {
+		names[a.ID] = a.Name
 	}
-	writeJSON(w, map[string]any{"jobs": jobs, "names": names})
+	users := []string{}
+	for _, u := range s.st.st.Users {
+		users = append(users, u.Name)
+	}
+	sort.Strings(users)
+	writeJSON(w, map[string]any{"jobs": jobs, "names": names, "users": users})
 }
 
 func (s *Server) handleJob(w http.ResponseWriter, r *http.Request) {
@@ -458,8 +471,13 @@ func (s *Server) handleTokenCreate(w http.ResponseWriter, r *http.Request) {
 	if !readJSON(w, r, &req, 4096) {
 		return
 	}
-	if req.TTLHours <= 0 || req.TTLHours > 24*30 {
-		req.TTLHours = 24
+	// Install commands are short-lived: 1 hour by default, at most 3.
+	if req.TTLHours <= 0 {
+		req.TTLHours = 1
+	}
+	if req.TTLHours > maxTokenHours {
+		http.Error(w, fmt.Sprintf("an install command is valid for at most %d hours", maxTokenHours), http.StatusBadRequest)
+		return
 	}
 	if s.baseURL(r) == "" {
 		http.Error(w, badHostMsg, http.StatusBadRequest)

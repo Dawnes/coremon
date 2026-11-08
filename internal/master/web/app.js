@@ -699,7 +699,7 @@ function Dashboard() {
     interval: 5000,
     mount(el) {
       el.innerHTML = r(html`
-        <div class="page-head"><div><h1>Dashboard</h1><div class="sub">Update status across your fleet${canChange() ? ' · drag systems and groups to arrange them' : ''}</div></div><span class="spacer"></span>
+        <div class="page-head"><div><h1>Dashboard</h1><div class="sub">Update status across your fleet</div></div><span class="spacer"></span>
           ${ifChange(html`<button class="btn" data-act="check-all">${icon('refresh')} Check all</button>`)}</div>
         <div id="d-notice"></div>
         <div class="stats" id="d-stats"></div>
@@ -968,7 +968,7 @@ function Systems() {
             <div class="muted small">Generates a single-use install command. Run it as <b>root</b> on the system (VM, container, bare metal — including this master container). The agent connects out to the master; no SSH or open ports needed.</div>
             <form class="row" style="margin-top:14px" data-submit="gen">
               <input type="text" name="note" placeholder="Note (optional), e.g. web-01" maxlength="64" style="width:240px">
-              <select name="ttl"><option value="1">valid 1 hour</option><option value="24" selected>valid 24 hours</option><option value="168">valid 7 days</option></select>
+              <select name="ttl"><option value="1" selected>valid 1 hour</option><option value="3">valid 3 hours</option></select>
               <button class="btn primary">${icon('plus')} Generate install command</button>
             </form>
             <div id="s-cmd"></div>
@@ -1077,21 +1077,33 @@ function Systems() {
 
 // ---------- Jobs ----------
 function Jobs() {
-  const st = { active: false, data: null };
+  const st = { active: false, agent: '', user: '', data: null };
   return {
     interval: 3000,
     mount(el) {
       el.innerHTML = r(html`${subTabs('history', 'jobs')}<div class="page-head"><div><h1>Jobs</h1><div class="sub">Everything sent to agents</div></div><span class="spacer"></span>
-        <div class="chips"><button class="chip on" data-act="f" data-v="0">All</button><button class="chip" data-act="f" data-v="1">Active</button></div></div><div id="j-list"></div>`);
+        <div class="chips"><button class="chip on" data-act="f" data-v="0">All</button><button class="chip" data-act="f" data-v="1">Active</button></div>
+        <label class="row small muted">User <select id="j-user"><option value="">All users</option></select></label>
+        <label class="row small muted">System <select id="j-sys"><option value="">All systems</option></select></label></div><div id="j-list"></div>`);
+      $('#j-user').addEventListener('change', (e) => { st.user = e.target.value; view.refresh(); });
+      $('#j-sys').addEventListener('change', (e) => { st.agent = e.target.value; view.refresh(); });
     },
     async refresh() {
-      st.data = await GET('jobs?limit=200' + (st.active ? '&active=1' : ''));
+      const q = new URLSearchParams({ limit: '200' });
+      if (st.active) q.set('active', '1');
+      if (st.user) q.set('user', st.user);
+      if (st.agent) q.set('agent', st.agent);
+      st.data = await GET('jobs?' + q);
       const { jobs, names } = st.data;
+      const actors = [...(st.data.users || []), 'scheduler'];
+      setHTML($('#j-user'), html`<option value="">All users</option>${actors.map((n) => html`<option value="${n}" ${st.user === n ? 'selected' : ''}>${n === 'scheduler' ? 'scheduler (automatic)' : n}</option>`)}`);
+      const sysOpts = Object.entries(names).sort((a, b) => a[1].localeCompare(b[1]));
+      setHTML($('#j-sys'), html`<option value="">All systems</option>${sysOpts.map(([id, n]) => html`<option value="${id}" ${st.agent === id ? 'selected' : ''}>${n}</option>`)}`);
       setHTML($('#j-list'), jobs.length ? html`<div class="panel"><table class="tbl"><thead><tr><th>Job</th><th>System</th><th>Status</th><th>By</th><th>Created</th><th>Duration</th></tr></thead>
         <tbody>${jobs.map((j) => html`<tr class="click" data-act="open-job" data-id="${j.id}"><td><b>${jobTitle(j)}</b><div class="dim small">${jobParams(j)}${j.error ? html` <span style="color:var(--red)">${j.error}</span>` : ''}</div></td>
           <td>${names[j.agent_id] ? html`<a href="#/agent/${j.agent_id}">${names[j.agent_id]}</a>` : html`<span class="dim">${j.agent_id}</span>`}</td>
           <td>${statusBadge(j.status)}</td><td class="muted">${j.actor}</td><td class="muted">${when(j.created)}</td>
-          <td class="muted">${j.finished ? dur(j.finished - (j.started || j.created)) : '—'}</td></tr>`)}</tbody></table></div>` : html`<div class="panel empty">No jobs.</div>`);
+          <td class="muted">${j.finished ? dur(j.finished - (j.started || j.created)) : '—'}</td></tr>`)}</tbody></table></div>` : html`<div class="panel empty">${st.agent || st.user || st.active ? 'No jobs for this filter.' : 'No jobs.'}</div>`);
     },
     acts: {
       f: (t) => { st.active = t.dataset.v === '1'; document.querySelectorAll('.chips .chip').forEach((c) => c.classList.toggle('on', c === t)); view.refresh(); },
