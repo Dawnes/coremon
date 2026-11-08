@@ -66,13 +66,21 @@ type Group struct {
 	Name string `json:"name"`
 }
 
+// Agent statuses.
+const (
+	StatusPending    = "pending"
+	StatusActive     = "active"
+	StatusReportOnly = "report_only" // pure reporting: no checks, installs or reboots
+)
+
 // Agent is a registered system.
 type Agent struct {
 	ID          string                     `json:"id"`
 	Name        string                     `json:"name"`
-	GroupID     string                     `json:"group_id"` // "" = ungrouped
-	Order       int                        `json:"order"`    // position within its group
-	Status      string                     `json:"status"`   // pending | active | paused
+	GroupID     string                     `json:"group_id"`          // "" = ungrouped
+	Order       int                        `json:"order"`             // position within its group
+	Status      string                     `json:"status"`            // pending | active | report_only
+	ReportOnly  bool                       `json:"agent_report_only"` // mode the agent itself confirmed (protocol 3+)
 	SecretHash  string                     `json:"secret_hash"`
 	EnrolledAt  int64                      `json:"enrolled_at"`
 	LastSeen    int64                      `json:"last_seen"`
@@ -238,6 +246,9 @@ func openStore(dir string) (*store, error) {
 		}
 		if a.GroupID != "" && s.group(a.GroupID) == nil {
 			a.GroupID = ""
+		}
+		if a.Status == "paused" { // before 0.2.8 "pause"; now "report only"
+			a.Status = StatusReportOnly
 		}
 	}
 	// Jobs in flight when the master stopped will never get a result.

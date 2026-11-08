@@ -7,9 +7,10 @@ package proto
 
 import "encoding/json"
 
-// ProtocolVersion is bumped on incompatible changes.
+// ProtocolVersion is bumped when the protocol changes.
 // 2: built-in features instead of modules; heartbeat in poll responses.
-const ProtocolVersion = 2
+// 3: report-only mode (agent.mode command, report_only in polls).
+const ProtocolVersion = 3
 
 // Facts describe the system an agent runs on. Sent on every poll; the
 // master keeps only the latest value.
@@ -76,7 +77,8 @@ type PollRequest struct {
 	CoreVersion string        `json:"core_version"`
 	Facts       Facts         `json:"facts"`
 	Features    []FeatureInfo `json:"features"`
-	Running     []string      `json:"running"` // command IDs still executing
+	Running     []string      `json:"running"`     // command IDs still executing
+	ReportOnly  bool          `json:"report_only"` // the agent's own, stored mode (protocol 3)
 }
 
 // PollResponse carries zero or more commands. Heartbeat is the longest the
@@ -92,7 +94,15 @@ const (
 	CmdAction     = "action"      // run Feature/Action with Params
 	CmdCoreUpdate = "core.update" // replace the agent with Artifact (up- or downgrade)
 	CmdUninstall  = "agent.uninstall"
+	// CmdSetMode switches report-only mode on or off; Params: ModeParams.
+	// In report-only mode the agent refuses every "action" command.
+	CmdSetMode = "agent.mode"
 )
+
+// ModeParams are the parameters of CmdSetMode.
+type ModeParams struct {
+	ReportOnly bool `json:"report_only"`
+}
 
 // Command is an instruction from master to agent.
 type Command struct {

@@ -131,8 +131,11 @@ The master needs outbound HTTPS to `github.com` and
 * **History** — *Jobs* (everything sent to agents, with output) and *Audit
   log* (who did what; filter by user and system; *Show output* opens the job
   an action started).
-* **Pause** a system to send it nothing: no checks, jobs or version changes
-  until you resume. Pausing cancels jobs that were queued but not started.
+* **Report only** (per system): pure reporting — no update checks, installs
+  or reboots until you *Allow changes* again. Enforced twice: the master
+  refuses those jobs, and the agent (0.2.3 and later) stores the mode on the
+  system and refuses them itself. Agent version changes and uninstall stay
+  possible. Switching to report only cancels queued jobs.
 * **Settings** — *General* (timers, retention, website port, install URL,
   GitHub repository), *Systems* (enrollment, approvals, rename, group and
   remove systems; create, rename, delete and reorder groups), *Users*

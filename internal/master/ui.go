@@ -39,8 +39,10 @@ type agentView struct {
 	CoreLatest   string                     `json:"core_latest"`
 	CoreIsLatest bool                       `json:"core_is_latest"`
 	DesiredCore  string                     `json:"desired_core"`
-	Legacy       bool                       `json:"legacy"`    // agent before 0.2: no built-in features
-	IsMaster     bool                       `json:"is_master"` // the system the master itself runs on
+	Legacy       bool                       `json:"legacy"`            // agent before 0.2: no built-in features
+	IsMaster     bool                       `json:"is_master"`         // the system the master itself runs on
+	ModeSupport  bool                       `json:"mode_support"`      // agent enforces report-only itself (protocol 3+)
+	AgentReport  bool                       `json:"agent_report_only"` // mode the agent itself confirmed
 	Facts        proto.Facts                `json:"facts"`
 	Features     []string                   `json:"features"`
 	Updates      *updatesSummary            `json:"updates,omitempty"`
@@ -61,6 +63,7 @@ func (s *Server) view(a *Agent, full bool) agentView {
 	v.CoreLatest = s.repo.coreLatest()
 	v.CoreIsLatest = v.CoreLatest != "" && a.CoreVersion == v.CoreLatest
 	v.Legacy = a.CoreVersion != "" && versionLess(a.CoreVersion, minAgentVersion)
+	v.ModeSupport, v.AgentReport = a.Protocol >= 3, a.ReportOnly
 	for _, f := range a.Features {
 		v.Features = append(v.Features, f.Name)
 	}
@@ -182,9 +185,10 @@ func (s *Server) setGroup(a *Agent, groupID string) error {
 
 func (s *Server) handleAgentUpdate(w http.ResponseWriter, r *http.Request) {
 	var req struct {
-		Name    *string `json:"name"`
-		GroupID *string `json:"group_id"`
-		Paused  *bool   `json:"paused"`
+		Name       *string `json:"name"`
+		GroupID    *string `json:"group_id"`
+		ReportOnly *bool   `json:"report_only"`
+		Paused     *bool   `json:"paused"` // before 0.2.8
 	}
 	if !readJSON(w, r, &req, 16<<10) {
 		return
@@ -206,22 +210,24 @@ func (s *Server) handleAgentUpdate(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	if req.Paused != nil && a.Status != "pending" {
-		detail := ""
-		if *req.Paused && a.Status != "paused" {
-			a.Status = "paused"
-			// Start clean on resume: nothing queued earlier runs later.
-			n := s.cancelQueued(a, "system paused")
-			if a.DesiredCore != "" {
-				detail = "requested agent " + a.DesiredCore + " cancelled; "
-				a.DesiredCore = ""
-			}
-			detail += fmt.Sprintf("%d queued job(s) cancelled", n)
-		} else if !*req.Paused {
-			a.Status = "active"
-			s.wake(a.ID)
+	if req.ReportOnly == nil {
+		req.ReportOnly = req.Paused
+	}
+	if req.ReportOnly != nil && a.Status != StatusPending {
+		var j *Job
+		switch {
+		case *req.ReportOnly && a.Status != StatusReportOnly:
+			a.Status = StatusReportOnly
+			// Nothing queued earlier runs later; agent version changes stay.
+			n := s.cancelQueued(a, "system set to report only")
+			j = s.syncMode(a)
+			s.audit.writeJob(actor(r), clientIP(r), "agent.report_only", a, fmt.Sprintf("%d queued job(s) cancelled", n), j)
+		case !*req.ReportOnly && a.Status != StatusActive:
+			a.Status = StatusActive
+			j = s.syncMode(a)
+			s.audit.writeJob(actor(r), clientIP(r), "agent.allow_changes", a, "", j)
 		}
-		s.audit.writeAgent(actor(r), clientIP(r), "agent."+a.Status, a, detail)
+		s.wake(a.ID)
 	}
 	s.st.markDirty()
 	writeJSON(w, s.view(a, false))
@@ -252,7 +258,7 @@ func (s *Server) handleApprove(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	a.Status = "active"
+	a.Status = StatusActive
 	s.st.markDirty()
 	s.wake(a.ID)
 	s.audit.writeAgent(actor(r), clientIP(r), "agent.approved", a, "")
@@ -359,7 +365,11 @@ func (s *Server) handleActions(w http.ResponseWriter, r *http.Request) {
 			errs = append(errs, id+": not found")
 			continue
 		}
-		if a.Status != "active" {
+		if a.Status == StatusReportOnly {
+			errs = append(errs, a.Name+": report only — allow changes first")
+			continue
+		}
+		if a.Status != StatusActive {
 			errs = append(errs, a.Name+": agent is "+a.Status)
 			continue
 		}

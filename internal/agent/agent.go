@@ -45,6 +45,42 @@ type Agent struct {
 	running   map[string]bool
 	heartbeat int // seconds, as told by the master
 	exitReq   chan int
+	mode      Mode // stored on disk; guarded by mu
+}
+
+// Mode is the agent's own record of report-only mode. It survives restarts
+// and is only changed by an explicit agent.mode command from the master.
+type Mode struct {
+	ReportOnly bool  `json:"report_only"`
+	Since      int64 `json:"since"`
+}
+
+func (a *Agent) modePath() string { return filepath.Join(a.opt.StateDir, "mode.json") }
+
+func (a *Agent) reportOnly() bool {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.mode.ReportOnly
+}
+
+// setMode changes and stores the mode.
+func (a *Agent) setMode(reportOnly bool) error {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.mode.ReportOnly == reportOnly {
+		return nil
+	}
+	m := Mode{ReportOnly: reportOnly, Since: time.Now().Unix()}
+	if err := saveJSON(a.modePath(), m, 0o600); err != nil {
+		return err
+	}
+	a.mode = m
+	if reportOnly {
+		log.Printf("report-only mode ON: no checks, installs or reboots until the master allows changes")
+	} else {
+		log.Printf("report-only mode OFF: changes allowed")
+	}
+	return nil
 }
 
 // Run starts the agent and blocks until ctx is cancelled or the agent must
@@ -70,6 +106,14 @@ func Run(ctx context.Context, opt Options) (int, error) {
 	// Agents before 0.2 installed separate modules here; everything is
 	// built in now.
 	os.RemoveAll(filepath.Join(opt.StateDir, "modules"))
+	if err := loadJSON(a.modePath(), &a.mode); err != nil && !os.IsNotExist(err) {
+		// An unreadable mode file must not silently allow changes.
+		log.Printf("mode file unreadable (%v): staying in report-only mode until the master decides", err)
+		a.mode = Mode{ReportOnly: true}
+	}
+	if a.mode.ReportOnly {
+		log.Printf("starting in report-only mode")
+	}
 	a.cl = newClient(a.cfg.MasterURL, a.cfg.MasterPin)
 
 	if err := a.ensureEnrolled(ctx); err != nil {
@@ -154,6 +198,7 @@ func (a *Agent) pollLoop(ctx context.Context) {
 			Facts:       collectFacts(),
 			Features:    a.infos,
 			Running:     a.runningIDs(),
+			ReportOnly:  a.reportOnly(),
 		}, &resp, timeout)
 		if err != nil {
 			if ctx.Err() != nil {
@@ -181,19 +226,35 @@ func (a *Agent) pollLoop(ctx context.Context) {
 		if resp.Heartbeat >= 5 && resp.Heartbeat <= 600 {
 			a.heartbeat = resp.Heartbeat
 		}
+		// Mode changes are applied first and in order, so an action sent
+		// right after "allow changes" is not refused (and one sent after
+		// "report only" is).
 		for _, c := range resp.Commands {
-			a.mu.Lock()
-			dup := a.running[c.ID]
-			if !dup {
-				a.running[c.ID] = true
+			if c.Type == proto.CmdSetMode && a.claim(c.ID) {
+				a.execute(ctx, c)
 			}
-			a.mu.Unlock()
-			if !dup {
+		}
+		for _, c := range resp.Commands {
+			if c.Type != proto.CmdSetMode && a.claim(c.ID) {
 				go a.execute(ctx, c)
 			}
 		}
 	}
 }
+
+// claim marks a command as running; false if it already is.
+func (a *Agent) claim(id string) bool {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.running[id] {
+		return false
+	}
+	a.running[id] = true
+	return true
+}
+
+// errReportOnly is returned for every action while in report-only mode.
+var errReportOnly = errors.New("this system is in report-only mode: it refuses checks, installs and reboots until the master allows changes")
 
 // callFeature runs one action of a built-in feature.
 func (a *Agent) callFeature(ctx context.Context, c proto.Command, timeout time.Duration) (data json.RawMessage, err error) {
@@ -234,7 +295,24 @@ func (a *Agent) execute(ctx context.Context, c proto.Command) {
 
 	switch c.Type {
 	case proto.CmdAction:
+		if a.reportOnly() {
+			err = errReportOnly
+			break
+		}
 		data, err = a.callFeature(ctx, c, timeout)
+	case proto.CmdSetMode:
+		var p proto.ModeParams
+		if err = json.Unmarshal(c.Params, &p); err == nil {
+			err = a.setMode(p.ReportOnly)
+		}
+		if err == nil {
+			data, _ = json.Marshal(p)
+			if p.ReportOnly {
+				logf("report-only mode on")
+			} else {
+				logf("changes allowed")
+			}
+		}
 	case proto.CmdCoreUpdate:
 		err = selfUpdate(ctx, a.cl, a.id.SigningKey, c.Artifact, logf)
 		if err == nil {

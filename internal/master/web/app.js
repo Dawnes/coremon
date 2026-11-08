@@ -159,6 +159,7 @@ function jobTitle(j) {
     case 'action': return `${j.feature} · ${j.action}`;
     case 'core.update': return `agent → ${j.artifact ? j.artifact.version : '?'}`;
     case 'agent.uninstall': return 'uninstall agent';
+    case 'agent.mode': return /"report_only":true/.test(JSON.stringify(j.params)) ? 'report only' : 'allow changes';
     default: return j.type + (j.action ? ' · ' + j.action : '');
   }
 }
@@ -284,6 +285,9 @@ function showLogin() {
         f.password.classList.remove('bad');
         try {
           await POST('login', { username: f.username.value, password: f.password.value });
+          // After signing in always start at the dashboard, whatever
+          // address was opened. (Reloading a page while signed in keeps it.)
+          if (location.hash && location.hash !== '#/') history.replaceState(null, '', location.pathname + location.search + '#/');
           await boot();
         } catch (e) {
           const m = e.message || '';
@@ -379,7 +383,7 @@ async function boot() {
 // ---------- shared bits ----------
 function agentDot(a) {
   if (a.status === 'pending') return html`<span class="dot pend" title="pending approval"></span>`;
-  if (a.status === 'paused') return html`<span class="dot pause" title="paused"></span>`;
+  if (a.status === 'report_only') return html`<span class="dot pause" title="report only${a.online ? '' : ' · offline'}"></span>`;
   return html`<span class="dot ${a.online ? 'on' : 'off'}" title="${a.online ? 'online' : 'offline since ' + fmtDate(a.last_seen)}"></span>`;
 }
 function osLabel(f) { return f.os_name || [f.os_id, f.os_version].filter(Boolean).join(' ') || 'unknown OS'; }
@@ -405,6 +409,7 @@ function verPill(a) {
 function updBadges(a) {
   const u = a.updates;
   const out = [];
+  if (a.status === 'report_only') out.push(html`<span class="badge info" title="Only reports: no checks, installs or reboots">${icon('pause')} report only</span>`);
   if (u?.security) out.push(html`<span class="badge sec">${u.security} security</span>`);
   if (u?.reboot_required) out.push(html`<span class="badge reboot">reboot</span>`);
   return out;
@@ -507,7 +512,7 @@ function Dashboard() {
       mid = html`<div class="mid"><div class="big dim">—</div><div class="biglbl">${a.legacy ? html`agent too old for<br>built-in updates` : 'no update function'}</div>
         <div class="badges">${a.legacy ? html`<a class="small" href="#/releases">update the agent in Releases</a>` : ''}</div></div>`;
     } else if (!u) {
-      mid = html`<div class="mid"><div class="big dim">—</div><div class="biglbl">waiting for<br>first check</div><div class="badges">${updBadges(a)}</div></div>`;
+      mid = html`<div class="mid"><div class="big dim">—</div><div class="biglbl">${a.status === 'report_only' ? html`no checks<br>(report only)` : html`waiting for<br>first check`}</div><div class="badges">${updBadges(a)}</div></div>`;
     } else {
       const cls = u.security ? 'sec' : u.total ? 'some' : 'zero';
       mid = html`<div class="mid"><div class="big ${cls}">${u.total}</div><div class="biglbl">${u.total === 1 ? 'update' : 'updates'}<br>available</div><div class="badges">${updBadges(a)}</div></div>`;
@@ -563,10 +568,10 @@ function Dashboard() {
     const totSec = active.reduce((s, a) => s + (a.updates?.security || 0), 0);
     const reboot = active.filter((a) => a.updates?.reboot_required).length;
     const pending = A.filter((a) => a.status === 'pending').length;
-    const paused = A.filter((a) => a.status === 'paused').length;
+    const reportOnly = A.filter((a) => a.status === 'report_only').length;
     setPending(pending);
     // Oldest information: per system the age of what the dashboard shows -
-    // last contact when offline, last update check when online. Paused and
+    // last contact when offline, last update check when online. Report-only and
     // pending systems are left out.
     let oldest = null;
     for (const a of A) {
@@ -580,7 +585,7 @@ function Dashboard() {
     const oc = !oldest ? 'c-green' : age <= interval + 900 ? 'c-green' : age <= Math.max(86400, interval * 2) ? 'c-amber' : 'c-red';
     setHTML($('#d-stats'), html`
       <div class="panel stat c-green"><div class="label">Systems online</div><div class="value">${online}<small> / ${active.length}</small></div>
-        ${paused ? html`<div class="statnote" title="Paused systems receive no jobs and are not checked">${icon('pause')} ${paused} paused</div>` : ''}</div>
+        ${reportOnly ? html`<div class="statnote" title="Report-only systems only report; no checks, installs or reboots">${icon('pause')} ${reportOnly} report only</div>` : ''}</div>
       <div class="panel stat ${oc} ${oldest ? 'click' : ''}" ${oldest ? raw(`data-act="open-agent" data-id="${esc(oldest.a.id)}"`) : ''} title="${oldest ? 'Oldest information shown on this dashboard: ' + fmtDate(oldest.ts, true) : ''}">
         <div class="label">Oldest information</div>
         ${oldest ? html`<div class="value datev">${fmtDate(oldest.ts)}</div><div class="statnote">${ago(oldest.ts)} · ${oldest.a.name} (${oldest.a.online ? 'last update check' : 'offline'})</div>`
@@ -750,17 +755,21 @@ function AgentPage([id]) {
     return html`
       <div class="page-head">
         <div><div class="row"><a href="#/" class="btn ghost sm iconbtn" title="Back">${icon('back')}</a>${agentDot(a)}<h1>${a.name}</h1>
-          ${a.status === 'paused' ? html`<span class="badge info">paused</span>` : ''}${a.status === 'pending' ? html`<span class="badge upd">pending approval</span>` : ''}
+          ${a.status === 'report_only' ? html`<span class="badge info">${icon('pause')} report only</span>` : ''}${a.status === 'pending' ? html`<span class="badge upd">pending approval</span>` : ''}
           <span class="tag">${icon('folder')} ${g ? g.name : 'Ungrouped'}</span>${verPill(a)}</div>
           <div class="sub">${osLabel(f)} · ${f.kernel || ''} · ${f.arch} · ${f.virt} · ${a.online ? 'online, up ' + dur(f.uptime_sec) : raw('offline, last seen ' + r(when(a.last_seen)))}</div></div>
         <span class="spacer"></span>
         ${a.busy ? html`<span class="row muted"><span class="spin"></span>${a.busy} job(s) active</span>` : ''}
-        ${a.status !== 'pending' && canChange() ? html`<button class="btn warn sm" data-act="reboot" ${a.status === 'active' && a.online && canReboot(a) ? '' : 'disabled'}
+        ${a.status === 'active' && canChange() ? html`<button class="btn warn sm" data-act="reboot" ${a.online && canReboot(a) ? '' : 'disabled'}
           title="${canReboot(a) ? (a.online ? 'Reboot this system' : 'The system is offline') : `Agent ${a.core_version} cannot reboot; update the agent first`}">${icon('refresh')} Reboot</button>` : ''}
-        ${a.status === 'active' && canChange() ? html`<button class="btn sm" data-act="pause">${icon('pause')} Pause</button>` : ''}
-        ${a.status === 'paused' && canChange() ? html`<button class="btn sm" data-act="resume">${icon('play')} Resume</button>` : ''}
+        ${a.status === 'active' && canChange() ? html`<button class="btn sm" data-act="report-only">${icon('pause')} Report only</button>` : ''}
+        ${a.status === 'report_only' && canChange() ? html`<button class="btn sm" data-act="allow-changes">${icon('play')} Allow changes</button>` : ''}
       </div>
-      ${a.status === 'paused' ? html`<div class="notice blue">This system is paused: it receives no jobs and is not checked.</div>` : ''}
+      ${a.status === 'report_only' ? html`<div class="notice blue"><b>Report only:</b> this system only reports. No update checks, installs or reboots until changes are allowed again.
+        <span class="small">${!a.mode_support ? html`Enforced by the master only — agent ${a.core_version} cannot enforce it itself; update the agent.`
+          : a.agent_report_only ? html`${icon('check')} Confirmed by the agent: it refuses these commands itself.`
+          : html`Waiting for the agent to confirm${a.online ? '…' : ' (the system is offline)'}.`}</span></div>` : ''}
+      ${a.status === 'active' && a.mode_support && a.agent_report_only ? html`<div class="notice blue small">Changes allowed — waiting for the agent to confirm${a.online ? '…' : ' (the system is offline)'}.</div>` : ''}
       ${a.status === 'pending' ? html`<div class="notice blue row">This system enrolled ${when(a.enrolled_at)} and is waiting for approval. Until approved it receives no commands.<span class="spacer"></span>${ifChange(html`<button class="btn primary sm" data-act="approve">${icon('check')} Approve</button>`)}</div>` : ''}
       ${a.removing ? html`<div class="notice red">Uninstall requested — the agent will remove itself.</div>` : ''}`;
   }
@@ -771,10 +780,12 @@ function AgentPage([id]) {
     }
     const s = upd();
     const canAct = a.status === 'active' && a.online;
-    const ed = canChange();
+    // No update buttons for read-only users or report-only systems.
+    const ed = canChange() && a.status === 'active';
     if (!s) {
-      return html`<div class="panel empty"><div class="spin" style="width:26px;height:26px"></div><div style="margin-top:12px">Waiting for the first check…</div>
-        ${ifChange(html`<div style="margin-top:14px"><button class="btn" data-act="check" ${canAct ? '' : 'disabled'}>${icon('refresh')} Check now</button></div>`)}</div>`;
+      return html`<div class="panel empty">${a.status === 'report_only' ? html`<div class="big">⏸</div><div>Report only: no update checks are run on this system.</div>`
+        : html`<div class="spin" style="width:26px;height:26px"></div><div style="margin-top:12px">Waiting for the first check…</div>
+        ${ed ? html`<div style="margin-top:14px"><button class="btn" data-act="check" ${canAct ? '' : 'disabled'}>${icon('refresh')} Check now</button></div>` : ''}`}</div>`;
     }
     const pk = s.packages || [];
     const selectable = pk.filter((p) => !p.new);
@@ -795,14 +806,15 @@ function AgentPage([id]) {
         </div>
       </div>
       ${s.removals?.length ? html`<div class="notice red">“Upgrade all” would remove: <b>${s.removals.join(', ')}</b></div>` : ''}
+      ${a.status === 'report_only' ? html`<div class="notice blue">Report only: this list is from the last check before the system was set to report only, ${when(s.checked_at)}.</div>` : ''}
       ${pk.length ? html`
       <div class="panel">
-        ${ifChange(html`<div class="row panel-pad" style="padding-bottom:10px">
+        ${ed ? html`<div class="row panel-pad" style="padding-bottom:10px">
           <span class="muted small">Quick select:</span>
           <button class="btn ghost sm" data-act="sel-sec">Security only</button>
           <button class="btn ghost sm" data-act="sel-all">All</button>
           <button class="btn ghost sm" data-act="sel-none">None</button>
-        </div>`)}
+        </div>` : ''}
         <div class="tbl-wrap" data-keep-scroll="pk"><table class="tbl">
           <thead><tr>${ed ? html`<th class="w1"><input type="checkbox" data-act="sel-toggle-all" ${allOn ? 'checked' : ''}></th>` : ''}<th>Package</th><th>Version</th><th>Origin</th><th class="w1"></th></tr></thead>
           <tbody>${pk.map((p) => html`
@@ -885,8 +897,14 @@ function AgentPage([id]) {
       'sel-sec': () => { st.sel = new Set((upd()?.packages || []).filter((p) => !p.new && p.security).map((p) => p.name)); render(); },
       'sel-none': () => { st.sel.clear(); render(); },
       approve: () => approveModal(a(), st.data.groups),
-      pause: async () => { await POST('agents/' + id, { paused: true }); toast('Paused — no jobs will be sent', 'ok'); refresh(); },
-      resume: async () => { await POST('agents/' + id, { paused: false }); toast('Resumed', 'ok'); refresh(); },
+      'report-only': async () => {
+        if (!(await confirmBox(`Set ${a().name} to report only?`, 'The system keeps reporting, but gets no update checks, installs or reboots until you allow changes again. Queued jobs are cancelled; agent version changes stay possible.', { okText: 'Report only' }))) return;
+        await POST('agents/' + id, { report_only: true }); toast('Report only', 'ok'); refresh();
+      },
+      'allow-changes': async () => {
+        if (!(await confirmBox(`Allow changes on ${a().name}?`, 'Update checks, installs and reboots become possible again, and the automatic update check resumes.', { okText: 'Allow changes' }))) return;
+        await POST('agents/' + id, { report_only: false }); toast('Changes allowed', 'ok'); refresh();
+      },
       reboot: async () => {
         const ag = a();
         const body = html`The system restarts within a few seconds and shows offline until it is back.
@@ -930,7 +948,7 @@ function Systems() {
         : html`<div class="muted small" style="margin-top:10px">No groups yet. All systems are shown together.</div>`}`);
     const act = d.agents.filter((a) => a.status !== 'pending').sort(byName);
     setHTML($('#s-all'), act.length ? html`<div class="panel"><table class="tbl"><thead><tr><th>System</th><th>IP address</th><th>Group</th><th>OS</th><th>Agent</th><th>Last seen</th><th class="w1"></th></tr></thead>
-      <tbody>${act.map((a) => html`<tr><td>${agentDot(a)} <a href="#/agent/${a.id}"><b>${a.name}</b></a> ${a.status === 'paused' ? html`<span class="badge info">paused</span>` : ''}</td>
+      <tbody>${act.map((a) => html`<tr><td>${agentDot(a)} <a href="#/agent/${a.id}"><b>${a.name}</b></a> ${a.status === 'report_only' ? html`<span class="badge info">report only</span>` : ''}</td>
         <td class="mono small">${ipLabel(a.facts)}</td>
         <td>${canChange() ? html`<select class="sm" data-change="set-group" data-id="${a.id}" title="Group">${groupOptions(d.groups, a.group_id)}</select>` : html`<span class="muted">${d.groups.find((g) => g.id === a.group_id)?.name || 'Ungrouped'}</span>`}</td>
         <td class="muted">${osLabel(a.facts)}</td><td>${verPill(a)}</td>

@@ -88,13 +88,44 @@ func (s *Server) enqueue(a *Agent, j *Job) *Job {
 	return j
 }
 
-// cancelQueued cancels an agent's jobs that have not started yet; running
-// jobs finish normally. Caller holds s.st.mu.
+// jobAllowed: which jobs a system may receive in its status.
+//   - pending: only an uninstall
+//   - report only: no actions (checks, installs, reboots); agent version
+//     changes, mode changes and uninstall are fine
+//   - active: everything
+func jobAllowed(a *Agent, j *Job) bool {
+	switch a.Status {
+	case StatusActive:
+		return true
+	case StatusReportOnly:
+		return j.Type != proto.CmdAction
+	}
+	return j.Type == proto.CmdUninstall
+}
+
+// syncMode sends the master's decision (active or report only) to an agent
+// that supports report-only mode and has not confirmed it yet. Caller holds
+// s.st.mu.
+func (s *Server) syncMode(a *Agent) *Job {
+	if a.Protocol < 3 || a.Status == StatusPending || a.Removing {
+		return nil
+	}
+	want := a.Status == StatusReportOnly
+	if a.ReportOnly == want || s.openJob(a.ID, proto.CmdSetMode, "") {
+		return nil
+	}
+	p, _ := json.Marshal(proto.ModeParams{ReportOnly: want})
+	return s.enqueue(a, &Job{Type: proto.CmdSetMode, Params: p, Actor: "scheduler", Timeout: 60})
+}
+
+// cancelQueued cancels an agent's queued actions (checks, installs,
+// reboots) that have not started yet; running jobs finish normally and
+// agent version changes stay. Caller holds s.st.mu.
 func (s *Server) cancelQueued(a *Agent, reason string) int {
 	n := 0
 	now := time.Now().Unix()
 	for _, j := range s.st.st.Jobs {
-		if j.AgentID == a.ID && j.Status == JobQueued {
+		if j.AgentID == a.ID && j.Status == JobQueued && j.Type == proto.CmdAction {
 			j.Status, j.Finished, j.Error = JobCancelled, now, "cancelled: "+reason
 			n++
 		}
@@ -200,6 +231,8 @@ func (s *Server) handlePoll(w http.ResponseWriter, r *http.Request) {
 	if a.DesiredCore != "" && a.DesiredCore == a.CoreVersion {
 		a.DesiredCore = ""
 	}
+	a.ReportOnly = req.ReportOnly
+	s.syncMode(a) // the master's decision wins; sent in this same reply
 	// Commands the agent no longer runs but never reported: lost (e.g. the
 	// agent restarted mid-command).
 	running := map[string]bool{}
@@ -261,8 +294,7 @@ func (s *Server) takeCommands(agentID string) []proto.Command {
 		if j.AgentID != agentID || j.Status != JobQueued {
 			continue
 		}
-		// Paused/pending agents only receive an uninstall.
-		if a.Status != "active" && j.Type != proto.CmdUninstall {
+		if !jobAllowed(a, j) {
 			continue
 		}
 		j.Status, j.Started = JobRunning, now
@@ -402,7 +434,8 @@ func (s *Server) handlePublicAgent(w http.ResponseWriter, r *http.Request) {
 // requestCore queues an agent up/downgrade to version if possible. Caller
 // holds s.st.mu.
 func (s *Server) requestCore(a *Agent, version, actor string) *Job {
-	if a.Status != "active" || a.Removing || !s.online(a, time.Now().Unix()) || s.openJob(a.ID, proto.CmdCoreUpdate, "") {
+	// Agent versions may change in report-only mode too.
+	if (a.Status != StatusActive && a.Status != StatusReportOnly) || a.Removing || !s.online(a, time.Now().Unix()) || s.openJob(a.ID, proto.CmdCoreUpdate, "") {
 		return nil
 	}
 	goos, arch := a.Facts.OS, a.Facts.Arch
@@ -473,13 +506,19 @@ func (s *Server) schedulerTick() {
 	interval := int64(s.st.st.Settings.CheckIntervalHours) * 3600
 
 	for _, a := range s.st.st.Agents {
-		if a.Status != "active" || a.Removing || !s.online(a, nowU) {
+		if a.Status == StatusPending || a.Removing || !s.online(a, nowU) {
 			continue
 		}
 		// Requested agent version (set while the agent was offline).
 		if a.DesiredCore != "" && a.CoreVersion != a.DesiredCore &&
 			!s.recentFailure(a.ID, proto.CmdCoreUpdate, "", 10*time.Minute) {
 			s.requestCore(a, a.DesiredCore, "scheduler")
+		}
+		if !s.recentFailure(a.ID, proto.CmdSetMode, "", 2*time.Minute) {
+			s.syncMode(a)
+		}
+		if a.Status != StatusActive {
+			continue // report only: no checks
 		}
 		// Periodic checks: any feature offering a "check" action.
 		for i := range a.Features {
