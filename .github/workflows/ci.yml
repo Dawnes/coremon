@@ -12,13 +12,14 @@ jobs:
   test:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           persist-credentials: false
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
           check-latest: true
+          cache: false # standard library only, no go.sum
       - run: go vet ./...
       - run: go vet -tags fake ./modules/...
       - run: go test ./...
