@@ -290,7 +290,7 @@ function renderShell() {
       <aside class="side">
         <div class="brand"><img src="favicon.svg" alt=""><span>Coremon</span></div>
         <nav class="nav">${NAV.map(([h, ic, lbl]) => html`<a href="#/${h}" class="${active === h ? 'active' : ''}">${icon(ic)}<span class="lbl">${lbl}</span>${h === 'systems' ? html`<span id="nav-pending"></span>` : ''}</a>`)}</nav>
-        <div class="foot"><span title="Master (website) version">master ${session.version}</span><button class="btn ghost sm iconbtn" data-act="logout" title="Sign out">${icon('logout')}</button></div>
+        <div class="foot"><span title="Website and master version">Coremon v${session.version}</span><button class="btn ghost sm iconbtn" data-act="logout" title="Sign out">${icon('logout')}</button></div>
       </aside>
       <main class="main" id="view"></main>
     </div>`);
@@ -1132,7 +1132,7 @@ function Settings() {
           <div class="panel panel-pad"><h2>Master identity</h2>
             <div class="muted small">Agents pin this public-key fingerprint. If the master certificate is ever regenerated, agents must be reinstalled.</div>
             <div class="cmdbox"><code>sha256//${d.pin}</code></div>
-            <div class="dim small" style="margin-top:10px">Master (website) version ${session.version}</div>
+            <div class="dim small" style="margin-top:10px">Coremon v${session.version}</div>
           </div>
         </div>`);
       const f = $('form[data-submit=save]', el);
