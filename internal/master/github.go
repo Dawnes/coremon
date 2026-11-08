@@ -181,7 +181,19 @@ func (s *Server) ghGet(ctx context.Context, url string) (*http.Response, error) 
 	if resp.StatusCode != http.StatusOK {
 		b, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
 		resp.Body.Close()
-		return nil, fmt.Errorf("GET %s: %s %s", url, resp.Status, strings.TrimSpace(string(b)))
+		// GitHub API errors are JSON {"message": ...}; outage pages are HTML
+		// and are not worth showing.
+		var e struct {
+			Message string `json:"message"`
+		}
+		detail := ""
+		if json.Unmarshal(b, &e) == nil && e.Message != "" {
+			detail = ": " + e.Message
+		}
+		if resp.StatusCode >= 500 {
+			detail += " (GitHub unavailable; retrying on the next check)"
+		}
+		return nil, fmt.Errorf("GET %s: %s%s", url, resp.Status, detail)
 	}
 	return resp, nil
 }
