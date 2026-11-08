@@ -50,7 +50,7 @@ func (s *Server) handleMasterUpdate(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	s.audit.write(actorAdmin, clientIP(r), "master.update", v, "from "+s.cfg.Version)
+	s.audit.write(actor(r), clientIP(r), "master.update", v, "from "+s.cfg.Version)
 	go func() {
 		// The root service restarts us; if it refused, say so.
 		time.Sleep(20 * time.Second)

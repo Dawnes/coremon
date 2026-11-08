@@ -15,106 +15,7 @@ import (
 	"coremon/internal/proto"
 )
 
-const (
-	actorAdmin     = "admin"
-	minPasswordLen = 5
-)
-
-// requireUI checks the session cookie and the anti-CSRF header.
-func (s *Server) requireUI(h http.HandlerFunc) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		if r.Header.Get("X-Coremon") != "1" {
-			http.Error(w, "missing X-Coremon header", http.StatusForbidden)
-			return
-		}
-		c, err := r.Cookie(cookieName)
-		if err != nil || !s.sess.valid(c.Value) {
-			http.Error(w, "not logged in", http.StatusUnauthorized)
-			return
-		}
-		h(w, r)
-	}
-}
-
-func (s *Server) handleSession(w http.ResponseWriter, r *http.Request) {
-	c, err := r.Cookie(cookieName)
-	authed := err == nil && s.sess.valid(c.Value)
-	_, statErr := os.Stat(s.initialPwPath())
-	writeJSON(w, map[string]any{"authenticated": authed, "version": s.cfg.Version, "build_date": s.cfg.BuildDate,
-		"initial_password": statErr == nil, "min_password": minPasswordLen})
-}
-
-func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
-	if r.Header.Get("X-Coremon") != "1" {
-		http.Error(w, "forbidden", http.StatusForbidden)
-		return
-	}
-	ip := clientIP(r)
-	if !s.sess.allowLogin(ip) {
-		http.Error(w, "too many failed attempts; try again later", http.StatusTooManyRequests)
-		return
-	}
-	var req struct {
-		Password string `json:"password"`
-	}
-	if !readJSON(w, r, &req, 4096) {
-		return
-	}
-	s.st.mu.Lock()
-	hash := s.st.st.PasswordHash
-	s.st.mu.Unlock()
-	if !checkPassword(hash, req.Password) {
-		s.sess.recordFail(ip)
-		s.audit.write("?", ip, "login.failed", "", "")
-		time.Sleep(400 * time.Millisecond)
-		http.Error(w, "wrong password", http.StatusUnauthorized)
-		return
-	}
-	tok := s.sess.create()
-	http.SetCookie(w, &http.Cookie{Name: cookieName, Value: tok, Path: "/", HttpOnly: true, Secure: true, SameSite: http.SameSiteStrictMode})
-	s.audit.write(actorAdmin, ip, "login", "", "")
-	writeJSON(w, map[string]bool{"ok": true})
-}
-
-func (s *Server) handleLogout(w http.ResponseWriter, r *http.Request) {
-	if c, err := r.Cookie(cookieName); err == nil {
-		s.sess.destroy(c.Value)
-	}
-	http.SetCookie(w, &http.Cookie{Name: cookieName, Value: "", Path: "/", MaxAge: -1, HttpOnly: true, Secure: true, SameSite: http.SameSiteStrictMode})
-	writeJSON(w, map[string]bool{"ok": true})
-}
-
-func (s *Server) handlePassword(w http.ResponseWriter, r *http.Request) {
-	var req struct {
-		Current string `json:"current"`
-		New     string `json:"new"`
-	}
-	if !readJSON(w, r, &req, 4096) {
-		return
-	}
-	if len(req.New) < minPasswordLen {
-		http.Error(w, fmt.Sprintf("new password must be at least %d characters", minPasswordLen), http.StatusBadRequest)
-		return
-	}
-	s.st.mu.Lock()
-	ok := checkPassword(s.st.st.PasswordHash, req.Current)
-	s.st.mu.Unlock()
-	if !ok {
-		http.Error(w, "current password is wrong", http.StatusForbidden)
-		return
-	}
-	h := hashPassword(req.New)
-	s.st.mu.Lock()
-	s.st.st.PasswordHash = h
-	s.st.markDirty()
-	s.st.mu.Unlock()
-	os.Remove(s.initialPwPath())
-	s.sess.destroyAll()
-	tok := s.sess.create()
-	http.SetCookie(w, &http.Cookie{Name: cookieName, Value: tok, Path: "/", HttpOnly: true, Secure: true, SameSite: http.SameSiteStrictMode})
-	s.audit.write(actorAdmin, clientIP(r), "password.changed", "", "")
-	writeJSON(w, map[string]bool{"ok": true})
-}
+const minPasswordLen = 5
 
 // ---- views ----
 
@@ -312,7 +213,7 @@ func (s *Server) handleAgentUpdate(w http.ResponseWriter, r *http.Request) {
 			a.Status = "active"
 			s.wake(a.ID)
 		}
-		s.audit.writeAgent(actorAdmin, clientIP(r), "agent."+a.Status, a, "")
+		s.audit.writeAgent(actor(r), clientIP(r), "agent."+a.Status, a, "")
 	}
 	s.st.markDirty()
 	writeJSON(w, s.view(a, false))
@@ -346,7 +247,7 @@ func (s *Server) handleApprove(w http.ResponseWriter, r *http.Request) {
 	a.Status = "active"
 	s.st.markDirty()
 	s.wake(a.ID)
-	s.audit.writeAgent(actorAdmin, clientIP(r), "agent.approved", a, "")
+	s.audit.writeAgent(actor(r), clientIP(r), "agent.approved", a, "")
 	go s.schedulerTick() // run the first check right away
 	writeJSON(w, s.view(a, false))
 }
@@ -366,15 +267,15 @@ func (s *Server) handleRemove(w http.ResponseWriter, r *http.Request) {
 	}
 	if req.Uninstall && s.online(a, time.Now().Unix()) {
 		a.Removing = true
-		j := s.enqueue(a, &Job{Type: proto.CmdUninstall, Actor: actorAdmin, Timeout: 120})
-		s.audit.writeAgent(actorAdmin, clientIP(r), "agent.uninstall", a, "")
+		j := s.enqueue(a, &Job{Type: proto.CmdUninstall, Actor: actor(r), Timeout: 120})
+		s.audit.writeAgent(actor(r), clientIP(r), "agent.uninstall", a, "")
 		writeJSON(w, map[string]any{"job": j.ID})
 		return
 	}
 	delete(s.st.st.Agents, a.ID)
 	delete(s.wakes, a.ID)
 	s.st.markDirty()
-	s.audit.writeAgent(actorAdmin, clientIP(r), "agent.removed", a, "")
+	s.audit.writeAgent(actor(r), clientIP(r), "agent.removed", a, "")
 	writeJSON(w, map[string]any{"removed": true})
 }
 
@@ -417,9 +318,9 @@ func (s *Server) handleCoreUpdate(w http.ResponseWriter, r *http.Request) {
 	if versionLess(req.Version, from) {
 		verb = "downgrade"
 	}
-	s.audit.writeAgent(actorAdmin, clientIP(r), "agent."+verb, a, from+" → "+req.Version)
+	s.audit.writeAgent(actor(r), clientIP(r), "agent."+verb, a, from+" → "+req.Version)
 	res := map[string]any{"agent": s.view(a, false)}
-	if j := s.requestCore(a, req.Version, actorAdmin); j != nil {
+	if j := s.requestCore(a, req.Version, actor(r)); j != nil {
 		res["job"] = j.ID
 	}
 	writeJSON(w, res)
@@ -463,10 +364,10 @@ func (s *Server) handleActions(w http.ResponseWriter, r *http.Request) {
 			errs = append(errs, a.Name+": unknown action "+req.Action)
 			continue
 		}
-		j := s.enqueue(a, &Job{Type: proto.CmdAction, Feature: req.Feature, Action: req.Action, Params: req.Params, Actor: actorAdmin, Timeout: spec.Timeout})
+		j := s.enqueue(a, &Job{Type: proto.CmdAction, Feature: req.Feature, Action: req.Action, Params: req.Params, Actor: actor(r), Timeout: spec.Timeout})
 		jobs = append(jobs, j.ID)
 		if spec.Mutating {
-			s.audit.writeAgent(actorAdmin, clientIP(r), req.Feature+"."+req.Action, a, string(req.Params))
+			s.audit.writeAgent(actor(r), clientIP(r), req.Feature+"."+req.Action, a, string(req.Params))
 		}
 	}
 	writeJSON(w, map[string]any{"jobs": jobs, "errors": errs})
@@ -548,7 +449,7 @@ func (s *Server) handleTokenCreate(w http.ResponseWriter, r *http.Request) {
 	s.st.st.Tokens[t.Hash] = t
 	s.st.markDirty()
 	s.st.mu.Unlock()
-	s.audit.write(actorAdmin, clientIP(r), "token.created", t.Prefix, t.Note)
+	s.audit.write(actor(r), clientIP(r), "token.created", t.Prefix, t.Note)
 	writeJSON(w, map[string]any{"token": tok, "command": s.installCommand(r, tok), "expires": t.Expires, "has_core": s.repo.coreLatest() != ""})
 }
 
@@ -558,7 +459,7 @@ func (s *Server) handleTokenDelete(w http.ResponseWriter, r *http.Request) {
 	if t := s.st.st.Tokens[r.PathValue("hash")]; t != nil {
 		delete(s.st.st.Tokens, t.Hash)
 		s.st.markDirty()
-		s.audit.write(actorAdmin, clientIP(r), "token.revoked", t.Prefix, t.Note)
+		s.audit.write(actor(r), clientIP(r), "token.revoked", t.Prefix, t.Note)
 	}
 	writeJSON(w, map[string]bool{"ok": true})
 }
@@ -629,7 +530,7 @@ func (s *Server) handleSettingsSave(w http.ResponseWriter, r *http.Request) {
 	s.st.st.Settings = req
 	s.st.markDirty()
 	s.st.mu.Unlock()
-	s.audit.write(actorAdmin, clientIP(r), "settings.saved", "", fmt.Sprintf("check=%dh heartbeat=%ds retention=%dd port=%d url=%q repo=%q",
+	s.audit.write(actor(r), clientIP(r), "settings.saved", "", fmt.Sprintf("check=%dh heartbeat=%ds retention=%dd port=%d url=%q repo=%q",
 		req.CheckIntervalHours, req.HeartbeatSec, req.RetentionDays, req.UIPort, req.MasterURL, req.GitHubRepo))
 	if old.GitHubRepo != req.GitHubRepo {
 		s.kickIndex()
@@ -644,15 +545,20 @@ func (s *Server) handleSettingsSave(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleAudit(w http.ResponseWriter, r *http.Request) {
-	agentID := r.URL.Query().Get("agent")
-	rows := s.audit.list(agentID, 1000)
+	q := r.URL.Query()
+	rows := s.audit.list(q.Get("agent"), q.Get("user"), 1000)
 	s.st.mu.Lock()
 	names := map[string]string{}
 	for _, a := range s.st.st.Agents {
 		names[a.ID] = a.Name
 	}
+	users := []string{}
+	for _, u := range s.st.st.Users {
+		users = append(users, u.Name)
+	}
 	s.st.mu.Unlock()
-	writeJSON(w, map[string]any{"entries": rows, "names": names})
+	sort.Strings(users)
+	writeJSON(w, map[string]any{"entries": rows, "names": names, "users": users})
 }
 
 // ---- groups and ordering ----
@@ -688,7 +594,7 @@ func (s *Server) handleGroupCreate(w http.ResponseWriter, r *http.Request) {
 	g := &Group{ID: "g_" + randHex(6), Name: name}
 	s.st.st.Groups = append(s.st.st.Groups, g)
 	s.st.markDirty()
-	s.audit.write(actorAdmin, clientIP(r), "group.created", name, "")
+	s.audit.write(actor(r), clientIP(r), "group.created", name, "")
 	writeJSON(w, g)
 }
 
@@ -714,7 +620,7 @@ func (s *Server) handleGroupUpdate(w http.ResponseWriter, r *http.Request) {
 	old := g.Name
 	g.Name = name
 	s.st.markDirty()
-	s.audit.write(actorAdmin, clientIP(r), "group.renamed", name, "was "+old)
+	s.audit.write(actor(r), clientIP(r), "group.renamed", name, "was "+old)
 	writeJSON(w, g)
 }
 
@@ -747,7 +653,7 @@ func (s *Server) handleGroupDelete(w http.ResponseWriter, r *http.Request) {
 	}
 	s.st.st.Groups = groups
 	s.st.markDirty()
-	s.audit.write(actorAdmin, clientIP(r), "group.deleted", g.Name, fmt.Sprintf("%d system(s) moved to Ungrouped", len(members)))
+	s.audit.write(actor(r), clientIP(r), "group.deleted", g.Name, fmt.Sprintf("%d system(s) moved to Ungrouped", len(members)))
 	writeJSON(w, map[string]bool{"ok": true})
 }
 

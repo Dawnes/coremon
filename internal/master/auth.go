@@ -64,10 +64,19 @@ func checkPassword(stored, pw string) bool {
 	return subtle.ConstantTimeCompare(got, want) == 1
 }
 
-// sessions are kept in memory; a master restart logs the user out.
+// dummyHash is checked for unknown user names so a login takes as long
+// whether or not the user exists.
+var dummyHash = hashPassword(randHex(8))
+
+type session struct {
+	user string // user ID
+	exp  int64
+}
+
+// sessions are kept in memory; a master restart logs everyone out.
 type sessions struct {
 	mu   sync.Mutex
-	m    map[string]int64 // token hash -> expiry
+	m    map[string]session // token hash -> session
 	fail map[string][]int64
 }
 
@@ -75,32 +84,34 @@ const sessionTTL = 12 * time.Hour
 const cookieName = "cm_session"
 
 func newSessions() *sessions {
-	return &sessions{m: map[string]int64{}, fail: map[string][]int64{}}
+	return &sessions{m: map[string]session{}, fail: map[string][]int64{}}
 }
 
-func (s *sessions) create() string {
+func (s *sessions) create(userID string) string {
 	tok := randHex(32)
 	s.mu.Lock()
-	s.m[sha256hex(tok)] = time.Now().Add(sessionTTL).Unix()
+	s.m[sha256hex(tok)] = session{user: userID, exp: time.Now().Add(sessionTTL).Unix()}
 	s.mu.Unlock()
 	return tok
 }
 
-func (s *sessions) valid(tok string) bool {
+// userOf returns the user ID of a valid session, or "".
+func (s *sessions) userOf(tok string) string {
 	if tok == "" {
-		return false
+		return ""
 	}
 	h := sha256hex(tok)
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	exp, ok := s.m[h]
+	se, ok := s.m[h]
 	now := time.Now()
-	if !ok || now.Unix() > exp {
+	if !ok || now.Unix() > se.exp {
 		delete(s.m, h)
-		return false
+		return ""
 	}
-	s.m[h] = now.Add(sessionTTL).Unix() // sliding expiry
-	return true
+	se.exp = now.Add(sessionTTL).Unix() // sliding expiry
+	s.m[h] = se
+	return se.user
 }
 
 func (s *sessions) destroy(tok string) {
@@ -109,9 +120,14 @@ func (s *sessions) destroy(tok string) {
 	s.mu.Unlock()
 }
 
-func (s *sessions) destroyAll() {
+// destroyUser ends every session of one user.
+func (s *sessions) destroyUser(userID string) {
 	s.mu.Lock()
-	s.m = map[string]int64{}
+	for h, se := range s.m {
+		if se.user == userID {
+			delete(s.m, h)
+		}
+	}
 	s.mu.Unlock()
 }
 

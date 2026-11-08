@@ -34,6 +34,7 @@ func main() {
 	key := fs.String("signing-key", "/etc/coremon-master/signing.pub", "release signing public key (root-owned)")
 	github := fs.String("github", os.Getenv("COREMON_GITHUB_REPO"), "GitHub repository (owner/name) publishing the version index; first start only, then editable in Settings")
 	indexURL := fs.String("index-url", "", "override the version index URL (testing)")
+	user := fs.String("user", "admin", "reset-password: user name (created as administrator if missing)")
 	target := fs.String("target", "/usr/local/bin/coremon-master", "apply-update: binary to replace")
 	fs.Parse(args)
 	log.SetFlags(0)
@@ -42,11 +43,11 @@ func main() {
 	case "version":
 		fmt.Println(version)
 	case "reset-password":
-		pw, err := master.ResetPassword(*data)
+		pw, err := master.ResetPassword(*data, *user)
 		if err != nil {
 			log.Fatal(err)
 		}
-		fmt.Printf("New admin password: %s\n(restart the master service to end existing sessions)\n", pw)
+		fmt.Printf("New password for %s: %s\n(restart the master service: systemctl restart coremon-master)\n", *user, pw)
 	case "apply-update":
 		if err := master.ApplyUpdate(*data, *key, *target, version); err != nil {
 			log.Fatalf("apply-update: %v", err)

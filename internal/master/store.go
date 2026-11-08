@@ -134,9 +134,54 @@ type Job struct {
 
 func (j *Job) done() bool { return j.Status != JobQueued && j.Status != JobRunning }
 
+// Roles. Permissions are per role; see can().
+const (
+	RoleAdmin  = "admin"
+	RoleViewer = "viewer" // read-only
+)
+
+// User is a login of the website.
+type User struct {
+	ID           string `json:"id"`
+	Name         string `json:"name"`
+	Role         string `json:"role"`
+	PasswordHash string `json:"password_hash"`
+	Created      int64  `json:"created"`
+}
+
+func (s *store) userByName(name string) *User {
+	for _, u := range s.st.Users {
+		if strings.EqualFold(u.Name, name) {
+			return u
+		}
+	}
+	return nil
+}
+
+func (s *store) userByID(id string) *User {
+	for _, u := range s.st.Users {
+		if u.ID == id {
+			return u
+		}
+	}
+	return nil
+}
+
+func (s *store) admins() int {
+	n := 0
+	for _, u := range s.st.Users {
+		if u.Role == RoleAdmin {
+			n++
+		}
+	}
+	return n
+}
+
 // State is everything the master persists (besides logs and audit).
 type State struct {
-	PasswordHash string                  `json:"password_hash"`
+	PasswordHash string                  `json:"password_hash,omitempty"` // before 0.2.4: the single admin password
+	Users        []*User                 `json:"users"`
+	InitialUser  string                  `json:"initial_user,omitempty"` // user whose generated password is in initial-password.txt
 	Settings     Settings                `json:"settings"`
 	Groups       []*Group                `json:"groups"`
 	Agents       map[string]*Agent       `json:"agents"`
@@ -174,6 +219,13 @@ func openStore(dir string) (*store, error) {
 	}
 	if s.st.Groups == nil {
 		s.st.Groups = []*Group{}
+	}
+	// Before 0.2.4 there was one admin password: it becomes user "admin".
+	if len(s.st.Users) == 0 && s.st.PasswordHash != "" {
+		u := &User{ID: "u_" + randHex(6), Name: "admin", Role: RoleAdmin, PasswordHash: s.st.PasswordHash, Created: time.Now().Unix()}
+		s.st.Users = []*User{u}
+		s.st.InitialUser = u.ID
+		s.st.PasswordHash = ""
 	}
 	s.st.Settings.normalize()
 	for _, a := range s.st.Agents {

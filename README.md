@@ -53,7 +53,7 @@ the latest, **orange** otherwise.
 | Agent ↔ master | TLS with the master's public key pinned in each agent. Install script fetched with `curl --pinnedpubkey`, binary checked by sha256. |
 | Agent identity | Single-use enrollment token → per-agent secret (only a hash is stored). New systems stay **pending** until approved. |
 | What agents can do | Fixed actions only; package names validated; no arbitrary shell. |
-| UI | PBKDF2 password (min. 5 characters), HttpOnly/Secure/SameSite=Strict session, anti-CSRF header, login rate limiting, strict CSP, audit log. |
+| UI | User accounts with roles (Administrator, Read-only) checked by the master on every request; PBKDF2 passwords (min. 5 characters), HttpOnly/Secure/SameSite=Strict session, anti-CSRF header, login rate limiting, strict CSP, audit log per user. Read-only users cannot see enrollment tokens. |
 
 Keep the master reachable only from your LAN/VPN.
 
@@ -131,8 +131,17 @@ The master needs outbound HTTPS to `github.com` and
 * **Audit log** — filter by system.
 * **Settings** — *General* (timers, retention, website port, install URL,
   GitHub repository), *Systems* (enrollment, approvals, rename, group and
-  remove systems; create, rename, delete and reorder groups), *Login*
-  (password) and *Identity* (the fingerprint agents pin).
+  remove systems; create, rename, delete and reorder groups), *Users*
+  (administrators: add users, set role, reset password, remove), *Login*
+  (your own password) and *Identity* (the fingerprint agents pin).
+* **Users** — sign in with user name and password; the first user is
+  `admin`. *Read-only* users see everything (except enrollment tokens) and
+  change nothing but their own password. The last administrator cannot be
+  removed or demoted.
+* The dashboard's **Oldest information** tile shows the oldest data on
+  screen: last contact of offline systems, last update check of online ones
+  (paused and pending systems excluded). Agent versions are changed only
+  under **Releases**.
 
 Entries, jobs and job output older than the retention period (1–30 days,
 default 3) are removed by a cleanup that runs every full hour. After you
@@ -169,7 +178,7 @@ actions `Mutating`.
 | Master update logs | `journalctl -u coremon-master-update` |
 | Agent logs | `journalctl -u coremon-agent -f` |
 | Upgrade master by hand | re-run the `install-master.sh` one-liner |
-| Reset admin password | `sudo -u coremon coremon-master reset-password`, then `systemctl restart coremon-master` |
+| Reset a password | `systemctl stop coremon-master && sudo -u coremon coremon-master reset-password -user admin && systemctl start coremon-master` (creates the user as administrator if it does not exist) |
 | Back up the master | `/var/lib/coremon-master` and `/etc/coremon-master` |
 | Reverse proxy | add `-http 127.0.0.1:8080` to the master's `ExecStart` (loopback-only plain HTTP for a local proxy); agents keep using the pinned HTTPS port |
 

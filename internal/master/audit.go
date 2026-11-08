@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"io"
 	"os"
+	"strings"
 	"sync"
 	"time"
 )
@@ -58,8 +59,9 @@ func (e *auditEntry) about(agentID string) bool {
 
 const maxAuditRead = 32 << 20
 
-// list returns the newest entries first, optionally only about one system.
-func (a *auditLog) list(agentID string, limit int) []auditEntry {
+// list returns the newest entries first, optionally only about one system
+// and/or by one actor (user name, "agent" or "scheduler").
+func (a *auditLog) list(agentID, actor string, limit int) []auditEntry {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	out := []auditEntry{}
@@ -85,6 +87,9 @@ func (a *auditLog) list(agentID string, limit int) []auditEntry {
 			continue
 		}
 		if agentID != "" && !e.about(agentID) {
+			continue
+		}
+		if actor != "" && !strings.EqualFold(e.Actor, actor) {
 			continue
 		}
 		out = append(out, e)

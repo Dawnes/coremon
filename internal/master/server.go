@@ -200,28 +200,40 @@ func New(cfg Config) (*Server, error) {
 		st.markDirty()
 	}
 
-	if st.st.PasswordHash == "" {
+	if len(st.st.Users) == 0 {
 		pw := randHex(8)
-		st.st.PasswordHash = hashPassword(pw)
+		u := &User{ID: "u_" + randHex(6), Name: "admin", Role: RoleAdmin, PasswordHash: hashPassword(pw), Created: time.Now().Unix()}
+		st.st.Users = []*User{u}
+		st.st.InitialUser = u.ID
 		if err := os.WriteFile(s.initialPwPath(), []byte(pw+"\n"), 0o600); err != nil {
 			return nil, err
 		}
 		if err := st.writeNow(); err != nil {
 			return nil, err
 		}
-		log.Printf("initial admin password written to %s", s.initialPwPath())
+		log.Printf("initial password of user admin written to %s", s.initialPwPath())
 	}
 	return s, nil
 }
 
-// ResetPassword sets a new random password and prints it.
-func ResetPassword(dataDir string) (string, error) {
+// ResetPassword sets a new random password for a user (created as an
+// administrator if it does not exist) and returns it. Run it while the
+// master is stopped, or restart the master afterwards.
+func ResetPassword(dataDir, name string) (string, error) {
 	st, err := openStore(dataDir)
 	if err != nil {
 		return "", err
 	}
 	pw := randHex(8)
-	st.st.PasswordHash = hashPassword(pw)
+	u := st.userByName(name)
+	if u == nil {
+		if !userNameRe.MatchString(name) {
+			return "", fmt.Errorf("invalid user name %q", name)
+		}
+		u = &User{ID: "u_" + randHex(6), Name: name, Role: RoleAdmin, Created: time.Now().Unix()}
+		st.st.Users = append(st.st.Users, u)
+	}
+	u.PasswordHash = hashPassword(pw)
 	if err := st.writeNow(); err != nil {
 		return "", err
 	}
@@ -254,31 +266,38 @@ func (s *Server) routes() http.Handler {
 	mux.HandleFunc("GET /api/ui/session", s.handleSession)
 	mux.HandleFunc("POST /api/ui/login", s.handleLogin)
 	mux.HandleFunc("POST /api/ui/logout", s.handleLogout)
-	ui := func(p string, h http.HandlerFunc) { mux.HandleFunc(p, s.requireUI(h)) }
-	ui("POST /api/ui/password", s.handlePassword)
-	ui("GET /api/ui/overview", s.handleOverview)
-	ui("GET /api/ui/agents/{id}", s.handleAgentGet)
-	ui("POST /api/ui/agents/{id}", s.handleAgentUpdate)
-	ui("POST /api/ui/agents/{id}/approve", s.handleApprove)
-	ui("POST /api/ui/agents/{id}/remove", s.handleRemove)
-	ui("POST /api/ui/agents/{id}/core", s.handleCoreUpdate)
-	ui("POST /api/ui/actions", s.handleActions)
-	ui("GET /api/ui/jobs", s.handleJobs)
-	ui("GET /api/ui/jobs/{id}", s.handleJob)
-	ui("GET /api/ui/tokens", s.handleTokens)
-	ui("POST /api/ui/tokens", s.handleTokenCreate)
-	ui("POST /api/ui/tokens/{hash}/delete", s.handleTokenDelete)
-	ui("POST /api/ui/groups", s.handleGroupCreate)
-	ui("POST /api/ui/groups/{id}", s.handleGroupUpdate)
-	ui("POST /api/ui/groups/{id}/delete", s.handleGroupDelete)
-	ui("POST /api/ui/layout", s.handleLayout)
-	ui("GET /api/ui/retention", s.handleRetentionPreview)
-	ui("GET /api/ui/settings", s.handleSettingsGet)
-	ui("POST /api/ui/settings", s.handleSettingsSave)
-	ui("GET /api/ui/audit", s.handleAudit)
-	ui("GET /api/ui/releases", s.handleReleases)
-	ui("POST /api/ui/releases/check", s.handleReleasesCheck)
-	ui("POST /api/ui/master/update", s.handleMasterUpdate)
+	// view: every signed-in user; change: administrators only. Enrollment
+	// tokens are secrets, so even listing them needs change rights.
+	view := func(p string, h http.HandlerFunc) { mux.HandleFunc(p, s.requireUI(permView, h)) }
+	change := func(p string, h http.HandlerFunc) { mux.HandleFunc(p, s.requireUI(permChange, h)) }
+	view("POST /api/ui/password", s.handlePassword) // own password
+	view("GET /api/ui/overview", s.handleOverview)
+	view("GET /api/ui/agents/{id}", s.handleAgentGet)
+	change("POST /api/ui/agents/{id}", s.handleAgentUpdate)
+	change("POST /api/ui/agents/{id}/approve", s.handleApprove)
+	change("POST /api/ui/agents/{id}/remove", s.handleRemove)
+	change("POST /api/ui/agents/{id}/core", s.handleCoreUpdate)
+	change("POST /api/ui/actions", s.handleActions)
+	view("GET /api/ui/jobs", s.handleJobs)
+	view("GET /api/ui/jobs/{id}", s.handleJob)
+	change("GET /api/ui/tokens", s.handleTokens)
+	change("POST /api/ui/tokens", s.handleTokenCreate)
+	change("POST /api/ui/tokens/{hash}/delete", s.handleTokenDelete)
+	change("POST /api/ui/groups", s.handleGroupCreate)
+	change("POST /api/ui/groups/{id}", s.handleGroupUpdate)
+	change("POST /api/ui/groups/{id}/delete", s.handleGroupDelete)
+	change("POST /api/ui/layout", s.handleLayout)
+	view("GET /api/ui/retention", s.handleRetentionPreview)
+	view("GET /api/ui/settings", s.handleSettingsGet)
+	change("POST /api/ui/settings", s.handleSettingsSave)
+	view("GET /api/ui/audit", s.handleAudit)
+	view("GET /api/ui/releases", s.handleReleases)
+	change("POST /api/ui/releases/check", s.handleReleasesCheck)
+	change("POST /api/ui/master/update", s.handleMasterUpdate)
+	change("GET /api/ui/users", s.handleUsers)
+	change("POST /api/ui/users", s.handleUserCreate)
+	change("POST /api/ui/users/{id}", s.handleUserUpdate)
+	change("POST /api/ui/users/{id}/delete", s.handleUserDelete)
 
 	// Static UI.
 	sub, _ := fs.Sub(webFS, "web")

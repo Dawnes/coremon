@@ -337,7 +337,7 @@ func (s *Server) handleReleases(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleReleasesCheck(w http.ResponseWriter, r *http.Request) {
 	err := s.syncIndex()
-	s.audit.write(actorAdmin, clientIP(r), "releases.check", "", errString(err))
+	s.audit.write(actor(r), clientIP(r), "releases.check", "", errString(err))
 	writeJSON(w, s.releasesView())
 }
 

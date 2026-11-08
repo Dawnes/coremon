@@ -251,14 +251,14 @@ func TestGroupsAndRetention(t *testing.T) {
 			t.Errorf("log %s present=%v, want %v", id, err == nil, want)
 		}
 	}
-	all := s.audit.list("", 100)
+	all := s.audit.list("", "", 100)
 	if len(all) != 1 || all[0].Action != "new" {
 		t.Fatalf("audit after purge: %+v", all)
 	}
-	if n := len(s.audit.list("a_2", 100)); n != 0 {
+	if n := len(s.audit.list("a_2", "", 100)); n != 0 {
 		t.Fatalf("filter for a_2 returned %d entries", n)
 	}
-	if n := len(s.audit.list("a_1", 100)); n != 1 {
+	if n := len(s.audit.list("a_1", "", 100)); n != 1 {
 		t.Fatalf("filter for a_1 returned %d entries", n)
 	}
 }

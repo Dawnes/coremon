@@ -252,6 +252,10 @@ document.addEventListener('submit', (e) => {
 
 // ---------- shell & routing ----------
 let session = { version: '', min_password: 5 };
+// Read-only users see everything but get no controls that change things.
+// (The master refuses such requests anyway.)
+const canChange = () => !!session.can_change;
+const ifChange = (x) => (canChange() ? x : '');
 let refreshTimer = null;
 let pendingCount = 0;
 
@@ -264,11 +268,12 @@ function showLogin() {
       <div class="brand"><img src="favicon.svg" alt=""><span>Coremon</span></div>
       <div class="muted">Fleet update control</div>
       <form data-submit="login" id="login-form">
-        <label class="field">Admin password<input type="password" name="password" autocomplete="current-password" autofocus required></label>
+        <label class="field">User name<input type="text" name="username" autocomplete="username" autocapitalize="none" spellcheck="false" autofocus required></label>
+        <label class="field">Password<input type="password" name="password" autocomplete="current-password" required></label>
         <div class="loginerr" id="login-err" role="alert"></div>
         <button class="btn primary" type="submit">Sign in</button>
       </form>
-      <div class="hint">First start? The initial password is in <code>/var/lib/coremon-master/initial-password.txt</code> on the master.</div>
+      <div class="hint">First start? Sign in as <code>admin</code>; the initial password is in <code>/var/lib/coremon-master/initial-password.txt</code> on the master.</div>
     </div></div>`);
   view = {
     acts: {
@@ -277,18 +282,18 @@ function showLogin() {
         err.textContent = '';
         f.password.classList.remove('bad');
         try {
-          await POST('login', { password: f.password.value });
+          await POST('login', { username: f.username.value, password: f.password.value });
           await boot();
         } catch (e) {
           const m = e.message || '';
-          err.textContent = /wrong password/i.test(m) ? 'Wrong password' : /too many/i.test(m) ? 'Too many attempts, try again in a few minutes' : m;
+          err.textContent = /wrong/i.test(m) ? 'Wrong user name or password' : /too many/i.test(m) ? 'Too many attempts, try again in a few minutes' : m;
           f.password.classList.add('bad');
           f.password.select();
         }
       },
     },
   };
-  $('#login-form input').focus();
+  $('#login-form input[name=username]').focus();
 }
 
 const NAV = [
@@ -299,15 +304,16 @@ const NAV = [
   ['settings', 'cog', 'Settings'],
 ];
 // Settings submenu, always shown below "Settings".
-const SETTINGS_NAV = [['general', 'General'], ['systems', 'Systems'], ['login', 'Login'], ['identity', 'Identity']];
+const settingsNav = () => [['general', 'General'], ['systems', 'Systems'], ...(canChange() ? [['users', 'Users']] : []), ['login', 'Login'], ['identity', 'Identity']];
 function currentRoute() {
   const p = location.hash.replace(/^#\/?/, '').split('/');
   if (p[0] === 'systems') return ['settings', 'systems']; // old address
-  if (p[0] === 'settings') return ['settings', SETTINGS_NAV.some(([k]) => k === p[1]) ? p[1] : 'general'];
+  if (p[0] === 'settings') return ['settings', settingsNav().some(([k]) => k === p[1]) ? p[1] : 'general'];
   return [p[0] === 'agent' ? '' : p[0], ''];
 }
 const releasedLabel = () => (session.build_date ? 'Released: ' + session.build_date.split('-').reverse().join('-') : '');
-const settingsTabs = (cur) => html`<div class="settabs">${SETTINGS_NAV.map(([k, l]) => html`<a href="#/settings/${k}" class="${cur === k ? 'on' : ''}">${l}</a>`)}</div>`;
+const settingsTabs = (cur) => html`<div class="settabs">${settingsNav().map(([k, l]) => html`<a href="#/settings/${k}" class="${cur === k ? 'on' : ''}">${l}</a>`)}</div>`;
+const roleLabel = (r) => (r === 'admin' ? 'Administrator' : r === 'viewer' ? 'Read-only' : r);
 
 function renderShell() {
   const [active, sub] = currentRoute();
@@ -316,7 +322,8 @@ function renderShell() {
       <aside class="side">
         <div class="brand"><img src="favicon.svg" alt=""><span>Coremon</span></div>
         <nav class="nav">${NAV.map(([h, ic, lbl]) => html`<a href="#/${h}" class="${active === h ? 'active' : ''}">${icon(ic)}<span class="lbl">${lbl}</span></a>
-          ${h === 'settings' ? html`<div class="subnav">${SETTINGS_NAV.map(([k, l]) => html`<a href="#/settings/${k}" class="${sub === k ? 'active' : ''}">${l}${k === 'systems' ? html`<span id="nav-pending"></span>` : ''}</a>`)}</div>` : ''}`)}</nav>
+          ${h === 'settings' ? html`<div class="subnav">${settingsNav().map(([k, l]) => html`<a href="#/settings/${k}" class="${sub === k ? 'active' : ''}">${l}${k === 'systems' ? html`<span id="nav-pending"></span>` : ''}</a>`)}</div>` : ''}`)}</nav>
+        <div class="who"><span class="uname">${session.user?.name}</span>${canChange() ? '' : html`<span class="badge info">read-only</span>`}</div>
         <div class="foot"><div class="verinfo" title="Website and master version"><span>Coremon v${session.version}</span>${releasedLabel() ? html`<span class="dim">${releasedLabel()}</span>` : ''}</div><button class="btn ghost sm iconbtn" data-act="logout" title="Sign out">${icon('logout')}</button></div>
       </aside>
       <main class="main" id="view"></main>
@@ -335,7 +342,7 @@ function route() {
   if (view?.unmount) view.unmount();
   const parts = location.hash.replace(/^#\/?/, '').split('/');
   const [, sub] = currentRoute();
-  const settingsViews = { general: SettingsGeneral, systems: Systems, login: SettingsLogin, identity: SettingsIdentity };
+  const settingsViews = { general: SettingsGeneral, systems: Systems, users: SettingsUsers, login: SettingsLogin, identity: SettingsIdentity };
   const views = { '': Dashboard, agent: AgentPage, systems: Systems, jobs: Jobs, releases: Releases, audit: Audit, settings: settingsViews[sub] };
   const V = views[parts[0]] || Dashboard;
   renderShell();
@@ -477,14 +484,14 @@ function Dashboard() {
     else if (!a.online) accent = 'a-off';
     else if (u?.security) accent = 'a-sec';
     else if (u?.total) accent = 'a-upd';
-    const selectable = a.status === 'active';
+    const selectable = a.status === 'active' && canChange();
     let mid;
     if (a.status === 'pending') {
       mid = html`<div class="mid"><div><div class="biglbl">Waiting for approval</div><div class="dim small">enrolled ${when(a.enrolled_at)}</div></div>
-        <div class="badges"><button class="btn primary sm" data-act="approve" data-id="${a.id}">${icon('check')} Approve</button></div></div>`;
+        <div class="badges">${ifChange(html`<button class="btn primary sm" data-act="approve" data-id="${a.id}">${icon('check')} Approve</button>`)}</div></div>`;
     } else if (!hasUpdates(a) && a.online) {
       mid = html`<div class="mid"><div class="big dim">—</div><div class="biglbl">${a.legacy ? html`agent too old for<br>built-in updates` : 'no update function'}</div>
-        <div class="badges">${a.legacy && a.core_latest ? html`<button class="btn sm" data-act="agent-latest" data-id="${a.id}">${icon('up')} Update agent</button>` : ''}</div></div>`;
+        <div class="badges">${a.legacy ? html`<a class="small" href="#/releases">update the agent in Releases</a>` : ''}</div></div>`;
     } else if (!u) {
       mid = html`<div class="mid"><div class="big dim">—</div><div class="biglbl">waiting for<br>first check</div><div class="badges">${updBadges(a)}</div></div>`;
     } else {
@@ -492,8 +499,8 @@ function Dashboard() {
       mid = html`<div class="mid"><div class="big ${cls}">${u.total}</div><div class="biglbl">${u.total === 1 ? 'update' : 'updates'}<br>available</div><div class="badges">${updBadges(a)}</div></div>`;
     }
     return html`
-      <div class="card ${accent} ${st.sel.has(a.id) ? 'sel' : ''}" data-act="open-agent" data-id="${a.id}" data-drag="agent" draggable="true">
-        <div class="top"><span class="grip" title="Drag to reorder or move to another group">${icon('grip')}</span>${agentDot(a)}
+      <div class="card ${accent} ${st.sel.has(a.id) ? 'sel' : ''}" data-act="open-agent" data-id="${a.id}" ${canChange() ? raw('data-drag="agent" draggable="true"') : ''}>
+        <div class="top">${ifChange(html`<span class="grip" title="Drag to reorder or move to another group">${icon('grip')}</span>`)}${agentDot(a)}
           <div style="min-width:0"><div class="name">${a.name}</div><div class="os">${osLabel(f)} · ${f.arch || '?'} · ${f.virt || ''}</div><div class="os">${ipLabel(f)}</div></div>
           ${selectable ? html`<input type="checkbox" class="selbox" data-act="sel" data-id="${a.id}" ${st.sel.has(a.id) ? 'checked' : ''} title="Select">` : ''}</div>
         ${mid}
@@ -519,17 +526,17 @@ function Dashboard() {
     const selectable = list.filter((a) => a.status === 'active');
     const allSel = selectable.length && selectable.every((a) => st.sel.has(a.id));
     const head = showHead ? html`
-      <div class="ghead" data-gid="${g.id}" ${g.id ? raw('data-drag="group" draggable="true"') : ''}>
+      <div class="ghead" data-gid="${g.id}" ${g.id && canChange() ? raw('data-drag="group" draggable="true"') : ''}>
         <button class="btn ghost sm iconbtn fold ${folded ? 'shut' : ''}" data-act="fold" data-gid="${g.id}" title="${folded ? 'Unfold' : 'Fold'}">${icon('chev')}</button>
-        ${g.id ? html`<span class="grip" title="Drag to reorder groups">${icon('grip')}</span>` : ''}
+        ${g.id && canChange() ? html`<span class="grip" title="Drag to reorder groups">${icon('grip')}</span>` : ''}
         <span class="gname">${g.name}</span>
         <span class="gsum">${agents.length} system${agents.length === 1 ? '' : 's'}${upd ? html` · <b class="c-amber">${upd} update${upd === 1 ? '' : 's'}</b>` : ''}${sec ? html` · <b class="c-red">${sec} security</b>` : ''}${off ? html` · <b class="c-red">${off} offline</b>` : ''}</span>
         <span class="spacer"></span>
-        ${selectable.length ? html`<label class="gsel" title="Select all systems in this group"><input type="checkbox" data-act="sel-group" data-gid="${g.id}" ${allSel ? 'checked' : ''}> select</label>` : ''}
+        ${selectable.length && canChange() ? html`<label class="gsel" title="Select all systems in this group"><input type="checkbox" data-act="sel-group" data-gid="${g.id}" ${allSel ? 'checked' : ''}> select</label>` : ''}
       </div>` : '';
     const body = folded ? '' : list.length
       ? html`<div class="cards">${list.map(card)}</div>`
-      : html`<div class="gempty">${g.id ? 'Empty group — drag systems here' : 'No ungrouped systems'}</div>`;
+      : html`<div class="gempty">${g.id ? (canChange() ? 'Empty group — drag systems here' : 'Empty group') : 'No ungrouped systems'}</div>`;
     return html`<section class="gsec" data-gid="${g.id}">${head}<div class="gbody" data-gid="${g.id}">${body}</div></section>`;
   }
   function render() {
@@ -542,9 +549,28 @@ function Dashboard() {
     const totSec = active.reduce((s, a) => s + (a.updates?.security || 0), 0);
     const reboot = active.filter((a) => a.updates?.reboot_required).length;
     const pending = A.filter((a) => a.status === 'pending').length;
+    const paused = A.filter((a) => a.status === 'paused').length;
     setPending(pending);
+    // Oldest information: per system the age of what the dashboard shows -
+    // last contact when offline, last update check when online. Paused and
+    // pending systems are left out.
+    let oldest = null;
+    for (const a of A) {
+      if (a.status !== 'active') continue;
+      const ts = a.online ? a.updates?.checked_at : a.last_seen;
+      if (!ts) continue;
+      if (!oldest || ts < oldest.ts) oldest = { ts, a };
+    }
+    const age = oldest ? now() - oldest.ts : 0;
+    const interval = (d.settings?.check_interval_hours || 6) * 3600;
+    const oc = !oldest ? 'c-green' : age <= interval + 900 ? 'c-green' : age <= Math.max(86400, interval * 2) ? 'c-amber' : 'c-red';
     setHTML($('#d-stats'), html`
-      <div class="panel stat c-green"><div class="label">Systems online</div><div class="value">${online}<small> / ${active.length}</small></div></div>
+      <div class="panel stat c-green"><div class="label">Systems online</div><div class="value">${online}<small> / ${active.length}</small></div>
+        ${paused ? html`<div class="statnote" title="Paused systems receive no jobs and are not checked">${icon('pause')} ${paused} paused</div>` : ''}</div>
+      <div class="panel stat ${oc} ${oldest ? 'click' : ''}" ${oldest ? raw(`data-act="open-agent" data-id="${esc(oldest.a.id)}"`) : ''} title="${oldest ? 'Oldest information shown on this dashboard: ' + fmtDate(oldest.ts, true) : ''}">
+        <div class="label">Oldest information</div>
+        ${oldest ? html`<div class="value datev">${fmtDate(oldest.ts)}</div><div class="statnote">${ago(oldest.ts)} · ${oldest.a.name} (${oldest.a.online ? 'last update check' : 'offline'})</div>`
+          : html`<div class="value">—</div><div class="statnote">nothing to report</div>`}</div>
       <div class="panel stat c-amber"><div class="label">Pending updates</div><div class="value">${totUpd}</div></div>
       <div class="panel stat c-red"><div class="label">Security updates</div><div class="value">${totSec}</div></div>
       <div class="panel stat c-violet"><div class="label">Reboot required</div><div class="value">${reboot}</div></div>
@@ -553,7 +579,7 @@ function Dashboard() {
     const chips = [['all', 'All'], ['updates', 'Updates'], ['security', 'Security'], ['reboot', 'Reboot'], ['offline', 'Offline'], ['pending', 'Pending'], ['agent', 'Agent outdated']];
     setHTML($('#d-chips'), chips.map(([k, l]) => html`<button class="chip ${st.filter === k ? 'on' : ''}" data-act="filter" data-f="${k}">${l}<span class="n">${count(k)}</span></button>`));
     if (!A.length) {
-      setHTML($('#d-cards'), html`<div class="panel empty"><div class="big">🛰️</div><div>No systems yet.</div><div style="margin-top:14px"><a class="btn primary" href="#/settings/systems">${icon('plus')} Add your first system</a></div></div>`);
+      setHTML($('#d-cards'), html`<div class="panel empty"><div class="big">🛰️</div><div>No systems yet.</div>${ifChange(html`<div style="margin-top:14px"><a class="btn primary" href="#/settings/systems">${icon('plus')} Add your first system</a></div>`)}</div>`);
     } else {
       const groups = d.groups;
       const showHead = groups.length > 0;
@@ -570,7 +596,6 @@ function Dashboard() {
     setHTML($('#d-bulk'), n ? html`<div class="bulkbar"><b>${n}</b> selected<span class="spacer"></span>
       <button class="btn sm" data-act="bulk-check">${icon('refresh')} Check now</button>
       <button class="btn warn sm" data-act="bulk-upgrade">${icon('zap')} Upgrade all packages</button>
-      <button class="btn sm" data-act="bulk-agent">${icon('up')} Agent → latest</button>
       <button class="btn ghost sm" data-act="bulk-clear">Clear</button></div>` : '');
   }
 
@@ -655,8 +680,8 @@ function Dashboard() {
     interval: 5000,
     mount(el) {
       el.innerHTML = r(html`
-        <div class="page-head"><div><h1>Dashboard</h1><div class="sub">Update status across your fleet · drag systems and groups to arrange them</div></div><span class="spacer"></span>
-          <button class="btn" data-act="check-all">${icon('refresh')} Check all</button></div>
+        <div class="page-head"><div><h1>Dashboard</h1><div class="sub">Update status across your fleet${canChange() ? ' · drag systems and groups to arrange them' : ''}</div></div><span class="spacer"></span>
+          ${ifChange(html`<button class="btn" data-act="check-all">${icon('refresh')} Check all</button>`)}</div>
         <div id="d-notice"></div>
         <div class="stats" id="d-stats"></div>
         <div class="toolbar"><input type="search" class="search" id="d-q" placeholder="Search name, OS, IP, group…"><div class="chips" id="d-chips"></div></div>
@@ -683,7 +708,6 @@ function Dashboard() {
         render();
       },
       approve: (t) => approveModal(st.data.agents.find((a) => a.id === t.dataset.id), st.data.groups),
-      'agent-latest': (t) => { const a = st.data.agents.find((x) => x.id === t.dataset.id); return setAgentVersion(a, a.core_latest); },
       'bulk-clear': () => { st.sel.clear(); render(); },
       'bulk-check': () => runAction([...st.sel].filter((id) => hasUpdates(st.data.agents.find((a) => a.id === id))), 'updates', 'check', {}, { open: false }),
       'bulk-upgrade': async () => {
@@ -692,14 +716,6 @@ function Dashboard() {
           await runAction([...st.sel], 'updates', 'upgrade_all', {}, { open: false });
           st.sel.clear();
         }
-      },
-      'bulk-agent': async () => {
-        const list = st.data.agents.filter((a) => st.sel.has(a.id) && !a.core_is_latest && a.core_latest);
-        if (!list.length) return toast('The selected systems already run the latest agent');
-        if (!(await confirmBox(`Update the agent to ${list[0].core_latest}?`, `${list.map((a) => `${a.name} (${a.core_version})`).join(', ')}. Each agent downloads the signed binary and restarts.`, { okText: 'Update agents' }))) return;
-        for (const a of list) await POST(`agents/${a.id}/core`, { version: a.core_latest });
-        toast(`${list.length} agent update(s) requested`, 'ok');
-        view.refresh();
       },
       'check-all': () => {
         const ids = st.data.agents.filter((a) => a.status === 'active' && a.online && hasUpdates(a)).map((a) => a.id);
@@ -725,24 +741,26 @@ function AgentPage([id]) {
           <div class="sub">${osLabel(f)} · ${f.kernel || ''} · ${f.arch} · ${f.virt} · ${a.online ? 'online, up ' + dur(f.uptime_sec) : raw('offline, last seen ' + r(when(a.last_seen)))}</div></div>
         <span class="spacer"></span>
         ${a.busy ? html`<span class="row muted"><span class="spin"></span>${a.busy} job(s) active</span>` : ''}
-        ${a.status !== 'pending' ? html`<button class="btn warn sm" data-act="reboot" ${a.status === 'active' && a.online && canReboot(a) ? '' : 'disabled'}
+        ${a.status !== 'pending' && canChange() ? html`<button class="btn warn sm" data-act="reboot" ${a.status === 'active' && a.online && canReboot(a) ? '' : 'disabled'}
           title="${canReboot(a) ? (a.online ? 'Reboot this system' : 'The system is offline') : `Agent ${a.core_version} cannot reboot; update the agent first`}">${icon('refresh')} Reboot</button>` : ''}
-        ${a.status === 'active' ? html`<button class="btn sm" data-act="pause">${icon('pause')} Pause</button>` : ''}
-        ${a.status === 'paused' ? html`<button class="btn sm" data-act="resume">${icon('play')} Resume</button>` : ''}
+        ${a.status === 'active' && canChange() ? html`<button class="btn sm" data-act="pause">${icon('pause')} Pause</button>` : ''}
+        ${a.status === 'paused' && canChange() ? html`<button class="btn sm" data-act="resume">${icon('play')} Resume</button>` : ''}
       </div>
-      ${a.status === 'pending' ? html`<div class="notice blue row">This system enrolled ${when(a.enrolled_at)} and is waiting for approval. Until approved it receives no commands.<span class="spacer"></span><button class="btn primary sm" data-act="approve">${icon('check')} Approve</button></div>` : ''}
+      ${a.status === 'paused' ? html`<div class="notice blue">This system is paused: it receives no jobs and is not checked.</div>` : ''}
+      ${a.status === 'pending' ? html`<div class="notice blue row">This system enrolled ${when(a.enrolled_at)} and is waiting for approval. Until approved it receives no commands.<span class="spacer"></span>${ifChange(html`<button class="btn primary sm" data-act="approve">${icon('check')} Approve</button>`)}</div>` : ''}
       ${a.removing ? html`<div class="notice red">Uninstall requested — the agent will remove itself.</div>` : ''}`;
   }
   function updatesTab(a) {
     if (!hasUpdates(a)) {
       return html`<div class="panel empty"><div class="big">📦</div><div>Agent ${a.core_version || '?'} has no built-in update function.</div>
-        ${a.core_latest ? html`<div style="margin-top:14px"><button class="btn primary" data-act="agent-version" data-v="${a.core_latest}" ${a.status === 'active' ? '' : 'disabled'}>${icon('up')} Update agent to ${a.core_latest}</button></div>` : ''}</div>`;
+        <div style="margin-top:14px"><a href="#/releases">Update the agent in Releases</a></div></div>`;
     }
     const s = upd();
     const canAct = a.status === 'active' && a.online;
+    const ed = canChange();
     if (!s) {
       return html`<div class="panel empty"><div class="spin" style="width:26px;height:26px"></div><div style="margin-top:12px">Waiting for the first check…</div>
-        <div style="margin-top:14px"><button class="btn" data-act="check" ${canAct ? '' : 'disabled'}>${icon('refresh')} Check now</button></div></div>`;
+        ${ifChange(html`<div style="margin-top:14px"><button class="btn" data-act="check" ${canAct ? '' : 'disabled'}>${icon('refresh')} Check now</button></div>`)}</div>`;
     }
     const pk = s.packages || [];
     const selectable = pk.filter((p) => !p.new);
@@ -757,25 +775,25 @@ function AgentPage([id]) {
           ${s.reboot_required ? html`<span class="badge reboot" title="${(s.reboot_pkgs || []).join(', ')}">reboot required${s.reboot_pkgs?.length ? ': ' + s.reboot_pkgs.slice(0, 3).join(', ') : ''}</span>` : ''}
           <span class="muted small">${when(s.checked_at, 'checked ')} · ${when(s.refreshed_at, 'package lists refreshed ')} · ${s.backend}</span>
           <span class="spacer"></span>
-          <button class="btn sm" data-act="check" ${canAct ? '' : 'disabled'}>${icon('refresh')} Refresh &amp; check</button>
+          ${ed ? html`<button class="btn sm" data-act="check" ${canAct ? '' : 'disabled'}>${icon('refresh')} Refresh &amp; check</button>
           <button class="btn primary sm" data-act="install" ${canAct && nsel ? '' : 'disabled'}>${icon('download')} Install selected${nsel ? ` (${nsel})` : ''}</button>
-          <button class="btn warn sm" data-act="upgrade-all" ${canAct && s.total ? '' : 'disabled'}>${icon('zap')} Upgrade all</button>
+          <button class="btn warn sm" data-act="upgrade-all" ${canAct && s.total ? '' : 'disabled'}>${icon('zap')} Upgrade all</button>` : ''}
         </div>
       </div>
       ${s.removals?.length ? html`<div class="notice red">“Upgrade all” would remove: <b>${s.removals.join(', ')}</b></div>` : ''}
       ${pk.length ? html`
       <div class="panel">
-        <div class="row panel-pad" style="padding-bottom:10px">
+        ${ifChange(html`<div class="row panel-pad" style="padding-bottom:10px">
           <span class="muted small">Quick select:</span>
           <button class="btn ghost sm" data-act="sel-sec">Security only</button>
           <button class="btn ghost sm" data-act="sel-all">All</button>
           <button class="btn ghost sm" data-act="sel-none">None</button>
-        </div>
+        </div>`)}
         <div class="tbl-wrap" data-keep-scroll="pk"><table class="tbl">
-          <thead><tr><th class="w1"><input type="checkbox" data-act="sel-toggle-all" ${allOn ? 'checked' : ''}></th><th>Package</th><th>Version</th><th>Origin</th><th class="w1"></th></tr></thead>
+          <thead><tr>${ed ? html`<th class="w1"><input type="checkbox" data-act="sel-toggle-all" ${allOn ? 'checked' : ''}></th>` : ''}<th>Package</th><th>Version</th><th>Origin</th><th class="w1"></th></tr></thead>
           <tbody>${pk.map((p) => html`
             <tr class="${st.sel.has(p.name) ? 'picked' : ''}">
-              <td class="w1">${p.new ? '' : html`<input type="checkbox" data-act="sel-pkg" data-name="${p.name}" ${st.sel.has(p.name) ? 'checked' : ''}>`}</td>
+              ${ed ? html`<td class="w1">${p.new ? '' : html`<input type="checkbox" data-act="sel-pkg" data-name="${p.name}" ${st.sel.has(p.name) ? 'checked' : ''}>`}</td>` : ''}
               <td><b>${p.name}</b> <span class="dim small">${p.arch}</span></td>
               <td class="mono">${p.current ? html`<span class="ver">${p.current}</span><span class="arrow">→</span>` : ''}<span class="ver new">${p.available}</span></td>
               <td class="muted small">${p.origin}</td>
@@ -784,20 +802,13 @@ function AgentPage([id]) {
       </div>` : html`<div class="panel empty"><div class="big">✨</div>Everything is up to date.</div>`}`;
   }
   function agentTab(a) {
-    const repo = st.data.repo;
-    const active = a.status === 'active';
-    const avail = (repo.core || []).filter((v) => v.platforms.includes(`${a.facts.os}-${a.facts.arch}`));
     return html`
       <div class="panel panel-pad">
         <h2>Agent version</h2>
         <div class="row">${verPill(a)}${a.core_latest ? html`<span class="muted small">latest available: <span class="ver">${a.core_latest}</span></span>` : ''}</div>
         ${a.desired_core ? html`<div class="notice blue" style="margin:14px 0 0">Change to ${a.desired_core} requested${a.online ? ' — the agent downloads the signed binary and restarts.' : ' — applies as soon as the system is online.'}</div>` : ''}
-        ${avail.length ? html`<form class="row" style="margin-top:16px" data-submit="agent-set">
-            <label class="field" style="min-width:240px">Install agent version<select name="v">${versionOptions({ core: avail }, a.core_version)}</select></label>
-            <button class="btn primary" style="align-self:flex-end" ${active ? '' : 'disabled'}>${icon('up')} Apply</button>
-          </form>
-          <div class="dim small" style="margin-top:10px">Up- and downgrades both work. The master keeps the last ${avail.length === 1 ? 'version' : avail.length + ' versions'} ready; older ones are removed. Every binary is signed and verified by the agent before it replaces itself.</div>`
-        : html`<div class="muted" style="margin-top:12px">No agent versions for ${a.facts.os}-${a.facts.arch} on the master yet — see <a href="#/releases">Releases</a>.</div>`}
+        <div class="row" style="margin-top:14px"><span class="muted small">Functions:</span>${(a.features || []).map((n) => html`<span class="tag mono">${n}</span>`)}</div>
+        <div style="margin-top:14px"><a href="#/releases">${canChange() ? 'Change the agent version in Releases' : 'Agent versions in Releases'}</a></div>
       </div>`;
   }
   function jobsTab() {
@@ -862,14 +873,6 @@ function AgentPage([id]) {
       approve: () => approveModal(a(), st.data.groups),
       pause: async () => { await POST('agents/' + id, { paused: true }); toast('Paused — no jobs will be sent', 'ok'); refresh(); },
       resume: async () => { await POST('agents/' + id, { paused: false }); toast('Resumed', 'ok'); refresh(); },
-      'agent-version': (t) => setAgentVersion(a(), t.dataset.v),
-      'agent-set': async (f) => {
-        const v = f.v.value, cur = a().core_version;
-        if (v === cur) return toast(`Agent ${v} is already installed`);
-        const down = versionLess(v, cur);
-        if (!(await confirmBox(`${down ? 'Downgrade' : 'Upgrade'} the agent on ${a().name}?`, `${cur} → ${v}. The agent downloads the signed binary, verifies it and restarts.`, { okText: down ? 'Downgrade' : 'Upgrade' }))) return;
-        await setAgentVersion(a(), v);
-      },
       reboot: async () => {
         const ag = a();
         const body = html`The system restarts within a few seconds and shows offline until it is back.
@@ -900,25 +903,25 @@ function Systems() {
     setPending(pend.length);
     setHTML($('#s-pending'), pend.length ? html`<div class="panel panel-pad"><h2>Waiting for approval <span class="badge upd">${pend.length}</span></h2>
       <table class="tbl"><tbody>${pend.map((a) => html`<tr><td>${agentDot(a)} <b>${a.name}</b></td><td class="muted">${osLabel(a.facts)} · ${a.facts.arch}</td><td class="muted">${(a.facts.ips || []).join(', ')}</td><td class="muted">${when(a.enrolled_at)}</td>
-        <td class="w1"><div class="row" style="flex-wrap:nowrap"><button class="btn primary sm" data-act="approve" data-id="${a.id}">${icon('check')} Approve</button><button class="btn danger sm" data-act="reject" data-id="${a.id}">Reject</button></div></td></tr>`)}</tbody></table></div>` : '');
+        ${ifChange(html`<td class="w1"><div class="row" style="flex-wrap:nowrap"><button class="btn primary sm" data-act="approve" data-id="${a.id}">${icon('check')} Approve</button><button class="btn danger sm" data-act="reject" data-id="${a.id}">Reject</button></div></td>`)}</tr>`)}</tbody></table></div>` : '');
     setHTML($('#s-tokens'), st.tokens.length ? html`<table class="tbl" style="margin-top:14px"><thead><tr><th>Open token</th><th>Note</th><th>Expires</th><th class="w1"></th></tr></thead>
       <tbody>${st.tokens.map((t) => html`<tr><td class="mono">${t.prefix}…</td><td class="muted">${t.note || '—'}</td><td class="muted">${fmtDate(t.expires)}</td><td class="w1"><button class="btn ghost sm" data-act="revoke" data-hash="${t.hash}">Revoke</button></td></tr>`)}</tbody></table>` : '');
     const count = (gid) => d.agents.filter((a) => (a.group_id || '') === gid).length;
     setHTML($('#s-groups'), html`
       ${d.groups.length ? html`<table class="tbl" style="margin-top:12px"><tbody>${d.groups.map((g, i) => html`<tr>
-        <td class="w1"><div class="row" style="flex-wrap:nowrap;gap:2px"><button class="btn ghost sm iconbtn" data-act="g-move" data-gid="${g.id}" data-dir="-1" ${i === 0 ? 'disabled' : ''} title="Move up">${icon('up')}</button><button class="btn ghost sm iconbtn" data-act="g-move" data-gid="${g.id}" data-dir="1" ${i === d.groups.length - 1 ? 'disabled' : ''} title="Move down">${icon('down')}</button></div></td>
+        ${ifChange(html`<td class="w1"><div class="row" style="flex-wrap:nowrap;gap:2px"><button class="btn ghost sm iconbtn" data-act="g-move" data-gid="${g.id}" data-dir="-1" ${i === 0 ? 'disabled' : ''} title="Move up">${icon('up')}</button><button class="btn ghost sm iconbtn" data-act="g-move" data-gid="${g.id}" data-dir="1" ${i === d.groups.length - 1 ? 'disabled' : ''} title="Move down">${icon('down')}</button></div></td>`)}
         <td><b>${g.name}</b></td><td class="muted">${count(g.id)} system(s)</td>
-        <td class="w1"><div class="row" style="flex-wrap:nowrap"><button class="btn ghost sm" data-act="g-rename" data-gid="${g.id}">${icon('edit')} Rename</button><button class="btn danger sm" data-act="g-delete" data-gid="${g.id}">${icon('trash')}</button></div></td></tr>`)}
-        <tr><td></td><td class="dim">Ungrouped</td><td class="muted">${count('')} system(s)</td><td class="dim small w1">always last</td></tr></tbody></table>`
+        ${ifChange(html`<td class="w1"><div class="row" style="flex-wrap:nowrap"><button class="btn ghost sm" data-act="g-rename" data-gid="${g.id}">${icon('edit')} Rename</button><button class="btn danger sm" data-act="g-delete" data-gid="${g.id}">${icon('trash')}</button></div></td>`)}</tr>`)}
+        <tr>${ifChange(html`<td></td>`)}<td class="dim">Ungrouped</td><td class="muted">${count('')} system(s)</td>${ifChange(html`<td class="dim small w1">always last</td>`)}</tr></tbody></table>`
         : html`<div class="muted small" style="margin-top:10px">No groups yet. All systems are shown together.</div>`}`);
     const act = d.agents.filter((a) => a.status !== 'pending').sort(byName);
     setHTML($('#s-all'), act.length ? html`<div class="panel"><table class="tbl"><thead><tr><th>System</th><th>IP address</th><th>Group</th><th>OS</th><th>Agent</th><th>Last seen</th><th class="w1"></th></tr></thead>
       <tbody>${act.map((a) => html`<tr><td>${agentDot(a)} <a href="#/agent/${a.id}"><b>${a.name}</b></a> ${a.status === 'paused' ? html`<span class="badge info">paused</span>` : ''}</td>
         <td class="mono small">${ipLabel(a.facts)}</td>
-        <td><select class="sm" data-change="set-group" data-id="${a.id}" title="Group">${groupOptions(d.groups, a.group_id)}</select></td>
+        <td>${canChange() ? html`<select class="sm" data-change="set-group" data-id="${a.id}" title="Group">${groupOptions(d.groups, a.group_id)}</select>` : html`<span class="muted">${d.groups.find((g) => g.id === a.group_id)?.name || 'Ungrouped'}</span>`}</td>
         <td class="muted">${osLabel(a.facts)}</td><td>${verPill(a)}</td>
         <td class="muted">${a.online ? 'online' : when(a.last_seen)}</td>
-        <td class="w1"><div class="row" style="flex-wrap:nowrap"><button class="btn ghost sm" data-act="rename" data-id="${a.id}">${icon('edit')} Rename</button><button class="btn danger sm" data-act="remove" data-id="${a.id}" title="Remove">${icon('trash')}</button></div></td></tr>`)}</tbody></table></div>` : html`<div class="panel empty">No approved systems yet.</div>`);
+        ${ifChange(html`<td class="w1"><div class="row" style="flex-wrap:nowrap"><button class="btn ghost sm" data-act="rename" data-id="${a.id}">${icon('edit')} Rename</button><button class="btn danger sm" data-act="remove" data-id="${a.id}" title="Remove">${icon('trash')}</button></div></td>`)}</tr>`)}</tbody></table></div>` : html`<div class="panel empty">No approved systems yet.</div>`);
   }
   const groupName = (gid) => st.data.groups.find((g) => g.id === gid)?.name || '';
   const agentBy = (id) => st.data.agents.find((a) => a.id === id);
@@ -928,7 +931,7 @@ function Systems() {
       el.innerHTML = r(html`${settingsTabs('systems')}
         <div class="page-head"><div><h1>Systems</h1><div class="sub">Enroll, approve, name, group and remove systems</div></div></div>
         <div class="stack">
-          <div class="panel panel-pad">
+          ${ifChange(html`<div class="panel panel-pad">
             <h2>Add a system</h2>
             <div class="muted small">Generates a single-use install command. Run it as <b>root</b> on the system (VM, container, bare metal — including this master container). The agent connects out to the master; no SSH or open ports needed.</div>
             <form class="row" style="margin-top:14px" data-submit="gen">
@@ -938,22 +941,22 @@ function Systems() {
             </form>
             <div id="s-cmd"></div>
             <div id="s-tokens"></div>
-          </div>
+          </div>`)}
           <div id="s-pending"></div>
           <div class="panel panel-pad">
             <h2>Groups</h2>
-            <div class="muted small">Each system belongs to at most one group. On the dashboard, groups stay together and can be folded; drag systems and groups there to arrange them.</div>
-            <form class="row" style="margin-top:12px" data-submit="g-create">
+            <div class="muted small">Each system belongs to at most one group. On the dashboard, groups stay together and can be folded${canChange() ? '; drag systems and groups there to arrange them' : ''}.</div>
+            ${ifChange(html`<form class="row" style="margin-top:12px" data-submit="g-create">
               <input type="text" name="name" placeholder="New group name, e.g. Production" maxlength="48" style="width:260px" required>
               <button class="btn">${icon('plus')} Create group</button>
-            </form>
+            </form>`)}
             <div id="s-groups"></div>
           </div>
           <div><h2 style="font-size:15px;margin:6px 0 12px">All systems</h2><div id="s-all"></div></div>
         </div>`);
     },
     async refresh() {
-      [st.data, st.tokens] = await Promise.all([GET('overview'), GET('tokens')]);
+      [st.data, st.tokens] = await Promise.all([GET('overview'), canChange() ? GET('tokens') : Promise.resolve([])]);
       render();
     },
     acts: {
@@ -1076,7 +1079,7 @@ function Releases() {
     setHTML($('#r-index'), html`<div class="panel panel-pad">
       <div class="row"><h2 style="margin:0">Version index</h2><span class="spacer"></span>
         ${ix.syncing || st.checking ? html`<span class="row muted small"><span class="spin"></span>checking…</span>` : html`<span class="muted small">${ix.checked_at ? when(ix.checked_at, 'checked ') : 'not checked yet'} · every 6 hours</span>`}
-        <button class="btn sm" data-act="check" ${ix.syncing || st.checking ? 'disabled' : ''}>${icon('refresh')} Check now</button></div>
+        ${ifChange(html`<button class="btn sm" data-act="check" ${ix.syncing || st.checking ? 'disabled' : ''}>${icon('refresh')} Check now</button>`)}</div>
       <div class="dim small mono" style="margin-top:6px;word-break:break-all">${ix.url || 'no GitHub repository configured — see Settings'}</div>
       ${ix.error ? html`<div class="notice red" style="margin:12px 0 0">${ix.error}</div>` : ''}
       ${repo.errors.length ? html`<div class="notice red" style="margin:12px 0 0"><b>Rejected files</b>${repo.errors.map((e) => html`<div class="mono small">${e}</div>`)}</div>` : ''}
@@ -1085,8 +1088,7 @@ function Releases() {
     </div>`);
     setHTML($('#r-master'), html`<div class="panel panel-pad"><h2>Master (this website)</h2>
       <div class="row"><span class="muted">Installed</span><span class="ver">${m.version}</span>
-        ${m.update ? html`<span class="badge upd">${m.latest} available</span><button class="btn primary sm" data-act="master-update">${icon('up')} Update master to ${m.latest}</button>` : html`<span class="badge ok">${icon('check')} latest</span>`}</div>
-      <div class="dim small" style="margin-top:10px">The master only ever moves forward; it is never downgraded.</div></div>`);
+        ${m.update ? html`<span class="badge upd">${m.latest} available</span>${ifChange(html`<button class="btn primary sm" data-act="master-update">${icon('up')} Update master to ${m.latest}</button>`)}` : html`<span class="badge ok">${icon('check')} latest</span>`}</div></div>`);
     const onVer = (v) => agents.filter((a) => a.core_version === v).length;
     setHTML($('#r-agents'), html`<div class="panel panel-pad"><h2>Agent versions <span class="muted small">— last ${repo.core.length || 0} kept on the master</span></h2>
       ${repo.core.length ? html`<table class="tbl"><thead><tr><th>Version</th><th>Published</th><th>Platforms</th><th>Systems</th></tr></thead>
@@ -1096,10 +1098,10 @@ function Releases() {
     const outdated = agents.filter((a) => !a.core_is_latest && repo.core_latest);
     setHTML($('#r-rollout'), agents.length ? html`
       <div class="row" style="margin:6px 0 12px"><h2 style="font-size:15px;margin:0">Agents per system</h2><span class="spacer"></span>
-        ${outdated.length ? html`<button class="btn sm" data-act="all-latest">${icon('up')} Update ${outdated.length} outdated agent(s) to ${repo.core_latest}</button>` : ''}</div>
-      <div class="panel"><table class="tbl"><thead><tr><th>System</th><th>Agent</th><th>Change to</th></tr></thead>
-      <tbody>${agents.map((a) => html`<tr><td>${agentDot(a)} <a href="#/agent/${a.id}"><b>${a.name}</b></a></td><td>${verPill(a)}</td>
-        <td><form class="row" style="flex-wrap:nowrap" data-submit="set" data-id="${a.id}"><select name="v">${versionOptions({ core: repo.core.filter((v) => v.platforms.includes(`${a.facts.os}-${a.facts.arch}`)) }, a.core_version)}</select><button class="btn sm" ${a.status === 'active' ? '' : 'disabled'}>Apply</button></form></td></tr>`)}</tbody></table></div>` : '');
+        ${outdated.length && canChange() ? html`<button class="btn sm" data-act="all-latest">${icon('up')} Update ${outdated.length} outdated agent(s) to ${repo.core_latest}</button>` : ''}</div>
+      <div class="panel"><table class="tbl"><thead><tr><th>System</th><th>Agent</th>${ifChange(html`<th>Change to</th>`)}</tr></thead>
+      <tbody>${[...agents].sort(byName).map((a) => html`<tr><td>${agentDot(a)} <a href="#/agent/${a.id}"><b>${a.name}</b></a></td><td>${verPill(a)}</td>
+        ${ifChange(html`<td><form class="row" style="flex-wrap:nowrap" data-submit="set" data-id="${a.id}"><select name="v">${versionOptions({ core: repo.core.filter((v) => v.platforms.includes(`${a.facts.os}-${a.facts.arch}`)) }, a.core_version)}</select><button class="btn sm" ${a.status === 'active' ? '' : 'disabled'}>Apply</button></form></td>`)}</tr>`)}</tbody></table></div>` : '');
   }
   return {
     interval: 5000,
@@ -1120,7 +1122,14 @@ function Releases() {
         await POST('master/update');
         toast('Master update requested — restarting shortly', 'ok');
       },
-      set: async (f) => { const a = st.data.agents.find((x) => x.id === f.dataset.id); await setAgentVersion(a, f.v.value); },
+      set: async (f) => {
+        const a = st.data.agents.find((x) => x.id === f.dataset.id);
+        const v = f.v.value, cur = a.core_version;
+        if (v === cur) return toast(`${a.name} already runs agent ${v}`);
+        const down = versionLess(v, cur);
+        if (!(await confirmBox(`${down ? 'Downgrade' : 'Upgrade'} the agent on ${a.name}?`, `${cur} → ${v}. The agent downloads the signed binary, verifies it and restarts.`, { okText: down ? 'Downgrade' : 'Upgrade' }))) return;
+        await setAgentVersion(a, v);
+      },
       'all-latest': async () => {
         const l = st.rel.repo.core_latest;
         const list = st.data.agents.filter((a) => a.status === 'active' && !a.core_is_latest);
@@ -1134,25 +1143,32 @@ function Releases() {
 
 // ---------- Audit ----------
 function Audit() {
-  const st = { agent: '', names: {}, agents: [] };
+  const st = { agent: '', user: '', names: {}, agents: [] };
   return {
     interval: 10000,
     mount(el) {
       el.innerHTML = r(html`<div class="page-head"><div><h1>Audit log</h1><div class="sub">Who did what, and when</div></div><span class="spacer"></span>
+        <label class="row small muted">User <select id="au-user"><option value="">All users</option></select></label>
         <label class="row small muted">System <select id="au-sys"><option value="">All systems</option></select></label></div><div id="au"></div>`);
       $('#au-sys').addEventListener('change', (e) => { st.agent = e.target.value; view.refresh(); });
+      $('#au-user').addEventListener('change', (e) => { st.user = e.target.value; view.refresh(); });
     },
     async refresh() {
-      const d = await GET('audit' + (st.agent ? '?agent=' + encodeURIComponent(st.agent) : ''));
+      const q = new URLSearchParams();
+      if (st.agent) q.set('agent', st.agent);
+      if (st.user) q.set('user', st.user);
+      const d = await GET('audit' + (q.toString() ? '?' + q : ''));
       st.names = d.names;
       const opts = Object.entries(d.names).sort((a, b) => a[1].localeCompare(b[1]));
       setHTML($('#au-sys'), html`<option value="">All systems</option>${opts.map(([id, n]) => html`<option value="${id}" ${st.agent === id ? 'selected' : ''}>${n}</option>`)}`);
+      const actors = [...(d.users || []), 'agent', 'scheduler'];
+      setHTML($('#au-user'), html`<option value="">All users</option>${actors.map((n) => html`<option value="${n}" ${st.user === n ? 'selected' : ''}>${n === 'agent' || n === 'scheduler' ? n + ' (automatic)' : n}</option>`)}`);
       const rows = d.entries;
       const sys = (e) => e.agent ? (d.names[e.agent] || e.target || e.agent) : (d.names[e.target] || '');
       setHTML($('#au'), rows.length ? html`<div class="panel"><table class="tbl"><thead><tr><th>Time</th><th>Actor</th><th>Action</th><th>System</th><th>Target</th><th>Detail</th><th>IP</th></tr></thead>
         <tbody>${rows.map((e) => html`<tr><td class="muted mono small" style="white-space:nowrap">${fmtDate(e.time, true)}</td><td>${e.actor}</td><td><span class="tag mono">${e.action}</span></td>
           <td>${sys(e)}</td><td class="mono small">${e.agent ? '' : (d.names[e.target] ? '' : e.target || '')}</td><td class="muted small">${e.detail || ''}</td><td class="dim small">${e.ip || ''}</td></tr>`)}</tbody></table></div>`
-        : html`<div class="panel empty">${st.agent ? 'No entries for this system.' : 'No entries yet.'}</div>`);
+        : html`<div class="panel empty">${st.agent || st.user ? 'No entries for this filter.' : 'No entries yet.'}</div>`);
     },
   };
 }
@@ -1185,8 +1201,9 @@ function SettingsGeneral() {
       const s = d.settings, L = d.limits;
       st.saved = s.retention_days;
       el.innerHTML = r(html`${settingsHead('general', 'General', 'How the master checks, cleans up and is reached')}
+        ${canChange() ? '' : html`<div class="notice blue">Your account is read-only: you can see these settings but not change them.</div>`}
         <div class="panel panel-pad" style="max-width:720px">
-          <form class="form" data-submit="save" style="margin-top:0">
+          <form class="form" data-submit="save" style="margin-top:0"><fieldset class="plain" ${canChange() ? '' : 'disabled'}>
             <label class="field">Automatic update check interval (hours)<input type="number" name="interval" min="1" max="168" value="${s.check_interval_hours}"></label>
             <label class="field">Heartbeat (seconds)<input type="number" name="hb" min="${L.heartbeat_min}" max="${L.heartbeat_max}" value="${s.heartbeat_sec}"></label>
             <div class="dim small" id="hb-hint"></div>
@@ -1194,15 +1211,15 @@ function SettingsGeneral() {
             <div class="dim small" id="ret-info"></div>
             <label class="field">Website port<select name="port">
               <option value="8443" ${s.ui_port !== 443 ? 'selected' : ''}>8443 (default)</option>
-              <option value="443" ${s.ui_port === 443 ? 'selected' : ''}>443 (https://host without a port number)</option></select></label>
+              <option value="443" ${s.ui_port === 443 ? 'selected' : ''}>443 (https)</option></select></label>
             <div class="dim small">Agents always connect on port ${d.agent_port}; this only changes where the website is offered. With 443 the website is also still reachable on ${d.agent_port}.</div>
             ${d.ui_port_error ? html`<div class="notice red" style="margin:0">${d.ui_port_error}</div>` : ''}
             <label class="field">Master URL used in install commands<input type="text" name="url" placeholder="${d.suggested_url} (auto)" value="${s.master_url}"></label>
             <div class="dim small">Set this if agents reach the master under a different name than your browser does.</div>
             <label class="field">GitHub repository for releases<input type="text" name="gh" placeholder="owner/name" value="${s.github_repo}"></label>
             <div class="dim small mono" style="word-break:break-all">${d.index_url ? 'Version index: ' + d.index_url : ''}</div>
-            <div><button class="btn primary">Save</button></div>
-          </form>
+            ${ifChange(html`<div><button class="btn primary">Save</button></div>`)}
+          </fieldset></form>
         </div>`);
       const f = $('form[data-submit=save]', el);
       const upd = () => {
@@ -1230,11 +1247,77 @@ function SettingsGeneral() {
   };
 }
 
+function SettingsUsers() {
+  const st = { users: [] };
+  const roleOpts = (sel) => html`<option value="admin" ${sel === 'admin' ? 'selected' : ''}>Administrator</option><option value="viewer" ${sel === 'viewer' ? 'selected' : ''}>Read-only</option>`;
+  function render() {
+    const me = session.user?.id;
+    setHTML($('#u-list'), html`<div class="panel"><table class="tbl"><thead><tr><th>User</th><th>Role</th><th>Created</th><th class="w1"></th></tr></thead>
+      <tbody>${st.users.map((u) => html`<tr><td><b>${u.name}</b>${u.id === me ? html` <span class="dim small">(you)</span>` : ''}</td>
+        <td>${u.id === me ? html`<span class="muted">${roleLabel(u.role)}</span>` : html`<select class="sm" data-change="role" data-id="${u.id}">${roleOpts(u.role)}</select>`}</td>
+        <td class="muted">${fmtDate(u.created)}</td>
+        <td class="w1"><div class="row" style="flex-wrap:nowrap">${u.id === me ? html`<a class="btn ghost sm" href="#/settings/login">Change password</a>`
+          : html`<button class="btn ghost sm" data-act="reset" data-id="${u.id}">Reset password</button><button class="btn danger sm" data-act="del" data-id="${u.id}" title="Remove">${icon('trash')}</button>`}</div></td></tr>`)}</tbody></table></div>`);
+  }
+  const userBy = (id) => st.users.find((u) => u.id === id);
+  return {
+    mount(el) {
+      el.innerHTML = r(html`${settingsHead('users', 'Users', 'Who can sign in to this website')}
+        <div class="stack" style="max-width:860px">
+          <div class="panel panel-pad"><h2>Add a user</h2>
+            <div class="muted small"><b>Administrator</b>: everything. <b>Read-only</b>: sees all systems, jobs, releases, the audit log and settings, changes nothing (except their own password) and cannot see enrollment tokens.</div>
+            <form class="row" style="margin-top:12px;align-items:flex-end" data-submit="create">
+              <label class="field">User name<input type="text" name="name" maxlength="32" autocapitalize="none" spellcheck="false" required style="width:180px"></label>
+              <label class="field">Role<select name="role">${roleOpts('viewer')}</select></label>
+              <label class="field">Password (min. ${session.min_password || 5})<input type="password" name="pw" autocomplete="new-password" minlength="${session.min_password || 5}" required style="width:180px"></label>
+              <button class="btn primary">${icon('plus')} Add user</button>
+            </form>
+          </div>
+          <div id="u-list"></div>
+        </div>`);
+    },
+    async refresh() { st.users = await GET('users'); render(); },
+    interval: 15000,
+    acts: {
+      create: async (f) => {
+        await POST('users', { name: f.name.value, role: f.role.value, password: f.pw.value });
+        toast(`User ${f.name.value.toLowerCase()} added`, 'ok');
+        f.reset();
+        view.refresh();
+      },
+      role: async (t) => {
+        const u = userBy(t.dataset.id);
+        try {
+          await POST('users/' + u.id, { role: t.value });
+          toast(`${u.name} is now ${roleLabel(t.value)} (signed out)`, 'ok');
+        } catch (e) { t.value = u.role; throw e; }
+        view.refresh();
+      },
+      reset: (t) => {
+        const u = userBy(t.dataset.id);
+        openModal(html`<h3>New password for ${u.name}</h3><form class="form" data-submit="save">
+          <label class="field">New password (min. ${session.min_password || 5})<input type="password" name="pw" autocomplete="new-password" minlength="${session.min_password || 5}" autofocus required></label>
+          <div class="dim small">${u.name} is signed out and signs in again with the new password.</div>
+          <div class="actions"><button type="button" class="btn ghost" data-act="cancel">Cancel</button><button class="btn primary">Set password</button></div></form>`, {
+          acts: { cancel: () => closeModal(), save: async (f) => { await POST('users/' + u.id, { password: f.pw.value }); closeModal(); toast(`Password of ${u.name} changed`, 'ok'); } },
+        });
+      },
+      del: async (t) => {
+        const u = userBy(t.dataset.id);
+        if (!(await confirmBox(`Remove user ${u.name}?`, `${u.name} can no longer sign in. Their entries in the audit log stay.`, { okText: 'Remove user', danger: true }))) return;
+        await POST(`users/${u.id}/delete`);
+        toast(`${u.name} removed`, 'ok');
+        view.refresh();
+      },
+    },
+  };
+}
+
 function SettingsLogin() {
   return {
     mount(el) {
       const min = session.min_password || 5;
-      el.innerHTML = r(html`${settingsHead('login', 'Login', 'The admin password for this website')}
+      el.innerHTML = r(html`${settingsHead('login', 'Login', `Signed in as ${session.user?.name} (${roleLabel(session.user?.role)})`)}
         ${session.initial_password ? html`<div class="notice">You are still using the generated initial password — please change it.</div>` : ''}
         <div class="panel panel-pad" style="max-width:480px"><h2>Change password</h2>
           <form class="form" data-submit="pw" style="margin-top:0">
