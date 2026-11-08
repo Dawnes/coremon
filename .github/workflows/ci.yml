@@ -1,0 +1,29 @@
+name: ci
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          check-latest: true
+      - run: go vet ./...
+      - run: go vet -tags fake ./modules/...
+      - run: go test ./...
+      - name: Cross-compile
+        run: |
+          for A in amd64 arm64; do
+            GOOS=linux GOARCH=$A CGO_ENABLED=0 go build -o /dev/null ./cmd/... ./modules/...
+          done

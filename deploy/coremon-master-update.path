@@ -1,0 +1,9 @@
+[Unit]
+Description=Watch for Coremon master update requests
+
+[Path]
+PathExists=/var/lib/coremon-master/update/request
+Unit=coremon-master-update.service
+
+[Install]
+WantedBy=multi-user.target

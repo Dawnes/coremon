@@ -1,0 +1,29 @@
+[Unit]
+Description=Coremon master
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+User=coremon
+Group=coremon
+EnvironmentFile=-/etc/coremon-master/master.env
+ExecStart=/usr/local/bin/coremon-master serve -data /var/lib/coremon-master -listen :8443
+Restart=on-failure
+RestartSec=5
+
+# Hardening (needs the LXC "nesting" feature; the installer falls back if unavailable)
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ReadWritePaths=/var/lib/coremon-master
+CapabilityBoundingSet=
+AmbientCapabilities=
+RestrictSUIDSGID=yes
+LockPersonality=yes
+RestrictRealtime=yes
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target
