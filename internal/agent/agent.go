@@ -235,8 +235,14 @@ func (a *Agent) pollLoop(ctx context.Context) {
 			}
 		}
 		for _, c := range resp.Commands {
-			if c.Type != proto.CmdSetMode && a.claim(c.ID) {
+			if c.Type == proto.CmdSetMode {
+				continue
+			}
+			switch a.claimLimited(c.ID) {
+			case claimed:
 				go a.execute(ctx, c)
+			case claimBusy:
+				go a.reject(ctx, c, errBusy)
 			}
 		}
 	}
@@ -251,6 +257,46 @@ func (a *Agent) claim(id string) bool {
 	}
 	a.running[id] = true
 	return true
+}
+
+// maxRunning caps the commands in progress at once, so a faulty master
+// cannot exhaust the system by sending thousands of commands.
+const maxRunning = 16
+
+type claimResult int
+
+const (
+	claimDuplicate claimResult = iota // already running: ignore
+	claimed
+	claimBusy // too many in progress: refuse
+)
+
+// claimLimited marks a command as running unless it already is or the
+// limit is reached.
+func (a *Agent) claimLimited(id string) claimResult {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.running[id] {
+		return claimDuplicate
+	}
+	if len(a.running) >= maxRunning {
+		return claimBusy
+	}
+	a.running[id] = true
+	return claimed
+}
+
+var errBusy = fmt.Errorf("agent busy: %d commands already in progress; try again later", maxRunning)
+
+// reject reports a command as failed without running it.
+func (a *Agent) reject(ctx context.Context, c proto.Command, err error) {
+	res := proto.Result{CommandID: c.ID, OK: false, Error: err.Error()}
+	for attempt := 0; attempt < 3; attempt++ {
+		if perr := a.cl.postJSON(ctx, "/api/agent/result", res, nil, 30*time.Second); perr == nil {
+			return
+		}
+		time.Sleep(time.Duration(attempt+1) * 2 * time.Second)
+	}
 }
 
 // errReportOnly is returned for every action while in report-only mode.
