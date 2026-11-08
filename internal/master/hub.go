@@ -133,15 +133,17 @@ func (s *Server) recentFailure(agentID, typ, feature string, d time.Duration) bo
 
 func (s *Server) handleEnroll(w http.ResponseWriter, r *http.Request) {
 	var req proto.EnrollRequest
-	if !readJSON(w, r, &req, 64<<10) {
+	if !readJSON(w, r, &req, maxEnrollBody) {
 		return
 	}
+	req.Facts = sanitizeFacts(req.Facts)
+	req.CoreVersion = clip(req.CoreVersion, 32)
 	s.st.mu.Lock()
 	defer s.st.mu.Unlock()
 	h := sha256hex(strings.TrimSpace(req.Token))
 	tok := s.st.st.Tokens[h]
 	if tok == nil || time.Now().Unix() > tok.Expires {
-		s.audit.write("agent", clientIP(r), "enroll.rejected", req.Facts.Hostname, "invalid or expired token")
+		s.audit.write("agent", clientIP(r), "enroll.rejected", clip(req.Facts.Hostname, 64), "invalid or expired token")
 		http.Error(w, "invalid or expired enrollment token", http.StatusForbidden)
 		return
 	}
@@ -149,7 +151,7 @@ func (s *Server) handleEnroll(w http.ResponseWriter, r *http.Request) {
 	secret := randHex(32)
 	a := &Agent{
 		ID:          "a_" + randHex(8),
-		Name:        req.Facts.Hostname,
+		Name:        cleanName(req.Facts.Hostname),
 		Status:      "pending",
 		SecretHash:  sha256hex(secret),
 		EnrolledAt:  time.Now().Unix(),
@@ -172,7 +174,7 @@ func (s *Server) handleEnroll(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handlePoll(w http.ResponseWriter, r *http.Request) {
 	var req proto.PollRequest
-	if !readJSON(w, r, &req, 8<<20) {
+	if !readJSON(w, r, &req, maxPollBody) {
 		return
 	}
 	s.st.mu.Lock()
@@ -184,11 +186,14 @@ func (s *Server) handlePoll(w http.ResponseWriter, r *http.Request) {
 	}
 	now := time.Now().Unix()
 	a.LastSeen = now
-	a.Facts = req.Facts
-	a.CoreVersion = req.CoreVersion
+	a.Facts = sanitizeFacts(req.Facts)
+	a.CoreVersion = clip(req.CoreVersion, 32)
 	a.Protocol = req.Protocol
 	// Agents before protocol 2 have no built-in features.
-	a.Features = req.Features
+	a.Features = sanitizeFeatures(req.Features)
+	if len(req.Running) > 256 {
+		req.Running = req.Running[:256]
+	}
 	if a.Features == nil {
 		a.Features = []proto.FeatureInfo{}
 	}

@@ -136,6 +136,9 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	name := strings.ToLower(strings.TrimSpace(req.Username))
+	if len(name) > 32 { // longest valid user name; keeps the audit log tidy
+		name = name[:32]
+	}
 	s.st.mu.Lock()
 	u := s.st.userByName(name)
 	hash, uid := dummyHash, ""

@@ -1,6 +1,7 @@
 package master
 
 import (
+	"context"
 	"crypto/pbkdf2"
 	"crypto/rand"
 	"crypto/sha256"
@@ -152,10 +153,36 @@ func (s *sessions) recordFail(ip string) {
 	s.mu.Unlock()
 }
 
+// clientIP is the address used for login rate limiting and the audit log.
 func clientIP(r *http.Request) string {
+	if ip, ok := r.Context().Value(proxiedIPKey{}).(string); ok {
+		return ip
+	}
 	host, _, err := net.SplitHostPort(r.RemoteAddr)
 	if err != nil {
 		return r.RemoteAddr
 	}
 	return host
+}
+
+type proxiedIPKey struct{}
+
+// viaLocalProxy wraps the loopback-only plain-HTTP listener, which exists
+// only for a reverse proxy on the same machine. Every request there comes
+// from 127.0.0.1, so the visitor's address is taken from the last
+// X-Forwarded-For entry (the one that proxy added). Never used on the
+// HTTPS listeners, where X-Forwarded-For could be forged by anyone.
+func viaLocalProxy(h http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		host, _, _ := net.SplitHostPort(r.RemoteAddr)
+		if ip := net.ParseIP(host); ip != nil && ip.IsLoopback() {
+			if xff := r.Header.Values("X-Forwarded-For"); len(xff) > 0 {
+				parts := strings.Split(xff[len(xff)-1], ",")
+				if fwd := net.ParseIP(strings.TrimSpace(parts[len(parts)-1])); fwd != nil {
+					r = r.WithContext(context.WithValue(r.Context(), proxiedIPKey{}, fwd.String()))
+				}
+			}
+		}
+		h.ServeHTTP(w, r)
+	})
 }

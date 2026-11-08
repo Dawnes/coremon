@@ -451,6 +451,10 @@ func (s *Server) handleTokenCreate(w http.ResponseWriter, r *http.Request) {
 	if req.TTLHours <= 0 || req.TTLHours > 24*30 {
 		req.TTLHours = 24
 	}
+	if s.baseURL(r) == "" {
+		http.Error(w, badHostMsg, http.StatusBadRequest)
+		return
+	}
 	tok := randHex(16)
 	t := &EnrollToken{Hash: sha256hex(tok), Prefix: tok[:6], Note: cleanName(req.Note),
 		Created: time.Now().Unix(), Expires: time.Now().Add(time.Duration(req.TTLHours) * time.Hour).Unix()}

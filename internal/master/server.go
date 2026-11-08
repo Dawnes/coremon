@@ -69,6 +69,11 @@ type Server struct {
 	ipAt    time.Time
 }
 
+// readTimeout bounds reading a whole request (headers and body), so slow
+// clients cannot hold connections open. Responses are not limited: agent
+// polls are held open for up to a heartbeat and downloads may take long.
+const readTimeout = 60 * time.Second
+
 // ownIPs returns this host's addresses (cached for a minute), used to
 // recognise the master's own system among the agents.
 func (s *Server) ownIPs() map[string]bool {
@@ -133,7 +138,7 @@ func (s *Server) applyUIPort(handler http.Handler) {
 		log.Printf("website: %s", s.uiErr)
 		return
 	}
-	srv := &http.Server{Handler: handler, ReadHeaderTimeout: 10 * time.Second, IdleTimeout: 120 * time.Second,
+	srv := &http.Server{Handler: handler, ReadHeaderTimeout: 10 * time.Second, ReadTimeout: readTimeout, IdleTimeout: 120 * time.Second,
 		TLSConfig: &tls.Config{MinVersion: tls.VersionTLS12, Certificates: []tls.Certificate{s.cert}},
 		ErrorLog:  log.New(os.Stderr, "http: ", 0)}
 	s.uiSrv, s.uiErr = srv, ""
@@ -324,6 +329,7 @@ func (s *Server) Run(ctx context.Context) error {
 		Addr:              s.cfg.Listen,
 		Handler:           handler,
 		ReadHeaderTimeout: 10 * time.Second,
+		ReadTimeout:       readTimeout,
 		IdleTimeout:       120 * time.Second,
 		TLSConfig:         &tls.Config{MinVersion: tls.VersionTLS12, Certificates: []tls.Certificate{s.cert}},
 		ErrorLog:          log.New(os.Stderr, "http: ", 0),
@@ -336,7 +342,8 @@ func (s *Server) Run(ctx context.Context) error {
 		if ip := net.ParseIP(host); err != nil || ip == nil || !ip.IsLoopback() {
 			return fmt.Errorf("-http must be a loopback address like 127.0.0.1:8080 (got %q)", s.cfg.HTTPListen)
 		}
-		plain = &http.Server{Addr: s.cfg.HTTPListen, Handler: s.routes(), ReadHeaderTimeout: 10 * time.Second, IdleTimeout: 120 * time.Second}
+		plain = &http.Server{Addr: s.cfg.HTTPListen, Handler: viaLocalProxy(s.routes()), ReadHeaderTimeout: 10 * time.Second,
+			ReadTimeout: readTimeout, IdleTimeout: 120 * time.Second}
 		go func() { errc <- plain.ListenAndServe() }()
 		log.Printf("plain HTTP UI on http://%s (loopback only, for a local reverse proxy)", s.cfg.HTTPListen)
 	}
