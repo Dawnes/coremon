@@ -9,7 +9,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"regexp"
 	"strings"
 
 	"coremon/internal/seal"
@@ -22,16 +21,12 @@ type Config struct {
 	// ("" = empty slot). Two slots allow a key rotation: the new key is
 	// added in a reply signed with a key the agent already trusts.
 	MasterKeys [2]string `json:"master_keys"`
-	// Before 0.3.0 agents pinned the master's HTTPS certificate instead.
-	// Only used once, for the hand-over to the payload key.
-	MasterPins [2]string `json:"master_pins,omitempty"`
-	MasterPin  string    `json:"master_pin,omitempty"`
 	Token      string    `json:"token,omitempty"`
 }
 
-var pinRe = regexp.MustCompile(`^[A-Za-z0-9+/]{43}=$`) // base64 of 32 bytes
-
-func cleanPin(p string) string { return strings.TrimPrefix(strings.TrimSpace(p), "sha256//") }
+// oldConfigFields were used before 0.3.0 (pinned HTTPS certificate); they
+// are removed from the stored config.
+var oldConfigFields = []string{"master_pins", "master_pin"}
 
 // validKeys checks a pair of payload key slots.
 func validKeys(p [2]string) error {
@@ -54,15 +49,6 @@ func validKeys(p [2]string) error {
 
 // sealed reports whether the config has payload keys (0.3.0+).
 func (c *Config) sealed() bool { return c.MasterKeys[0] != "" || c.MasterKeys[1] != "" }
-
-// legacyPins are the HTTPS key fingerprints of a config from before 0.3.0.
-func (c *Config) legacyPins() [2]string {
-	p := [2]string{cleanPin(c.MasterPins[0]), cleanPin(c.MasterPins[1])}
-	if p[0] == "" && p[1] == "" {
-		p[0] = cleanPin(c.MasterPin)
-	}
-	return p
-}
 
 // Identity is created at enrollment (/var/lib/coremon/identity.json).
 type Identity struct {
@@ -99,19 +85,25 @@ func (c *Config) validate() error {
 		return errors.New("master_url must start with https://")
 	}
 	c.MasterURL = strings.TrimRight(c.MasterURL, "/")
-	if c.sealed() {
-		return validKeys(c.MasterKeys)
+	if !c.sealed() {
+		return errors.New("no master payload key in the config (it is from before 0.3.0): run a new install command from the master")
 	}
-	p := c.legacyPins()
-	if p[0] == "" && p[1] == "" {
-		return errors.New("no master key in the config: run a new install command")
+	return validKeys(c.MasterKeys)
+}
+
+// hasOldFields reports whether the config file still has fields of the
+// method before 0.3.0.
+func hasOldFields(path string) bool {
+	var raw map[string]json.RawMessage
+	if loadJSON(path, &raw) != nil {
+		return false
 	}
-	for _, k := range p {
-		if k != "" && !pinRe.MatchString(k) {
-			return fmt.Errorf("invalid master key fingerprint %q", k)
+	for _, f := range oldConfigFields {
+		if _, ok := raw[f]; ok {
+			return true
 		}
 	}
-	return nil
+	return false
 }
 
 // loadAgentKey reads the agent's own key, creating it on first use.

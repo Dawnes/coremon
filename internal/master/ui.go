@@ -42,7 +42,7 @@ type agentView struct {
 	CoreLatest   string                     `json:"core_latest"`
 	CoreIsLatest bool                       `json:"core_is_latest"`
 	DesiredCore  string                     `json:"desired_core"`
-	Legacy       bool                       `json:"legacy"`            // agent before 0.2: no built-in features
+	Legacy       bool                       `json:"legacy"`            // agent before 0.3.0: old connection method, cannot connect
 	IsMaster     bool                       `json:"is_master"`         // the system the master itself runs on
 	ModeSupport  bool                       `json:"mode_support"`      // agent enforces report-only itself (protocol 3+)
 	AgentReport  bool                       `json:"agent_report_only"` // mode the agent itself confirmed

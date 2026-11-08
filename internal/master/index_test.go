@@ -77,17 +77,17 @@ func TestIndexSync(t *testing.T) {
 	s := testServer(t, pub, gh.srv.URL+"/versions.json", "0.2.0")
 	plat := runtime.GOOS + "-" + runtime.GOARCH
 
-	// A legacy agent from before 0.2 must be cleaned up.
-	legacy := s.repo.path("core", "0.1.0", "linux-amd64")
+	// An agent of the old connection method (before 0.3.0) is cleaned up.
+	legacy := s.repo.path("core", "0.2.5", "linux-amd64")
 	os.MkdirAll(filepath.Dir(legacy), 0o755)
 	os.WriteFile(legacy, []byte("old"), 0o755)
 	s.cleanupLegacy()
 	if _, err := os.Stat(legacy); err == nil {
-		t.Fatal("legacy agent 0.1.0 not removed")
+		t.Fatal("old agent 0.2.5 not removed")
 	}
 
 	var idx release.Index
-	for _, v := range []string{"0.2.0", "0.2.1", "0.3.0", "0.4.0"} {
+	for _, v := range []string{"0.2.5", "0.3.0", "0.3.1", "0.4.0"} {
 		idx.Add("agent", release.Release{Version: v, Assets: map[string]release.Asset{
 			"linux-amd64": gh.asset(priv, "core", v, "linux-amd64", []byte("agent "+v)),
 		}})
@@ -99,8 +99,8 @@ func TestIndexSync(t *testing.T) {
 		t.Fatalf("sync: %v", err)
 	}
 	got := s.repo.coreVersions()
-	if strings.Join(got, ",") != "0.4.0,0.3.0,0.2.1" {
-		t.Fatalf("agent versions = %v, want the newest three", got)
+	if strings.Join(got, ",") != "0.4.0,0.3.1,0.3.0" {
+		t.Fatalf("agent versions = %v, want the newest three of 0.3.0 and later", got)
 	}
 	if s.repo.masterLatest() != "0.3.0" {
 		t.Fatalf("newer master not downloaded: %q", s.repo.masterLatest())
@@ -114,11 +114,11 @@ func TestIndexSync(t *testing.T) {
 	if err := s.syncIndex(); err != nil {
 		t.Fatalf("sync: %v", err)
 	}
-	if got := strings.Join(s.repo.coreVersions(), ","); got != "0.5.0,0.4.0,0.3.0" {
+	if got := strings.Join(s.repo.coreVersions(), ","); got != "0.5.0,0.4.0,0.3.1" {
 		t.Fatalf("after new release: %v", got)
 	}
-	if _, err := os.Stat(filepath.Dir(s.repo.path("core", "0.2.1", "linux-amd64"))); err == nil {
-		t.Fatal("0.2.1 should have been removed from disk")
+	if _, err := os.Stat(filepath.Dir(s.repo.path("core", "0.3.0", "linux-amd64"))); err == nil {
+		t.Fatal("0.3.0 should have been removed from disk")
 	}
 
 	// An index signed with another key is rejected and changes nothing.
@@ -127,7 +127,7 @@ func TestIndexSync(t *testing.T) {
 	if err := s.syncIndex(); err == nil || !strings.Contains(err.Error(), "signature") {
 		t.Fatalf("index with wrong key must be rejected, got %v", err)
 	}
-	if got := strings.Join(s.repo.coreVersions(), ","); got != "0.5.0,0.4.0,0.3.0" {
+	if got := strings.Join(s.repo.coreVersions(), ","); got != "0.5.0,0.4.0,0.3.1" {
 		t.Fatalf("rejected index changed the store: %v", got)
 	}
 

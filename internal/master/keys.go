@@ -186,8 +186,7 @@ type agentKeys struct {
 	LastSeen   int64     `json:"last_seen"`
 	Version    string    `json:"core_version"`
 	Sealed     bool      `json:"sealed"` // uses the payload key (0.3.0+)
-	Migrating  bool      `json:"migrating"`
-	Slots      [2]string `json:"slots"` // fingerprints of the keys it trusts
+	Slots      [2]string `json:"slots"`  // fingerprints of the keys it trusts
 	ReportedAt int64     `json:"reported_at"`
 	HasNext    bool      `json:"has_next"`
 }
@@ -202,7 +201,7 @@ func (s *Server) identityView() map[string]any {
 	list := []agentKeys{}
 	for _, a := range s.st.st.Agents {
 		k := agentKeys{ID: a.ID, Name: a.Name, Status: a.Status, Online: s.online(a, now), LastSeen: a.LastSeen,
-			Version: a.CoreVersion, Sealed: a.Protocol >= 5, Migrating: a.AgentKey != "" && a.SecretHash != ""}
+			Version: a.CoreVersion, Sealed: a.Protocol >= 5}
 		if k.Sealed {
 			k.Slots = [2]string{seal.Fingerprint(a.Pins[0]), seal.Fingerprint(a.Pins[1])}
 			k.ReportedAt = a.PinsAt

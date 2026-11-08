@@ -116,6 +116,18 @@ type PinParams struct {
 	Pins [2]string `json:"pins"`
 }
 
+// CmdPing asks the agent to answer at once without doing anything; the
+// result data is a PingReply. Allowed in every mode, including report only.
+const CmdPing = "agent.ping"
+
+// PingReply is the agent's answer to CmdPing.
+type PingReply struct {
+	TimeMs  int64     `json:"time_ms"` // the agent's clock, unix milliseconds
+	Version string    `json:"version"`
+	KeyUsed string    `json:"key_used"` // master payload key of the connection
+	Keys    [2]string `json:"keys"`     // the agent's key slots
+}
+
 // ModeParams are the parameters of CmdSetMode.
 type ModeParams struct {
 	ReportOnly bool `json:"report_only"`

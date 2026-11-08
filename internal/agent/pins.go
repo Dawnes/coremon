@@ -2,17 +2,15 @@ package agent
 
 import (
 	"context"
-	"crypto/ed25519"
 	"errors"
 	"fmt"
 	"log"
 	"os"
-	"time"
 
 	"coremon/internal/seal"
 )
 
-// Master key slots, the hand-over from the old method, re-enrollment.
+// Master key slots, config clean-up, re-enrollment.
 
 func pinsNow(cl *client) [2]string {
 	p, _ := cl.getPins()
@@ -61,50 +59,19 @@ func (a *Agent) setPins(p [2]string) error {
 	return nil
 }
 
-// handOver moves an agent of the old method (pinned HTTPS certificate,
-// shared secret) to the payload key: over that still-pinned connection it
-// registers its own key and receives the master's payload keys. Trust is
-// carried over without a gap.
-func (a *Agent) handOver(ctx context.Context) error {
-	if err := loadJSON(a.identityPath(), &a.id); err != nil || a.id.AgentID == "" || a.id.Secret == "" {
-		return errors.New("this config has no payload key and the system is not enrolled the old way: run a new install command")
+// cleanConfig removes fields of the method before 0.3.0 from the stored
+// config (rewriting it with the current fields only).
+func (a *Agent) cleanConfig() {
+	if !hasOldFields(a.opt.ConfigPath) {
+		return
 	}
-	cl := newLegacyClient(a.cfg.MasterURL, a.cfg.legacyPins())
-	cl.auth = a.id.AgentID + ":" + a.id.Secret
-	backoff := 10 * time.Second
-	for {
-		var resp struct {
-			MasterKeys [2]string `json:"master_keys"`
-		}
-		err := cl.postJSON(ctx, "/api/agent/migrate", map[string]string{
-			"agent_key": seal.AgentKey(a.agentKey.Public().(ed25519.PublicKey)),
-		}, &resp, 30*time.Second)
-		if err == nil {
-			if err = validKeys(resp.MasterKeys); err == nil {
-				a.mu.Lock()
-				cfg := a.cfg
-				cfg.MasterKeys, cfg.MasterPins, cfg.MasterPin = resp.MasterKeys, [2]string{}, ""
-				err = saveJSON(a.opt.ConfigPath, cfg, 0o600)
-				if err == nil {
-					a.cfg = cfg
-				}
-				a.mu.Unlock()
-				if err == nil {
-					log.Printf("hand-over: received the master's payload key %s", shortPin(resp.MasterKeys[0]))
-					return nil
-				}
-			}
-		}
-		log.Printf("hand-over to the payload key failed: %v (retrying in %s)", err, backoff)
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case <-time.After(backoff):
-		}
-		if backoff < 5*time.Minute {
-			backoff *= 2
-		}
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if err := saveJSON(a.opt.ConfigPath, a.cfg, 0o600); err != nil {
+		log.Printf("warning: could not clean up the config: %v", err)
+		return
 	}
+	log.Printf("removed the old HTTPS pins from the config")
 }
 
 func (a *Agent) tokenPending() bool {

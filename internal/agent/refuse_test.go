@@ -42,7 +42,7 @@ func TestAgentRefusesActionsInReportOnly(t *testing.T) {
 	defer srv.Close()
 
 	spy := &spyFeature{}
-	cl := &client{base: srv.URL, hc: srv.Client(), legacy: true}
+	cl := &client{base: srv.URL, hc: srv.Client(), plain: true}
 	a := &Agent{opt: Options{StateDir: t.TempDir()}, cl: cl, out: newOutputBuffer(cl), running: map[string]bool{},
 		feats: map[string]feature.Feature{"updates": spy}, locks: map[string]*sync.Mutex{"updates": {}}}
 	ctx := context.Background()
@@ -69,5 +69,24 @@ func TestAgentRefusesActionsInReportOnly(t *testing.T) {
 	a.execute(ctx, proto.Command{ID: "j2", Type: proto.CmdAction, Feature: "updates", Action: "install", Params: json.RawMessage(`{"packages":["curl"]}`)})
 	if !spy.called {
 		t.Fatal("the install did not run after changes were allowed")
+	}
+
+	// Ping is answered in report-only mode too, and does nothing else.
+	spy.called = false
+	a.opt.Version = "9.9.9"
+	cl.lastPin = "K1"
+	cl.pins = [2]string{"K1", "K2"}
+	a.execute(ctx, mode(true))
+	a.execute(ctx, proto.Command{ID: "p", Type: proto.CmdPing})
+	mu.Lock()
+	last = results[len(results)-1]
+	mu.Unlock()
+	var pr proto.PingReply
+	json.Unmarshal(last.Data, &pr)
+	if !last.OK || last.CommandID != "p" || pr.Version != "9.9.9" || pr.KeyUsed != "K1" || pr.Keys != [2]string{"K1", "K2"} || pr.TimeMs == 0 || spy.called {
+		t.Fatalf("ping reply: %+v %+v", last, pr)
+	}
+	if !immediate(proto.CmdPing) || immediate(proto.CmdAction) {
+		t.Fatal("ping must be handled at once, actions not")
 	}
 }

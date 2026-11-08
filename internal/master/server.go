@@ -19,6 +19,7 @@ import (
 	"sync"
 	"time"
 
+	"coremon/internal/proto"
 	"coremon/internal/sign"
 )
 
@@ -52,7 +53,8 @@ type Server struct {
 	keyMu         sync.Mutex
 	keys          keyState // TLS keys: current and, during a rotation, next
 	signingKeyB64 string
-	wakes         map[string]chan struct{} // guarded by st.mu
+	wakes         map[string]chan struct{}     // guarded by st.mu
+	pings         map[string]chan proto.Result // ping job ID -> waiting UI request; guarded by st.mu
 	idx           *indexSync
 	nonces        nonceCache // sealed requests already seen (replay)
 
@@ -262,15 +264,9 @@ func securityHeaders(h http.Handler) http.Handler {
 
 func (s *Server) routes() http.Handler {
 	mux := http.NewServeMux()
-	// Agent API (authenticated per agent, except enroll which needs a token).
-	mux.HandleFunc("POST /api/agent/v5", s.handleSealed)       // sealed method (0.3.0+)
-	mux.HandleFunc("POST /api/agent/migrate", s.handleMigrate) // one-time hand-over from the old method
+	// Agent API: sealed and signed per agent (enroll needs a token).
+	mux.HandleFunc("POST /api/agent/v5", s.handleSealed)
 	mux.HandleFunc("GET /dl/core/{version}/{plat}", s.handlePublicCore)
-	mux.HandleFunc("POST /api/agent/enroll", s.handleEnroll)
-	mux.HandleFunc("POST /api/agent/poll", s.handlePoll)
-	mux.HandleFunc("POST /api/agent/output", s.handleOutput)
-	mux.HandleFunc("POST /api/agent/result", s.handleResult)
-	mux.HandleFunc("GET /api/agent/download/{kind}/{name}/{version}/{os}/{arch}", s.handleDownload)
 	mux.HandleFunc("GET /install.sh", s.handleInstallScript)
 	mux.HandleFunc("GET /dl/agent/{plat}", s.handlePublicAgent)
 
@@ -285,6 +281,7 @@ func (s *Server) routes() http.Handler {
 	view("POST /api/ui/password", s.handlePassword) // own password
 	view("GET /api/ui/overview", s.handleOverview)
 	view("GET /api/ui/agents/{id}", s.handleAgentGet)
+	view("POST /api/ui/agents/{id}/ping", s.handlePing) // no change: read-only users may ping
 	change("POST /api/ui/agents/{id}", s.handleAgentUpdate)
 	change("POST /api/ui/agents/{id}/approve", s.handleApprove)
 	change("POST /api/ui/agents/{id}/remove", s.handleRemove)

@@ -2,7 +2,6 @@ package master
 
 import (
 	"context"
-	"crypto/subtle"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -25,28 +24,6 @@ func (s *Server) heartbeat() int { return s.st.st.Settings.HeartbeatSec }
 // heartbeats. Caller holds s.st.mu.
 func (s *Server) online(a *Agent, now int64) bool {
 	return now-a.LastSeen < int64(3*s.heartbeat())
-}
-
-// authAgent validates "Authorization: Bearer <id>:<secret>". Caller must
-// hold s.st.mu.
-func (s *Server) authAgent(r *http.Request) *Agent {
-	h := r.Header.Get("Authorization")
-	tok, ok := strings.CutPrefix(h, "Bearer ")
-	if !ok {
-		return nil
-	}
-	id, secret, ok := strings.Cut(tok, ":")
-	if !ok {
-		return nil
-	}
-	a := s.st.st.Agents[id]
-	if a == nil || a.SecretHash == "" { // moved to the sealed method: secret retired
-		return nil
-	}
-	if subtle.ConstantTimeCompare([]byte(a.SecretHash), []byte(sha256hex(secret))) != 1 {
-		return nil
-	}
-	return a
 }
 
 func readJSON(w http.ResponseWriter, r *http.Request, v any, max int64) bool {
@@ -96,8 +73,8 @@ func (s *Server) enqueue(a *Agent, j *Job) *Job {
 //     changes, mode changes and uninstall are fine
 //   - active: everything
 func jobAllowed(a *Agent, j *Job) bool {
-	if j.Type == proto.CmdSetPins {
-		return true // which master keys to trust: every status, even pending
+	if j.Type == proto.CmdSetPins || j.Type == proto.CmdPing {
+		return true // key slots and ping: every status, even pending
 	}
 	switch a.Status {
 	case StatusActive:
@@ -168,8 +145,7 @@ func (s *Server) recentFailure(agentID, typ, feature string, d time.Duration) bo
 	return false
 }
 
-// ---- agent API: shared logic for the old (TLS-pinned, shared secret) and
-// the sealed (payload key, agent key) method ----
+// ---- agent API logic (carried by the sealed method, sealed.go) ----
 
 type apiError struct {
 	code int
@@ -178,9 +154,12 @@ type apiError struct {
 
 func (e *apiError) Error() string { return e.msg }
 
-// enrollCore registers a new system. With agentKey (sealed method) no
-// secret is created. Caller must not hold s.st.mu.
+// enrollCore registers a new system with its own key. Caller must not hold
+// s.st.mu.
 func (s *Server) enrollCore(req proto.EnrollRequest, ip, agentKey string) (*proto.EnrollResponse, error) {
+	if agentKey == "" {
+		return nil, &apiError{http.StatusBadRequest, "agent key missing"}
+	}
 	req.Facts = sanitizeFacts(req.Facts)
 	req.CoreVersion = clip(req.CoreVersion, 32)
 	s.st.mu.Lock()
@@ -206,10 +185,6 @@ func (s *Server) enrollCore(req proto.EnrollRequest, ip, agentKey string) (*prot
 		AgentKey:    agentKey,
 	}
 	resp := &proto.EnrollResponse{AgentID: a.ID, SigningKey: s.signingKeyB64}
-	if agentKey == "" {
-		resp.Secret = randHex(32)
-		a.SecretHash = sha256hex(resp.Secret)
-	}
 	if tok.Note != "" && a.Name == "" {
 		a.Name = tok.Note
 	}
@@ -373,6 +348,8 @@ func (s *Server) resultCore(agentID string, res proto.Result, ip string) {
 			a.State[j.Feature] = d.State
 			a.StateAt[j.Feature] = now
 		}
+	case j.Type == proto.CmdPing:
+		s.pingAnswered(j, res)
 	case j.Type == proto.CmdCoreUpdate && !res.OK:
 		// Do not retry a failed up/downgrade on our own.
 		a.DesiredCore = ""
@@ -393,79 +370,6 @@ func writeAPIError(w http.ResponseWriter, err error) {
 	http.Error(w, err.Error(), http.StatusBadRequest)
 }
 
-// ---- old method (agents before 0.3.0): pinned HTTPS + shared secret ----
-
-// legacyAgent authenticates a request of the old method.
-func (s *Server) legacyAgent(r *http.Request) string {
-	s.st.mu.Lock()
-	defer s.st.mu.Unlock()
-	if a := s.authAgent(r); a != nil {
-		return a.ID
-	}
-	return ""
-}
-
-func (s *Server) handleEnroll(w http.ResponseWriter, r *http.Request) {
-	var req proto.EnrollRequest
-	if !readJSON(w, r, &req, maxEnrollBody) {
-		return
-	}
-	resp, err := s.enrollCore(req, clientIP(r), "")
-	if err != nil {
-		writeAPIError(w, err)
-		return
-	}
-	writeJSON(w, resp)
-}
-
-func (s *Server) handlePoll(w http.ResponseWriter, r *http.Request) {
-	var req proto.PollRequest
-	if !readJSON(w, r, &req, maxPollBody) {
-		return
-	}
-	id := s.legacyAgent(r)
-	if id == "" {
-		http.Error(w, "unauthorized", http.StatusUnauthorized)
-		return
-	}
-	resp, err := s.pollCore(r.Context(), id, req)
-	if err != nil {
-		if r.Context().Err() == nil {
-			writeAPIError(w, err)
-		}
-		return
-	}
-	writeJSON(w, resp)
-}
-
-func (s *Server) handleOutput(w http.ResponseWriter, r *http.Request) {
-	var req proto.OutputBatch
-	if !readJSON(w, r, &req, 8<<20) {
-		return
-	}
-	id := s.legacyAgent(r)
-	if id == "" {
-		http.Error(w, "unauthorized", http.StatusUnauthorized)
-		return
-	}
-	s.outputCore(id, req)
-	w.WriteHeader(http.StatusNoContent)
-}
-
-func (s *Server) handleResult(w http.ResponseWriter, r *http.Request) {
-	var res proto.Result
-	if !readJSON(w, r, &res, 8<<20) {
-		return
-	}
-	id := s.legacyAgent(r)
-	if id == "" {
-		http.Error(w, "unauthorized", http.StatusUnauthorized)
-		return
-	}
-	s.resultCore(id, res, clientIP(r))
-	w.WriteHeader(http.StatusNoContent)
-}
-
 func (s *Server) serveArtifact(w http.ResponseWriter, r *http.Request, e *artifactEntry) {
 	if e == nil {
 		http.NotFound(w, r)
@@ -483,24 +387,9 @@ func (s *Server) serveArtifact(w http.ResponseWriter, r *http.Request, e *artifa
 	io.Copy(w, f)
 }
 
-func (s *Server) handleDownload(w http.ResponseWriter, r *http.Request) {
-	s.st.mu.Lock()
-	a := s.authAgent(r)
-	s.st.mu.Unlock()
-	if a == nil {
-		http.Error(w, "unauthorized", http.StatusUnauthorized)
-		return
-	}
-	if r.PathValue("kind") != "core" {
-		http.NotFound(w, r)
-		return
-	}
-	s.serveArtifact(w, r, s.repo.find("core", r.PathValue("version"), r.PathValue("os"), r.PathValue("arch")))
-}
-
 // handlePublicAgent serves the latest agent binary to the install script.
 // Binaries are not secret; integrity is enforced by the checksum embedded
-// in the (pinned-TLS) install script.
+// in the install script (whose own hash is in the install command).
 func (s *Server) handlePublicAgent(w http.ResponseWriter, r *http.Request) {
 	goos, arch, ok := strings.Cut(r.PathValue("plat"), "-")
 	if !ok {

@@ -10,7 +10,6 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
-	"log"
 	"net/http"
 	"strings"
 	"sync"
@@ -110,17 +109,6 @@ func (s *Server) handleSealed(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	ip := clientIP(r)
-	if env.Agent != "" {
-		s.st.mu.Lock()
-		if a := s.st.st.Agents[env.Agent]; a != nil && a.SecretHash != "" {
-			// First sealed request after the transition: the old shared
-			// secret is no longer accepted.
-			a.SecretHash = ""
-			s.st.markDirty()
-			s.audit.writeAgent("agent", ip, "agent.migrated", a, "now uses the payload key and its own key pair")
-		}
-		s.st.mu.Unlock()
-	}
 	var reply any = struct{}{}
 	switch msg.Op {
 	case "enroll":
@@ -175,37 +163,6 @@ func (s *Server) handleSealed(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, rep)
-}
-
-// handleMigrate is the one-time hand-over for an agent of the old method:
-// over its pinned HTTPS connection, authenticated with its shared secret,
-// it registers its own key and receives the master's payload keys. The
-// secret stays valid until the agent's first sealed request succeeds.
-func (s *Server) handleMigrate(w http.ResponseWriter, r *http.Request) {
-	var req struct {
-		AgentKey string `json:"agent_key"`
-	}
-	if !readJSON(w, r, &req, 4096) {
-		return
-	}
-	if _, err := seal.ParseAgentKey(req.AgentKey); err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
-		return
-	}
-	s.st.mu.Lock()
-	a := s.authAgent(r)
-	if a == nil {
-		s.st.mu.Unlock()
-		http.Error(w, "unauthorized", http.StatusUnauthorized)
-		return
-	}
-	a.AgentKey = req.AgentKey
-	s.st.markDirty()
-	name := a.Name
-	s.st.mu.Unlock()
-	log.Printf("agent %s: hand-over to the sealed method started", name)
-	keys := s.desiredPins()
-	writeJSON(w, map[string]any{"master_keys": keys})
 }
 
 // handlePublicCore serves any agent version in the store. Binaries are not

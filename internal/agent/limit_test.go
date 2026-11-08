@@ -46,7 +46,7 @@ func TestBusyRefusalIsReported(t *testing.T) {
 		w.WriteHeader(http.StatusNoContent)
 	}))
 	defer srv.Close()
-	a := &Agent{cl: &client{base: srv.URL, hc: srv.Client(), legacy: true}}
+	a := &Agent{cl: &client{base: srv.URL, hc: srv.Client(), plain: true}}
 	a.reject(context.Background(), proto.Command{ID: "j9"}, errBusy)
 	mu.Lock()
 	defer mu.Unlock()

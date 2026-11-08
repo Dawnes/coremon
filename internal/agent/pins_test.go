@@ -3,6 +3,7 @@ package agent
 import (
 	"crypto/ed25519"
 	"crypto/rand"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -52,16 +53,31 @@ func TestKeysOnlyChangeOverATrustedReply(t *testing.T) {
 }
 
 func TestConfigFormats(t *testing.T) {
-	old := Config{MasterURL: "https://m:8443/", MasterPin: "sha256//rIHN9u/4L8W8KmxvAw0rWrom4Xjgl+gCgVz6LHI73iw="}
-	if err := old.validate(); err != nil || old.sealed() || old.legacyPins()[0] == "" {
-		t.Fatalf("config from before 0.2.5: %v %+v", err, old)
+	dir := t.TempDir()
+	path := filepath.Join(dir, "agent.json")
+	// A config from before 0.3.0 (pinned HTTPS certificate) is refused.
+	os.WriteFile(path, []byte(`{"master_url":"https://m:8443","master_pins":["rIHN9u/4L8W8KmxvAw0rWrom4Xjgl+gCgVz6LHI73iw=",""]}`), 0o600)
+	var old Config
+	loadJSON(path, &old)
+	if err := old.validate(); err == nil || !strings.Contains(err.Error(), "new install command") {
+		t.Fatalf("config from before 0.3.0 must be refused, got %v", err)
 	}
-	newer := Config{MasterURL: "https://m:8443", MasterKeys: [2]string{payloadKey(t), ""}}
-	if err := newer.validate(); err != nil || !newer.sealed() {
+	// A sealed config with a left-over empty master_pins is cleaned up.
+	k := payloadKey(t)
+	os.WriteFile(path, []byte(`{"master_url":"https://m:8443","master_keys":["`+k+`",""],"master_pins":["",""]}`), 0o600)
+	var cfg Config
+	loadJSON(path, &cfg)
+	if err := cfg.validate(); err != nil || !cfg.sealed() {
 		t.Fatalf("sealed config: %v", err)
 	}
-	if err := (&Config{MasterURL: "https://m"}).validate(); err == nil {
-		t.Fatal("a config without any key must be refused")
+	if !hasOldFields(path) {
+		t.Fatal("old fields not detected")
+	}
+	a := &Agent{opt: Options{ConfigPath: path, StateDir: dir}, cfg: cfg}
+	a.cleanConfig()
+	b, _ := os.ReadFile(path)
+	if hasOldFields(path) || !strings.Contains(string(b), k) {
+		t.Fatalf("after clean-up: %s", b)
 	}
 }
 

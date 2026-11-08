@@ -118,14 +118,14 @@ func TestAgentReportLimits(t *testing.T) {
 		t.Errorf("features not limited: %d / %d", len(feats), len(feats[0].Actions))
 	}
 
-	// A heartbeat larger than the limit is refused outright.
+	// A request larger than the limit is refused outright.
 	pub, _ := keys(t)
 	s := testServer(t, pub, "http://127.0.0.1:1/none", "0.2.7")
-	big := `{"facts":{"hostname":"` + strings.Repeat("x", maxPollBody) + `"}}`
+	big := `{"agent":"` + strings.Repeat("x", maxSealedBody) + `"}`
 	w := httptest.NewRecorder()
-	s.handlePoll(w, httptest.NewRequest("POST", "/api/agent/poll", strings.NewReader(big)))
+	s.handleSealed(w, httptest.NewRequest("POST", "/api/agent/v5", strings.NewReader(big)))
 	if w.Code != 400 {
-		t.Errorf("oversized heartbeat: %d, want 400", w.Code)
+		t.Errorf("oversized request: %d, want 400", w.Code)
 	}
 }
 

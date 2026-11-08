@@ -52,6 +52,7 @@ const ICONS = {
   chev: '<path d="m6 9 6 6 6-6"/>',
   folder: '<path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7Z"/>',
   clock: '<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>',
+  pulse: '<path d="M3 12h4l3-8 4 16 3-8h4"/>',
 };
 const icon = (n) => raw(`<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">${ICONS[n] || ''}</svg>`);
 
@@ -160,6 +161,8 @@ function jobTitle(j) {
     case 'core.update': return `agent → ${j.artifact ? j.artifact.version : '?'}`;
     case 'agent.uninstall': return 'uninstall agent';
     case 'agent.mode': return /"report_only":true/.test(JSON.stringify(j.params)) ? 'report only' : 'allow changes';
+    case 'agent.ping': return 'ping';
+    case 'agent.pins': return 'master keys';
     default: return j.type + (j.action ? ' · ' + j.action : '');
   }
 }
@@ -508,9 +511,11 @@ function Dashboard() {
     if (a.status === 'pending') {
       mid = html`<div class="mid"><div><div class="biglbl">Waiting for approval</div><div class="dim small">enrolled ${when(a.enrolled_at)}</div></div>
         <div class="badges">${ifChange(html`<button class="btn primary sm" data-act="approve" data-id="${a.id}">${icon('check')} Approve</button>`)}</div></div>`;
+    } else if (a.legacy) {
+      mid = html`<div class="mid"><div class="big dim">—</div><div class="biglbl">agent ${a.core_version} is too old<br>to connect</div>
+        <div class="badges"><span class="small dim">run a new install command</span></div></div>`;
     } else if (!hasUpdates(a) && a.online) {
-      mid = html`<div class="mid"><div class="big dim">—</div><div class="biglbl">${a.legacy ? html`agent too old for<br>built-in updates` : 'no update function'}</div>
-        <div class="badges">${a.legacy ? html`<a class="small" href="#/releases">update the agent in Releases</a>` : ''}</div></div>`;
+      mid = html`<div class="mid"><div class="big dim">—</div><div class="biglbl">no update function</div><div class="badges"></div></div>`;
     } else if (!u) {
       mid = html`<div class="mid"><div class="big dim">—</div><div class="biglbl">${a.status === 'report_only' ? html`no checks<br>(report only)` : html`waiting for<br>first check`}</div><div class="badges">${updBadges(a)}</div></div>`;
     } else {
@@ -745,6 +750,49 @@ function Dashboard() {
   };
 }
 
+// ---------- Ping ----------
+const canPing = (a) => !!a.core_version && !versionLess(a.core_version, '0.3.1');
+const shortKey = (p) => (p ? `${p.slice(0, 6)}…${p.slice(-6)}` : '');
+function clockText(ms) {
+  const s = Math.abs(ms) / 1000;
+  if (s < 2) return html`<span class="badge ok">${icon('check')} in sync</span>`;
+  const t = s < 120 ? `${s.toFixed(0)} s` : `${(s / 60).toFixed(0)} min`;
+  const cls = s >= 300 ? 'sec' : s >= 30 ? 'upd' : 'mute';
+  return html`<span class="badge ${cls}">agent is ${t} ${ms > 0 ? 'ahead' : 'behind'}</span>${s >= 300 ? html`<div class="small dim">More than 10 minutes apart and the agent's messages are refused.</div>` : ''}`;
+}
+async function pingModal(a) {
+  let open = true;
+  openModal(html`<h3>Ping ${a.name}</h3><div class="row muted" style="margin-top:12px"><span class="spin"></span>Waiting for the agent (up to 15 s)…</div>
+    <div class="actions"><button class="btn ghost" data-act="close">Close</button></div>`, { acts: { close: () => closeModal() }, onClose: () => { open = false; } });
+  let p;
+  try {
+    p = await POST(`agents/${a.id}/ping`);
+  } catch (e) {
+    if (open) closeModal();
+    fail(e);
+    return;
+  }
+  if (!open) return;
+  const row = (k, v) => html`<tr><td class="dim" style="padding:6px 16px 6px 0;white-space:nowrap">${k}</td><td style="padding:6px 0">${v}</td></tr>`;
+  let body;
+  if (p.answered && !p.error) {
+    body = html`<div class="notice green" style="margin:12px 0">${icon('check')} <b>The agent answered in ${p.rtt_ms} ms.</b> Network and keys work.</div>
+      <table>${row('Agent', p.version)}
+      ${row('Connection key', html`<span class="mono small">${shortKey(p.key_used)}</span> ${p.key_current ? html`<span class="badge ok">current</span>` : html`<span class="badge upd">not the current key</span>`}`)}
+      ${row('Key slots', html`<span class="mono small">${shortKey(p.slots[0]) || 'empty'} · ${shortKey(p.slots[1]) || 'empty'}</span> ${p.slots_ok ? html`<span class="badge ok">as expected</span>` : html`<span class="badge upd">being updated</span>`}`)}
+      ${row('Clock', clockText(p.clock_ms))}</table>`;
+  } else if (p.answered) {
+    body = html`<div class="notice red" style="margin:12px 0">The agent answered with an error: ${p.error}</div>`;
+  } else {
+    body = html`<div class="notice red" style="margin:12px 0"><b>No answer within 15 s.</b></div>
+      <table>${row('Status', p.online ? 'online (it was heard from recently)' : 'offline')}${row('Last contact', when(p.last_seen))}</table>
+      <div class="small dim" style="margin-top:10px">Check that the system is running, can reach this master on the agent port, and that its clock is right.</div>`;
+  }
+  openModal(html`<h3>Ping ${a.name}</h3>${body}
+    <div class="actions"><button class="btn ghost" data-act="job">Show job</button><button class="btn primary" data-act="close" autofocus>Close</button></div>`,
+  { acts: { close: () => closeModal(), job: () => { closeModal(); openJob(p.job_id); } } });
+}
+
 // ---------- Agent page ----------
 function AgentPage([id]) {
   const st = { tab: 'updates', sel: new Set(), data: null };
@@ -760,6 +808,8 @@ function AgentPage([id]) {
           <div class="sub">${osLabel(f)} · ${f.kernel || ''} · ${f.arch} · ${f.virt} · ${a.online ? 'online, up ' + dur(f.uptime_sec) : raw('offline, last seen ' + r(when(a.last_seen)))}</div></div>
         <span class="spacer"></span>
         ${a.busy ? html`<span class="row muted"><span class="spin"></span>${a.busy} job(s) active</span>` : ''}
+        ${!a.removing ? html`<button class="btn sm" data-act="ping" ${canPing(a) ? '' : 'disabled'}
+          title="${canPing(a) ? 'Check the connection and keys with the agent now; nothing is done on the system' : `Agent ${a.core_version || '?'} cannot answer a ping; update the agent first`}">${icon('pulse')} Ping</button>` : ''}
         ${a.status === 'active' && canChange() ? html`<button class="btn warn sm" data-act="reboot" ${a.online && canReboot(a) ? '' : 'disabled'}
           title="${canReboot(a) ? (a.online ? 'Reboot this system' : 'The system is offline') : `Agent ${a.core_version} cannot reboot; update the agent first`}">${icon('refresh')} Reboot</button>` : ''}
         ${a.status === 'active' && canChange() ? html`<button class="btn sm" data-act="report-only">${icon('pause')} Report only</button>` : ''}
@@ -905,6 +955,7 @@ function AgentPage([id]) {
         if (!(await confirmBox(`Allow changes on ${a().name}?`, 'Update checks, installs and reboots become possible again, and the automatic update check resumes.', { okText: 'Allow changes' }))) return;
         await POST('agents/' + id, { report_only: false }); toast('Changes allowed', 'ok'); refresh();
       },
+      ping: () => pingModal(a()),
       reboot: async () => {
         const ag = a();
         const body = html`The system restarts within a few seconds and shows offline until it is back.
@@ -1396,8 +1447,7 @@ function SettingsIdentity() {
     return html`<span class="mono small" title="sha256//${p}">${short(p)}</span> ${lbl}`;
   }
   function status(a, d) {
-    if (a.migrating) return html`<span class="badge info">handing over to the payload key…</span>`;
-    if (!a.sealed) return html`<span class="badge upd" title="Trusts the HTTPS certificate (old method)">agent ${a.core_version || '?'}: old method — update the agent</span>`;
+    if (!a.sealed) return html`<span class="badge sec" title="Agents before 0.3.0 can no longer connect">agent ${a.core_version || '?'}: old method — run a new install command</span>`;
     if (!a.reported_at) return html`<span class="dim">not reported yet</span>`;
     const known = (p) => !p || p === d.current || p === d.next;
     if (!known(a.slots[0]) || !known(a.slots[1])) return html`<span class="badge sec">trusts an unknown key</span>`;

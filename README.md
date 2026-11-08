@@ -7,7 +7,7 @@ reboots highlighted); you pick packages and install them on demand. Nothing is
 ever upgraded automatically.
 
 ```
- GitHub ── signed versions.json ──► Master (LXC) ◄──HTTPS (pinned)── coremon-agent
+ GitHub ── signed versions.json ──► Master (LXC) ◄──HTTPS (sealed)── coremon-agent
  (CI builds + signs on tag)         web UI, version store             (each system, all functions built in)
 ```
 
@@ -51,7 +51,7 @@ the latest, **orange** otherwise.
 | Master's trust anchor | `/etc/coremon-master/signing.pub`, root-owned, written by the installer. The master service runs unprivileged and cannot change it. |
 | Master self-update | The unprivileged master can only *request* an update; a root systemd unit verifies the signature against the root-owned key and refuses anything not newer. |
 | Agent ↔ master | HTTPS only carries the traffic (self-signed; agents do not rely on it). Every message is encrypted end to end and signed with the master's **payload key** (ed25519 + X25519, AES-256-GCM), which agents trust in two key slots; replies are bound to their request (no replay). The install command carries the sha256 of the install script, which carries the payload key and the agent's checksum. |
-| Agent identity | Single-use enrollment token; each agent then has its **own key pair** and signs every request — no shared secret on the wire. New systems stay **pending** until approved. Agents before 0.3.0 (pinned HTTPS + shared secret) hand over automatically when updated. |
+| Agent identity | Single-use enrollment token; each agent then has its **own key pair** and signs every request — no shared secret on the wire. New systems stay **pending** until approved. Agents before 0.3.0 (pinned HTTPS + shared secret) are no longer supported: run a new install command on such a system. |
 | What agents can do | Fixed actions only; package names validated; no arbitrary shell. |
 | UI | User accounts with roles (Administrator, Read-only) checked by the master on every request; PBKDF2 passwords (min. 5 characters), HttpOnly/Secure/SameSite=Strict session, anti-CSRF header, login rate limiting, strict CSP, audit log per user. Read-only users cannot see enrollment tokens. |
 
@@ -122,7 +122,12 @@ The master needs outbound HTTPS to `github.com` and
   headers to arrange; fold groups; select a whole group). Filters for updates,
   security, reboot, offline, pending and outdated agents; bulk *Check now*,
   *Upgrade all packages* and *Agent → latest*.
-* **System page** (for operating a system) — *Reboot* and *Pause*.
+* **System page** (for operating a system) — *Ping*, *Reboot* and *Report only*.
+  *Ping* (every user, agents 0.3.1+) asks the agent to answer at once without
+  doing anything: it shows the round trip, the agent version, which payload
+  key the connection used, the agent's key slots and its clock difference —
+  or, without an answer within 15 s, the last contact. Pings are listed under
+  Jobs, not in the audit log.
   *Updates*: select packages (or *Security only*) and *Install selected*, or
   *Upgrade all*; output streams live. *Agent*: install any of the 3 kept agent
   versions. *System*: host facts.
@@ -187,7 +192,7 @@ actions `Mutating`.
 | Upgrade master by hand | re-run the `install-master.sh` one-liner |
 | Reset a password | `systemctl stop coremon-master && sudo -u coremon coremon-master reset-password -user admin && systemctl start coremon-master` (creates the user as administrator if it does not exist) |
 | Back up the master | `/var/lib/coremon-master` and `/etc/coremon-master` |
-| Reverse proxy | add `-http 127.0.0.1:8080` to the master's `ExecStart` (loopback-only plain HTTP for a local proxy); agents keep using the pinned HTTPS port |
+| Reverse proxy | add `-http 127.0.0.1:8080` to the master's `ExecStart` (loopback-only plain HTTP for a local proxy); agents keep using the agent port |
 
 **Payload key rotation** (Settings → Identity, agents 0.3.0+): *Generate new
 key* — every agent receives it in a message signed with the current key and

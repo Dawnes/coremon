@@ -33,9 +33,10 @@ var ghRepoRe = regexp.MustCompile(`^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})/[A-Za-z0-9
 
 const (
 	indexEvery = 6 * time.Hour
-	// minAgentVersion: older agents use separate modules (protocol 1) and
-	// are no longer offered.
-	minAgentVersion = "0.2.0"
+	// minAgentVersion: older agents use the old connection method (pinned
+	// HTTPS, shared secret), which this master no longer serves; they are
+	// not offered or kept.
+	minAgentVersion = "0.3.0"
 )
 
 type indexVersion struct {

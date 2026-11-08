@@ -123,13 +123,7 @@ func Run(ctx context.Context, opt Options) (int, error) {
 		return 1, fmt.Errorf("agent key: %w", err)
 	}
 	a.agentKey = key
-	if !a.cfg.sealed() {
-		// Config from before 0.3.0: hand over to the payload key once,
-		// over the old pinned connection.
-		if err := a.handOver(ctx); err != nil {
-			return 1, err
-		}
-	}
+	a.cleanConfig()
 	a.cl = newSealedClient(a.cfg.MasterURL, a.cfg.MasterKeys, key)
 
 	if err := a.ensureEnrolled(ctx); err != nil {
@@ -270,12 +264,12 @@ func (a *Agent) pollLoop(ctx context.Context) {
 		// right after "allow changes" is not refused (and one sent after
 		// "report only" is).
 		for _, c := range resp.Commands {
-			if (c.Type == proto.CmdSetMode || c.Type == proto.CmdSetPins) && a.claim(c.ID) {
+			if immediate(c.Type) && a.claim(c.ID) {
 				a.execute(ctx, c)
 			}
 		}
 		for _, c := range resp.Commands {
-			if c.Type == proto.CmdSetMode || c.Type == proto.CmdSetPins {
+			if immediate(c.Type) {
 				continue
 			}
 			switch a.claimLimited(c.ID) {
@@ -286,6 +280,13 @@ func (a *Agent) pollLoop(ctx context.Context) {
 			}
 		}
 	}
+}
+
+// immediate commands are small and handled in order before the others,
+// outside the running-command limit: mode and key changes (so later
+// commands in the same reply see them) and ping.
+func immediate(t string) bool {
+	return t == proto.CmdSetMode || t == proto.CmdSetPins || t == proto.CmdPing
 }
 
 // claim marks a command as running; false if it already is.
@@ -386,6 +387,10 @@ func (a *Agent) execute(ctx context.Context, c proto.Command) {
 			break
 		}
 		data, err = a.callFeature(ctx, c, timeout)
+	case proto.CmdPing:
+		// Answer at once; nothing is done on the system.
+		keys, used := a.cl.getPins()
+		data, _ = json.Marshal(proto.PingReply{TimeMs: time.Now().UnixMilli(), Version: a.opt.Version, KeyUsed: used, Keys: keys})
 	case proto.CmdSetPins:
 		var p proto.PinParams
 		if err = json.Unmarshal(c.Params, &p); err == nil {

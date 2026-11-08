@@ -44,7 +44,7 @@ func runAgent(t *testing.T, cfg map[string]any, identity map[string]string) (dir
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
 	go func() {
-		agent.Run(ctx, agent.Options{ConfigPath: filepath.Join(dir, "agent.json"), StateDir: dir, Version: "0.3.0"})
+		agent.Run(ctx, agent.Options{ConfigPath: filepath.Join(dir, "agent.json"), StateDir: dir, Version: "0.3.1"})
 		close(done)
 	}()
 	return dir, func() { cancel(); <-done }
@@ -76,7 +76,7 @@ func TestSealedAgentLifecycle(t *testing.T) {
 		s.st.mu.Lock()
 		defer s.st.mu.Unlock()
 		for id, a := range s.st.st.Agents {
-			if a.Protocol >= 5 && a.AgentKey != "" && a.SecretHash == "" {
+			if a.Protocol >= 5 && a.AgentKey != "" {
 				newID = id
 				return true
 			}
@@ -84,40 +84,62 @@ func TestSealedAgentLifecycle(t *testing.T) {
 		return false
 	})
 
-	// 2. An agent of the old method hands over: it trusts the HTTPS key
-	//    and has a shared secret; afterwards it uses the payload key and the
-	//    secret is retired.
-	s.st.mu.Lock()
-	s.st.st.Agents["a_old"] = &Agent{ID: "a_old", Name: "old", Status: StatusActive, SecretHash: sha256hex("s3cret"), LastSeen: time.Now().Unix(),
-		State: map[string]json.RawMessage{}, StateAt: map[string]int64{}}
-	s.st.mu.Unlock()
-	oldDir, stopOld := runAgent(t, map[string]any{"master_url": url, "master_pins": []string{s.currentPin(), ""}},
-		map[string]string{"agent_id": "a_old", "secret": "s3cret", "signing_key": s.signingKeyB64})
-	defer stopOld()
-	waitFor(t, "hand-over of the old agent", 30*time.Second, func() bool {
+	// 2. Ping: answered at once, also while pending and in report only.
+	ping := func() pingResult {
+		t.Helper()
+		r := httptest.NewRequest("POST", "/api/ui/agents/"+newID+"/ping", nil)
+		r.SetPathValue("id", newID)
+		w := httptest.NewRecorder()
+		s.handlePing(w, r)
+		var p pingResult
+		if w.Code != 200 || json.Unmarshal(w.Body.Bytes(), &p) != nil {
+			t.Fatalf("ping: %d %s", w.Code, w.Body)
+		}
+		return p
+	}
+	waitFor(t, "agent version reported", 10*time.Second, func() bool {
 		s.st.mu.Lock()
 		defer s.st.mu.Unlock()
-		a := s.st.st.Agents["a_old"]
-		return a.Protocol >= 5 && a.AgentKey != "" && a.SecretHash == ""
+		return s.st.st.Agents[newID].CoreVersion == "0.3.1"
 	})
-	var cfg struct {
-		MasterKeys [2]string `json:"master_keys"`
-		MasterPins [2]string `json:"master_pins"`
+	for _, status := range []string{StatusPending, StatusReportOnly} {
+		s.st.mu.Lock()
+		s.st.st.Agents[newID].Status = status
+		s.st.mu.Unlock()
+		p := ping()
+		if !p.Answered || p.Version != "0.3.1" || !p.KeyCurrent || !p.SlotsOK || p.ClockMs > 5000 || p.ClockMs < -5000 {
+			t.Fatalf("ping while %s: %+v", status, p)
+		}
 	}
-	b, _ := os.ReadFile(filepath.Join(oldDir, "agent.json"))
-	json.Unmarshal(b, &cfg)
-	if cfg.MasterKeys != s.desiredPins() || cfg.MasterPins != [2]string{} {
-		t.Fatalf("old agent config after hand-over: %s", b)
-	}
-	// The retired secret no longer works with the old method.
-	req, _ := http.NewRequest("POST", url+"/api/agent/poll", strings.NewReader(`{}`))
-	req.Header.Set("Authorization", "Bearer a_old:s3cret")
-	hc := &http.Client{Transport: &http.Transport{TLSClientConfig: &tls.Config{InsecureSkipVerify: true}}}
-	if resp, err := hc.Do(req); err != nil || resp.StatusCode != 401 {
-		t.Fatalf("old secret after hand-over: %v %v", err, resp.StatusCode)
+	s.st.mu.Lock()
+	s.st.st.Agents[newID].Status = StatusActive
+	s.st.mu.Unlock()
+	jobID := ping().JobID
+	s.st.mu.Lock()
+	j := s.st.jobByID(jobID)
+	ok := j != nil && j.Status == JobSuccess && j.Type == proto.CmdPing
+	s.st.mu.Unlock()
+	if !ok {
+		t.Fatalf("ping job: %+v", j)
 	}
 
-	// 3. Key rotation with both agents running.
+	// The old method's endpoints are gone.
+	hc := &http.Client{Transport: &http.Transport{TLSClientConfig: &tls.Config{InsecureSkipVerify: true}}}
+	for _, p := range []string{"/api/agent/poll", "/api/agent/enroll", "/api/agent/migrate"} {
+		resp, err := hc.Post(url+p, "application/json", strings.NewReader(`{}`))
+		if err != nil || resp.StatusCode == 200 || resp.StatusCode == 204 {
+			t.Fatalf("%s still answers: %v", p, err)
+		}
+		resp.Body.Close()
+	}
+	// An agent with a config from before 0.3.0 refuses to start.
+	odir := t.TempDir()
+	os.WriteFile(filepath.Join(odir, "agent.json"), []byte(`{"master_url":"`+url+`","master_pins":["`+s.currentPin()+`",""]}`), 0o600)
+	if _, err := agent.Run(context.Background(), agent.Options{ConfigPath: filepath.Join(odir, "agent.json"), StateDir: odir, Version: "0.3.1"}); err == nil || !strings.Contains(err.Error(), "install command") {
+		t.Fatalf("old config: %v", err)
+	}
+
+	// 3. Key rotation with the agent running.
 	if err := s.generateKey(); err != nil {
 		t.Fatal(err)
 	}
