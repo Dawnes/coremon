@@ -94,6 +94,9 @@ func (s *Server) enqueue(a *Agent, j *Job) *Job {
 //     changes, mode changes and uninstall are fine
 //   - active: everything
 func jobAllowed(a *Agent, j *Job) bool {
+	if j.Type == proto.CmdSetPins {
+		return true // which master keys to trust: every status, even pending
+	}
 	switch a.Status {
 	case StatusActive:
 		return true
@@ -233,7 +236,12 @@ func (s *Server) handlePoll(w http.ResponseWriter, r *http.Request) {
 		a.DesiredCore = ""
 	}
 	a.ReportOnly = req.ReportOnly
+	if a.Protocol >= 4 {
+		a.Pins = [2]string{clip(req.Pins[0], 64), clip(req.Pins[1], 64)}
+		a.PinsAt = now
+	}
 	s.syncMode(a, "scheduler") // the master's decision wins; sent in this same reply
+	s.syncPins(a, "scheduler")
 	// Commands the agent no longer runs but never reported: lost (e.g. the
 	// agent restarted mid-command).
 	running := map[string]bool{}
@@ -507,7 +515,13 @@ func (s *Server) schedulerTick() {
 	interval := int64(s.st.st.Settings.CheckIntervalHours) * 3600
 
 	for _, a := range s.st.st.Agents {
-		if a.Status == StatusPending || a.Removing || !s.online(a, nowU) {
+		if a.Removing || !s.online(a, nowU) {
+			continue
+		}
+		if !s.recentFailure(a.ID, proto.CmdSetPins, "", 2*time.Minute) {
+			s.syncPins(a, "scheduler")
+		}
+		if a.Status == StatusPending {
 			continue
 		}
 		// Requested agent version (set while the agent was offline).

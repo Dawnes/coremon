@@ -3,16 +3,42 @@ package agent
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 )
 
 // Config is written by the installer (/etc/coremon/agent.json).
 type Config struct {
 	MasterURL string `json:"master_url"` // https://host:8443
-	MasterPin string `json:"master_pin"` // base64 sha256 of the master's SPKI
-	Token     string `json:"token,omitempty"`
+	// MasterPins are the two key slots: base64 sha256 of a master SPKI the
+	// agent trusts ("" = empty slot). Two slots allow a key rotation: the
+	// new key is added while connected with the old one.
+	MasterPins [2]string `json:"master_pins"`
+	MasterPin  string    `json:"master_pin,omitempty"` // before 0.2.5: one key
+	Token      string    `json:"token,omitempty"`
+}
+
+var pinRe = regexp.MustCompile(`^[A-Za-z0-9+/]{43}=$`) // base64 of 32 bytes
+
+func cleanPin(p string) string { return strings.TrimPrefix(strings.TrimSpace(p), "sha256//") }
+
+// validPins checks a slot pair: at least one key, every key well-formed.
+func validPins(p [2]string) error {
+	if p[0] == "" && p[1] == "" {
+		return errors.New("no master key")
+	}
+	for _, k := range p {
+		if k != "" && !pinRe.MatchString(k) {
+			return fmt.Errorf("invalid master key fingerprint %q", k)
+		}
+	}
+	if p[0] != "" && p[0] == p[1] {
+		return errors.New("both slots hold the same key")
+	}
+	return nil
 }
 
 // Identity is created at enrollment (/var/lib/coremon/identity.json).
@@ -50,9 +76,10 @@ func (c *Config) validate() error {
 		return errors.New("master_url must start with https://")
 	}
 	c.MasterURL = strings.TrimRight(c.MasterURL, "/")
-	c.MasterPin = strings.TrimPrefix(strings.TrimSpace(c.MasterPin), "sha256//")
-	if c.MasterPin == "" {
-		return errors.New("master_pin is required")
+	c.MasterPins[0], c.MasterPins[1] = cleanPin(c.MasterPins[0]), cleanPin(c.MasterPins[1])
+	if old := cleanPin(c.MasterPin); old != "" && c.MasterPins[0] == "" && c.MasterPins[1] == "" {
+		c.MasterPins[0] = old // config from before 0.2.5
 	}
-	return nil
+	c.MasterPin = ""
+	return validPins(c.MasterPins)
 }

@@ -49,8 +49,8 @@ type Server struct {
 	repo          *repo
 	sess          *sessions
 	audit         *auditLog
-	pin           string
-	cert          tls.Certificate
+	keyMu         sync.Mutex
+	keys          keyState // TLS keys: current and, during a rotation, next
 	signingKeyB64 string
 	wakes         map[string]chan struct{} // guarded by st.mu
 	idx           *indexSync
@@ -139,8 +139,8 @@ func (s *Server) applyUIPort(handler http.Handler) {
 		return
 	}
 	srv := &http.Server{Handler: handler, ReadHeaderTimeout: 10 * time.Second, ReadTimeout: readTimeout, IdleTimeout: 120 * time.Second,
-		TLSConfig: &tls.Config{MinVersion: tls.VersionTLS12, Certificates: []tls.Certificate{s.cert}},
-		ErrorLog:  log.New(os.Stderr, "http: ", 0)}
+		TLSConfig: &tls.Config{MinVersion: tls.VersionTLS12, GetCertificate: s.currentCert}, ConnState: s.trackConn,
+		ErrorLog: log.New(os.Stderr, "http: ", 0)}
 	s.uiSrv, s.uiErr = srv, ""
 	go func() {
 		if err := srv.ServeTLS(ln, "", ""); err != nil && !errors.Is(err, http.ErrServerClosed) {
@@ -175,7 +175,7 @@ func New(cfg Config) (*Server, error) {
 	if err != nil {
 		return nil, fmt.Errorf("tls: %w", err)
 	}
-	s := &Server{cfg: cfg, st: st, sess: newSessions(), cert: cert, pin: pin,
+	s := &Server{cfg: cfg, st: st, sess: newSessions(), keys: keyState{cert: &cert, pin: pin, conns: map[net.Conn]struct{}{}},
 		audit: &auditLog{path: filepath.Join(cfg.DataDir, "audit.jsonl")}, wakes: map[string]chan struct{}{}}
 
 	// Release signing public key. In production it lives in a root-owned
@@ -196,6 +196,7 @@ func New(cfg Config) (*Server, error) {
 	} else {
 		log.Printf("WARNING: no signing key at %s - no releases can be verified", pubPath)
 	}
+	s.loadNextKey() // a rotation in progress survives a restart
 	s.cleanupLegacy()
 	s.repo.scan()
 	s.idx = newIndexSync()
@@ -294,6 +295,8 @@ func (s *Server) routes() http.Handler {
 	change("POST /api/ui/layout", s.handleLayout)
 	view("GET /api/ui/retention", s.handleRetentionPreview)
 	view("GET /api/ui/settings", s.handleSettingsGet)
+	view("GET /api/ui/identity", s.handleIdentity)
+	change("POST /api/ui/identity/{action}", s.handleIdentityAction)
 	change("POST /api/ui/settings", s.handleSettingsSave)
 	view("GET /api/ui/audit", s.handleAudit)
 	view("GET /api/ui/releases", s.handleReleases)
@@ -331,7 +334,8 @@ func (s *Server) Run(ctx context.Context) error {
 		ReadHeaderTimeout: 10 * time.Second,
 		ReadTimeout:       readTimeout,
 		IdleTimeout:       120 * time.Second,
-		TLSConfig:         &tls.Config{MinVersion: tls.VersionTLS12, Certificates: []tls.Certificate{s.cert}},
+		TLSConfig:         &tls.Config{MinVersion: tls.VersionTLS12, GetCertificate: s.currentCert},
+		ConnState:         s.trackConn,
 		ErrorLog:          log.New(os.Stderr, "http: ", 0),
 	}
 	errc := make(chan error, 2)
@@ -348,7 +352,7 @@ func (s *Server) Run(ctx context.Context) error {
 		log.Printf("plain HTTP UI on http://%s (loopback only, for a local reverse proxy)", s.cfg.HTTPListen)
 	}
 	log.Printf("coremon master %s listening on https://%s", s.cfg.Version, s.cfg.Listen)
-	log.Printf("agent pin: sha256//%s", s.pin)
+	log.Printf("agent pin: sha256//%s", s.currentPin())
 	var err error
 	select {
 	case <-ctx.Done():

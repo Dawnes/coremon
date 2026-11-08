@@ -189,8 +189,17 @@ actions `Mutating`.
 | Back up the master | `/var/lib/coremon-master` and `/etc/coremon-master` |
 | Reverse proxy | add `-http 127.0.0.1:8080` to the master's `ExecStart` (loopback-only plain HTTP for a local proxy); agents keep using the pinned HTTPS port |
 
-If the master's TLS key is lost, agents reject the new one by design and must
-be reinstalled.
+**Master key rotation** (Settings → Identity, agents 0.2.5+): *Generate new
+key* — every agent receives it over its connection verified with the current
+key and stores it in its second key slot; the page shows both slots of every
+system. *Switch to new key* — the master uses the new key, agents reconnect
+with it and drop the old one. If systems are missing the new key, the switch
+warns (default: don't switch). *Cancel* discards the new key.
+
+If the master's TLS key is ever lost, agents reject the new one by design.
+Run a new install command on each system: it updates the stored master
+address and keys (keeping the registration, or registering again if the
+master no longer knows the system).
 
 ## Development
 

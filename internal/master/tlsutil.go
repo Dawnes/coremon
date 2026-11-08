@@ -17,15 +17,29 @@ import (
 	"time"
 )
 
+// Key files: the current key, and during a rotation the next one.
+func certPaths(dir, slot string) (crt, key string) {
+	if slot == "next" {
+		return filepath.Join(dir, "tls-next.crt"), filepath.Join(dir, "tls-next.key")
+	}
+	return filepath.Join(dir, "tls.crt"), filepath.Join(dir, "tls.key")
+}
+
 // loadOrCreateCert returns the master's TLS certificate, creating a
 // self-signed one on first start. Agents pin its public key.
 func loadOrCreateCert(dir string, extraSANs []string) (tls.Certificate, string, error) {
-	certPath, keyPath := filepath.Join(dir, "tls.crt"), filepath.Join(dir, "tls.key")
+	certPath, keyPath := certPaths(dir, "current")
 	if _, err := os.Stat(certPath); os.IsNotExist(err) {
 		if err := createCert(certPath, keyPath, extraSANs); err != nil {
 			return tls.Certificate{}, "", err
 		}
 	}
+	return loadCert(certPath, keyPath)
+}
+
+// loadCert loads a key pair and returns it with its pin (base64 sha256 of
+// the public key).
+func loadCert(certPath, keyPath string) (tls.Certificate, string, error) {
 	cert, err := tls.LoadX509KeyPair(certPath, keyPath)
 	if err != nil {
 		return tls.Certificate{}, "", err

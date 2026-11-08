@@ -114,7 +114,7 @@ func Run(ctx context.Context, opt Options) (int, error) {
 	if a.mode.ReportOnly {
 		log.Printf("starting in report-only mode")
 	}
-	a.cl = newClient(a.cfg.MasterURL, a.cfg.MasterPin)
+	a.cl = newClient(a.cfg.MasterURL, a.cfg.MasterPins)
 
 	if err := a.ensureEnrolled(ctx); err != nil {
 		return 1, err
@@ -157,10 +157,7 @@ func (a *Agent) ensureEnrolled(ctx context.Context) error {
 				return fmt.Errorf("save identity: %w", err)
 			}
 			// The token is single-use; drop it from the config.
-			a.cfg.Token = ""
-			if err := saveJSON(a.opt.ConfigPath, a.cfg, 0o600); err != nil {
-				log.Printf("warning: could not remove token from config: %v", err)
-			}
+			a.dropToken()
 			log.Printf("enrolled as %s; waiting for approval in the master UI", a.id.AgentID)
 			return nil
 		}
@@ -199,6 +196,7 @@ func (a *Agent) pollLoop(ctx context.Context) {
 			Features:    a.infos,
 			Running:     a.runningIDs(),
 			ReportOnly:  a.reportOnly(),
+			Pins:        pinsNow(a.cl),
 		}, &resp, timeout)
 		if err != nil {
 			if ctx.Err() != nil {
@@ -207,6 +205,16 @@ func (a *Agent) pollLoop(ctx context.Context) {
 			wait := backoff
 			var he *httpError
 			if errors.As(err, &he) && (he.Status == 401 || he.Status == 403) {
+				if a.tokenPending() {
+					// The master no longer knows this system (e.g. a new
+					// master) and a fresh install command left a token:
+					// register again.
+					log.Printf("master does not know this agent (%d); enrolling again with the new token", he.Status)
+					if err := a.reenroll(ctx); err == nil {
+						backoff = 2 * time.Second
+						continue
+					}
+				}
 				wait = 5 * time.Minute
 				log.Printf("master rejected this agent (%d): revoked or removed; retrying in %s", he.Status, wait)
 			} else {
@@ -226,16 +234,21 @@ func (a *Agent) pollLoop(ctx context.Context) {
 		if resp.Heartbeat >= 5 && resp.Heartbeat <= 600 {
 			a.heartbeat = resp.Heartbeat
 		}
+		if a.tokenPending() {
+			// The master still knows this system: the token from a repeated
+			// install command is not needed.
+			a.dropToken()
+		}
 		// Mode changes are applied first and in order, so an action sent
 		// right after "allow changes" is not refused (and one sent after
 		// "report only" is).
 		for _, c := range resp.Commands {
-			if c.Type == proto.CmdSetMode && a.claim(c.ID) {
+			if (c.Type == proto.CmdSetMode || c.Type == proto.CmdSetPins) && a.claim(c.ID) {
 				a.execute(ctx, c)
 			}
 		}
 		for _, c := range resp.Commands {
-			if c.Type == proto.CmdSetMode {
+			if c.Type == proto.CmdSetMode || c.Type == proto.CmdSetPins {
 				continue
 			}
 			switch a.claimLimited(c.ID) {
@@ -346,6 +359,15 @@ func (a *Agent) execute(ctx context.Context, c proto.Command) {
 			break
 		}
 		data, err = a.callFeature(ctx, c, timeout)
+	case proto.CmdSetPins:
+		var p proto.PinParams
+		if err = json.Unmarshal(c.Params, &p); err == nil {
+			err = a.setPins(p.Pins)
+		}
+		if err == nil {
+			data, _ = json.Marshal(p)
+			logf("master keys: slot 1 %s, slot 2 %s", shortPin(p.Pins[0]), shortPin(p.Pins[1]))
+		}
 	case proto.CmdSetMode:
 		var p proto.ModeParams
 		if err = json.Unmarshal(c.Params, &p); err == nil {

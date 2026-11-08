@@ -16,6 +16,7 @@ set -eu
 
 MASTER='{{.URL}}'
 PIN='{{.Pin}}'
+NEXT='{{.Next}}'
 SHA_AMD64='{{.SHAAmd64}}'
 SHA_ARM64='{{.SHAArm64}}'
 TOKEN=""
@@ -34,7 +35,9 @@ command -v systemctl >/dev/null 2>&1 || die "systemd is required"
 command -v curl >/dev/null 2>&1 || die "curl is required (apt-get install -y curl)"
 command -v sha256sum >/dev/null 2>&1 || die "sha256sum is required"
 
-case "$TOKEN" in ""|*[!a-f0-9]*) [ -f /var/lib/coremon/identity.json ] || die "a valid --token is required" ;; esac
+ENROLLED=0
+[ -f /var/lib/coremon/identity.json ] && ENROLLED=1
+case "$TOKEN" in ""|*[!a-f0-9]*) [ "$ENROLLED" = 1 ] || die "a valid --token is required"; TOKEN="" ;; esac
 
 case "$(uname -m)" in
   x86_64|amd64) ARCH=amd64; SHA="$SHA_AMD64" ;;
@@ -53,18 +56,21 @@ install -m 0755 "$TMP" /usr/local/bin/coremon-agent
 mkdir -p /etc/coremon /var/lib/coremon
 chmod 700 /etc/coremon /var/lib/coremon
 
-if [ -f /var/lib/coremon/identity.json ]; then
-  echo "coremon: already enrolled - updating binary and service only"
-else
-  umask 077
-  cat > /etc/coremon/agent.json <<EOF
+# Always (re)write the master address and keys: a repeated install command
+# fixes a system whose master key changed. An existing registration is
+# kept; if the master no longer knows it, the agent registers again with
+# the token.
+if [ "$ENROLLED" = 1 ]; then
+  echo "coremon: already enrolled - updating the agent, master address and master keys (registration kept)"
+fi
+umask 077
+cat > /etc/coremon/agent.json <<EOF
 {
   "master_url": "$MASTER",
-  "master_pin": "$PIN",
+  "master_pins": ["$PIN", "$NEXT"],
   "token": "$TOKEN"
 }
 EOF
-fi
 
 cat > /etc/systemd/system/coremon-agent.service <<'EOF'
 [Unit]
@@ -85,7 +91,7 @@ systemctl daemon-reload
 systemctl enable coremon-agent.service >/dev/null 2>&1
 systemctl restart coremon-agent.service
 echo "coremon: agent installed and started."
-if [ -n "$TOKEN" ]; then
+if [ "$ENROLLED" = 0 ]; then
   echo "coremon: approve this system in the master UI (Settings > Systems): $MASTER"
 fi
 `))
@@ -144,7 +150,8 @@ func (s *Server) handleInstallScript(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	latest := s.repo.coreLatest()
-	data := struct{ URL, Pin, SHAAmd64, SHAArm64 string }{URL: base, Pin: s.pin}
+	keys := s.desiredPins() // during a rotation also the new key
+	data := struct{ URL, Pin, Next, SHAAmd64, SHAArm64 string }{URL: base, Pin: keys[0], Next: keys[1]}
 	if e := s.repo.find("core", latest, "linux", "amd64"); e != nil {
 		data.SHAAmd64 = e.SHA256
 	}
@@ -157,5 +164,5 @@ func (s *Server) handleInstallScript(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) installCommand(r *http.Request, token string) string {
-	return "curl -fsSLk --pinnedpubkey 'sha256//" + s.pin + "' " + s.baseURL(r) + "/install.sh | sh -s -- --token " + token
+	return "curl -fsSLk --pinnedpubkey 'sha256//" + s.currentPin() + "' " + s.baseURL(r) + "/install.sh | sh -s -- --token " + token
 }

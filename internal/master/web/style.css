@@ -80,6 +80,10 @@ input.bad { border-color: rgba(248, 113, 113, 0.7); box-shadow: 0 0 0 3px rgba(2
 .stat.click:hover { border-color: var(--line-hi); }
 fieldset.plain { border: 0; margin: 0; padding: 0; min-width: 0; display: flex; flex-direction: column; gap: 14px; }
 fieldset.plain:disabled input, fieldset.plain:disabled select { opacity: 0.75; cursor: not-allowed; }
+.keyrow { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin-top: 12px; }
+.keyrow .klbl { color: var(--muted); font-size: 12.5px; min-width: 90px; }
+.keyrow code { background: #04060d; border: 1px solid var(--line); border-radius: 8px; padding: 6px 10px; color: #a5f3fc; word-break: break-all; }
+.notice ul { margin: 8px 0; padding-left: 20px; }
 .gsec.dragonly { display: none; }
 .dnd .gsec.dragonly { display: block; }
 select.sm { padding: 4px 8px; font-size: 12.5px; border-radius: 8px; }

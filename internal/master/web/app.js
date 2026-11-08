@@ -1386,15 +1386,93 @@ function SettingsLogin() {
 }
 
 function SettingsIdentity() {
+  const st = { d: null };
+  const short = (p) => (p ? `${p.slice(0, 6)}…${p.slice(-6)}` : '');
+  function slot(p, d) {
+    if (!p) return html`<span class="dim">empty</span>`;
+    const lbl = p === d.current ? html`<span class="badge ok">${icon('check')} current</span>`
+      : p === d.next ? html`<span class="badge info">${icon('check')} new</span>`
+      : html`<span class="badge sec" title="A key this master does not have">✗ unknown</span>`;
+    return html`<span class="mono small" title="sha256//${p}">${short(p)}</span> ${lbl}`;
+  }
+  function status(a, d) {
+    if (!a.slots) return html`<span class="badge upd">agent ${a.core_version || '?'}: no second slot</span>`;
+    if (!a.reported_at) return html`<span class="dim">not reported yet</span>`;
+    const known = (p) => !p || p === d.current || p === d.next;
+    if (!known(a.pins[0]) || !known(a.pins[1])) return html`<span class="badge sec">trusts an unknown key</span>`;
+    if (d.next) return a.has_next ? html`<span class="badge ok">ready to switch</span>` : html`<span class="badge upd">waiting for the new key</span>`;
+    return a.pins.includes(d.current) && !a.pins.some((p) => p && p !== d.current) ? html`<span class="badge ok">${icon('check')} correct</span>` : html`<span class="badge upd">updating keys</span>`;
+  }
+  function render() {
+    const d = st.d;
+    if (!d) return;
+    const ready = d.agents.filter((a) => a.has_next).length;
+    setHTML($('#id-keys'), html`
+      <div class="panel panel-pad"><h2>Master keys</h2>
+        <div class="muted small">Agents only connect to a master whose key they trust. Each agent has two key slots, so a new key can be handed over while the connection is still secured by the current one.</div>
+        <div class="keyrow"><span class="klbl">Current key</span><code class="mono">sha256//${d.current}</code></div>
+        ${d.next ? html`<div class="keyrow"><span class="klbl">New key</span><code class="mono">sha256//${d.next}</code><span class="dim small">generated ${fmtDate(d.next_at)}</span></div>` : ''}
+        ${canChange() ? html`<div class="row" style="margin-top:14px">
+          ${d.next ? html`<span class="muted small">${ready} of ${d.agents.length} system(s) have the new key.</span><span class="spacer"></span>
+              <button class="btn ghost" data-act="cancel-key">Cancel</button>
+              <button class="btn primary" data-act="switch-key">${icon('refresh')} Switch to new key</button>`
+            : html`<span class="muted small">Generate a new key if the current one may have leaked. Nothing changes until you switch.</span><span class="spacer"></span>
+              <button class="btn" data-act="gen-key">${icon('plus')} Generate new key</button>`}
+        </div>` : ''}
+        <div class="dim small" style="margin-top:12px">If this key is ever lost (for example a new master without a backup), agents stop connecting. Run a new install command from Settings → Systems on each system; it updates the stored key.</div>
+      </div>`);
+    setHTML($('#id-agents'), d.agents.length ? html`<div class="panel"><table class="tbl">
+      <thead><tr><th>System</th><th>Slot 1</th><th>Slot 2</th><th>Status</th><th>Reported</th></tr></thead>
+      <tbody>${d.agents.map((a) => html`<tr><td>${agentDot(a)} <a href="#/agent/${a.id}"><b>${a.name}</b></a></td>
+        <td>${a.slots ? slot(a.pins[0], d) : html`<span class="dim">—</span>`}</td>
+        <td>${a.slots ? slot(a.pins[1], d) : html`<span class="dim">—</span>`}</td>
+        <td>${status(a, d)}</td>
+        <td class="muted small">${a.reported_at ? when(a.reported_at) : '—'}</td></tr>`)}</tbody></table></div>`
+      : html`<div class="panel empty">No systems yet.</div>`);
+  }
+  async function act(action, body = {}) {
+    st.d = await POST('identity/' + action, body);
+    render();
+  }
   return {
-    async mount(el) {
-      const d = await GET('settings');
+    interval: 5000,
+    mount(el) {
       el.innerHTML = r(html`${settingsHead('identity', 'Identity', 'How agents recognise this master')}
-        <div class="panel panel-pad" style="max-width:720px"><h2>Master identity</h2>
-          <div class="muted small">Agents pin this public-key fingerprint. If the master certificate is ever regenerated, agents must be reinstalled.</div>
-          <div class="cmdbox"><code>sha256//${d.pin}</code></div>
-          <div class="dim small" style="margin-top:10px">Coremon v${session.version}${releasedLabel() ? ' · ' + releasedLabel() : ''}</div>
-        </div>`);
+        <div class="stack" style="max-width:1000px"><div id="id-keys"></div>
+          <div><h2 style="font-size:15px;margin:6px 0 12px">Keys per system</h2><div id="id-agents"></div></div>
+          <div class="dim small">Coremon v${session.version}${releasedLabel() ? ' · ' + releasedLabel() : ''}</div></div>`);
+    },
+    async refresh() { st.d = await GET('identity'); render(); },
+    acts: {
+      'gen-key': async () => {
+        if (!(await confirmBox('Generate a new master key?', 'The master keeps using the current key. The new key is sent to every system over its current, verified connection; you switch when they all have it.', { okText: 'Generate' }))) return;
+        await act('generate'); toast('New key generated — distributing to systems', 'ok');
+      },
+      'cancel-key': async () => {
+        if (!(await confirmBox('Cancel the new key?', 'The new key is discarded and systems remove it again. The current key stays in use.', { okText: 'Discard new key', danger: true }))) return;
+        await act('cancel'); toast('New key discarded', 'ok');
+      },
+      'switch-key': async () => {
+        const missing = st.d.agents.filter((a) => !a.has_next);
+        if (!missing.length) {
+          if (!(await confirmBox('Switch to the new key?', 'The master starts using the new key and the old key is deleted. Systems reconnect with the new key and remove the old one. Your browser will warn once about the new certificate.', { okText: 'Switch' }))) return;
+          await act('switch'); toast('Switched to the new key', 'ok'); return;
+        }
+        // Not everyone has the new key: the safe choice (Cancel) has focus.
+        await new Promise((resolve) => {
+          openModal(html`<h3>Not all systems have the new key</h3>
+            <div class="notice red" style="margin:12px 0 0">These ${missing.length} system(s) have not reported the new key and will <b>lose contact</b> after the switch:
+              <ul>${missing.map((a) => html`<li><b>${a.name}</b> — ${!a.slots ? `agent ${a.core_version}: no second slot` : a.online ? 'waiting for the new key' : 'offline'}</li>`)}</ul>
+              They can be reconnected later with a new install command.</div>
+            <div class="actions"><button class="btn primary" data-act="no" autofocus>Cancel</button><button class="btn danger" data-act="yes">Switch anyway</button></div>`, {
+            acts: {
+              no: () => { closeModal(); },
+              yes: async () => { closeModal(); try { await act('switch', { force: true }); toast('Switched to the new key', 'ok'); } catch (e) { fail(e); } },
+            },
+            onClose: resolve,
+          });
+        });
+      },
     },
   };
 }

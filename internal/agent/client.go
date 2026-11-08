@@ -11,31 +11,42 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"sync"
 	"time"
 )
 
-// client talks to the master over TLS pinned to the master's public key.
+// client talks to the master over TLS pinned to the master's public key:
+// the key must match one of the two slots.
 type client struct {
 	base string
 	hc   *http.Client
 	auth string
+
+	mu      sync.Mutex
+	pins    [2]string
+	lastPin string // key of the most recently verified connection
 }
 
-func newClient(base, pin string) *client {
+func newClient(base string, pins [2]string) *client {
+	c := &client{base: base, pins: pins}
 	tr := &http.Transport{
 		TLSClientConfig: &tls.Config{
 			MinVersion: tls.VersionTLS12,
 			// The certificate chain is not checked against a CA; instead the
-			// server's public key must match the pin from installation.
+			// server's public key must match a pinned key.
 			InsecureSkipVerify: true,
 			VerifyConnection: func(cs tls.ConnectionState) error {
 				if len(cs.PeerCertificates) == 0 {
 					return errors.New("no server certificate")
 				}
 				sum := sha256.Sum256(cs.PeerCertificates[0].RawSubjectPublicKeyInfo)
-				if base64.StdEncoding.EncodeToString(sum[:]) != pin {
-					return errors.New("master certificate does not match pinned key")
+				got := base64.StdEncoding.EncodeToString(sum[:])
+				c.mu.Lock()
+				defer c.mu.Unlock()
+				if got == "" || (got != c.pins[0] && got != c.pins[1]) {
+					return errors.New("master certificate does not match a pinned key")
 				}
+				c.lastPin = got
 				return nil
 			},
 		},
@@ -43,7 +54,20 @@ func newClient(base, pin string) *client {
 		MaxIdleConnsPerHost: 4,
 		TLSHandshakeTimeout: 15 * time.Second,
 	}
-	return &client{base: base, hc: &http.Client{Transport: tr}}
+	c.hc = &http.Client{Transport: tr}
+	return c
+}
+
+func (c *client) getPins() (pins [2]string, last string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.pins, c.lastPin
+}
+
+func (c *client) setPins(p [2]string) {
+	c.mu.Lock()
+	c.pins = p
+	c.mu.Unlock()
 }
 
 type httpError struct {

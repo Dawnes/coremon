@@ -509,7 +509,7 @@ func (s *Server) handleSettingsGet(w http.ResponseWriter, r *http.Request) {
 	url := s.indexURL()
 	s.st.mu.Lock()
 	defer s.st.mu.Unlock()
-	writeJSON(w, map[string]any{"settings": s.st.st.Settings, "pin": s.pin, "suggested_url": s.derivedURL(r), "index_url": url,
+	writeJSON(w, map[string]any{"settings": s.st.st.Settings, "pin": s.currentPin(), "suggested_url": s.derivedURL(r), "index_url": url,
 		"next_purge": s.nextPurgeAt().Unix(), "agent_port": s.agentPort(), "ui_port_error": s.uiPortError(),
 		"limits": map[string]int{"heartbeat_min": minHeartbeat, "heartbeat_max": maxHeartbeat, "retention_min": minRetention, "retention_max": maxRetention}})
 }

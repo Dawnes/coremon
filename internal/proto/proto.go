@@ -10,7 +10,8 @@ import "encoding/json"
 // ProtocolVersion is bumped when the protocol changes.
 // 2: built-in features instead of modules; heartbeat in poll responses.
 // 3: report-only mode (agent.mode command, report_only in polls).
-const ProtocolVersion = 3
+// 4: two master key slots (agent.pins command, pins in polls).
+const ProtocolVersion = 4
 
 // Facts describe the system an agent runs on. Sent on every poll; the
 // master keeps only the latest value.
@@ -79,6 +80,7 @@ type PollRequest struct {
 	Features    []FeatureInfo `json:"features"`
 	Running     []string      `json:"running"`     // command IDs still executing
 	ReportOnly  bool          `json:"report_only"` // the agent's own, stored mode (protocol 3)
+	Pins        [2]string     `json:"pins"`        // master keys the agent trusts, per slot (protocol 4)
 }
 
 // PollResponse carries zero or more commands. Heartbeat is the longest the
@@ -98,6 +100,17 @@ const (
 	// In report-only mode the agent refuses every "action" command.
 	CmdSetMode = "agent.mode"
 )
+
+// CmdSetPins replaces the agent's two master key slots; Params: PinParams.
+// The agent only accepts a pair that still contains the key of the
+// connection the command arrived on, so a new key can only be added over a
+// connection verified with a key the agent already trusts.
+const CmdSetPins = "agent.pins"
+
+// PinParams are the parameters of CmdSetPins.
+type PinParams struct {
+	Pins [2]string `json:"pins"`
+}
 
 // ModeParams are the parameters of CmdSetMode.
 type ModeParams struct {

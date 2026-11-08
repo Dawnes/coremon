@@ -81,6 +81,8 @@ type Agent struct {
 	Order       int                        `json:"order"`             // position within its group
 	Status      string                     `json:"status"`            // pending | active | report_only
 	ReportOnly  bool                       `json:"agent_report_only"` // mode the agent itself confirmed (protocol 3+)
+	Pins        [2]string                  `json:"pins"`              // master keys the agent reports trusting, per slot (protocol 4+)
+	PinsAt      int64                      `json:"pins_at"`
 	SecretHash  string                     `json:"secret_hash"`
 	EnrolledAt  int64                      `json:"enrolled_at"`
 	LastSeen    int64                      `json:"last_seen"`
