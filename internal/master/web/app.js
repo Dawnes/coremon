@@ -765,9 +765,9 @@ function AgentPage([id]) {
         ${a.status === 'active' && canChange() ? html`<button class="btn sm" data-act="report-only">${icon('pause')} Report only</button>` : ''}
         ${a.status === 'report_only' && canChange() ? html`<button class="btn sm" data-act="allow-changes">${icon('play')} Allow changes</button>` : ''}
       </div>
-      ${a.status === 'report_only' ? html`<div class="notice blue"><b>Report only:</b> this system only reports. No update checks, installs or reboots until changes are allowed again.
+      ${a.status === 'report_only' ? html`<div class="notice blue"><b>Report only:</b> this system only reports.
         <span class="small">${!a.mode_support ? html`Enforced by the master only — agent ${a.core_version} cannot enforce it itself; update the agent.`
-          : a.agent_report_only ? html`${icon('check')} Confirmed by the agent: it refuses these commands itself.`
+          : a.agent_report_only ? html`${icon('check')} Confirmed by the agent.`
           : html`Waiting for the agent to confirm${a.online ? '…' : ' (the system is offline)'}.`}</span></div>` : ''}
       ${a.status === 'active' && a.mode_support && a.agent_report_only ? html`<div class="notice blue small">Changes allowed — waiting for the agent to confirm${a.online ? '…' : ' (the system is offline)'}.</div>` : ''}
       ${a.status === 'pending' ? html`<div class="notice blue row">This system enrolled ${when(a.enrolled_at)} and is waiting for approval. Until approved it receives no commands.<span class="spacer"></span>${ifChange(html`<button class="btn primary sm" data-act="approve">${icon('check')} Approve</button>`)}</div>` : ''}
