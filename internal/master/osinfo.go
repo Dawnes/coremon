@@ -181,7 +181,7 @@ func (s *Server) fetchOSInfo() (*osInfoData, error) {
 var (
 	dateRe      = regexp.MustCompile(`^\d{4}-\d{2}-\d{2}$`)
 	debianVerRe = regexp.MustCompile(`^\d{1,3}(\.\d{1,2})?$`) // old releases: "1.1" ... "3.1"
-	ubuntuVerRe = regexp.MustCompile(`^\d{1,2}\.\d{2}$`) // "4.10" ... "26.04"
+	ubuntuVerRe = regexp.MustCompile(`^\d{1,2}\.\d{2}$`)      // "4.10" ... "26.04"
 )
 
 // parseDistroInfo reads debian.csv or ubuntu.csv strictly: known columns,
