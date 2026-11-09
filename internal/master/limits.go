@@ -3,6 +3,7 @@ package master
 import (
 	"net"
 	"strings"
+	"time"
 	"unicode/utf8"
 
 	"coremon/internal/proto"
@@ -27,6 +28,15 @@ const (
 	maxNameLen     = 64 // feature and action names, titles
 )
 
+// notFuture: an agent cannot report times after now (that would make a
+// system look current forever).
+func notFuture(t int64) int64 {
+	if now := time.Now().Unix(); t > now {
+		return now
+	}
+	return t
+}
+
 func clip(s string, n int) string {
 	if len(s) <= n {
 		return s
@@ -41,19 +51,20 @@ func clip(s string, n int) string {
 // sanitizeFacts cuts reported facts to sane sizes.
 func sanitizeFacts(f proto.Facts) proto.Facts {
 	for _, p := range []*string{&f.Hostname, &f.OSName, &f.OSID, &f.OSVersion, &f.Kernel, &f.OS, &f.Arch, &f.Virt} {
-		*p = clip(strings.TrimSpace(*p), maxFactLen)
+		*p = cleanText(*p, maxFactLen)
 	}
-	if len(f.IPs) > maxIPs {
-		f.IPs = f.IPs[:maxIPs]
+	ips := []string{}
+	for _, s := range f.IPs {
+		if ip := net.ParseIP(s); ip != nil && len(ips) < maxIPs {
+			ips = append(ips, ip.String())
+		}
 	}
-	for i := range f.IPs {
-		f.IPs[i] = clip(f.IPs[i], 64)
-	}
+	f.IPs = ips
 	// Network facts: IPv4 addresses only, a short interface name.
 	if !isIPv4(f.Gateway) {
 		f.Gateway, f.GatewayIf = "", ""
 	}
-	f.GatewayIf = clip(strings.TrimSpace(f.GatewayIf), 32)
+	f.GatewayIf = cleanText(f.GatewayIf, 32)
 	var dns []string
 	for _, s := range f.DNS {
 		if isIPv4(s) && len(dns) < maxDNS {
@@ -66,6 +77,7 @@ func sanitizeFacts(f proto.Facts) proto.Facts {
 	}
 	if h := f.Health; h != nil {
 		c := *h
+		c.At = notFuture(c.At)
 		if c.FailedCount < -1 || c.FailedCount > 100000 {
 			c.FailedCount = -1
 		}
@@ -74,7 +86,9 @@ func sanitizeFacts(f proto.Facts) proto.Facts {
 		}
 		names := make([]string, 0, len(c.Failed))
 		for _, n := range c.Failed {
-			names = append(names, clip(strings.TrimSpace(n), 128))
+			if n = cleanText(n, 128); n != "" {
+				names = append(names, n)
+			}
 		}
 		c.Failed = names
 		switch c.AutoUpdates {
@@ -87,10 +101,12 @@ func sanitizeFacts(f proto.Facts) proto.Facts {
 			if lu.Packages < 0 || lu.Packages > 100000 {
 				lu.Packages = 0
 			}
-			if lu.By != "coremon" && lu.By != "automatic" && lu.By != "root" && !strings.HasPrefix(lu.By, "user:") {
+			if user, ok := strings.CutPrefix(lu.By, "user:"); ok {
+				lu.By = "user:" + cleanText(user, 32)
+			} else if lu.By != "coremon" && lu.By != "automatic" && lu.By != "root" {
 				lu.By = ""
 			}
-			lu.By = clip(lu.By, 40)
+			lu.Time = notFuture(lu.Time)
 			c.LastUpgrade = &lu
 		}
 		f.Health = &c
@@ -111,13 +127,13 @@ func sanitizeFeatures(in []proto.FeatureInfo) []proto.FeatureInfo {
 	}
 	out := make([]proto.FeatureInfo, 0, len(in))
 	for _, f := range in {
-		f.Name, f.Title = clip(f.Name, maxNameLen), clip(f.Title, maxNameLen)
+		f.Name, f.Title = cleanText(f.Name, maxNameLen), cleanText(f.Title, maxNameLen)
 		if len(f.Actions) > maxActions {
 			f.Actions = f.Actions[:maxActions]
 		}
 		acts := make([]proto.ActionSpec, 0, len(f.Actions))
 		for _, a := range f.Actions {
-			a.Name, a.Title = clip(a.Name, maxNameLen), clip(a.Title, maxNameLen)
+			a.Name, a.Title = cleanText(a.Name, maxNameLen), cleanText(a.Title, maxNameLen)
 			if a.Timeout <= 0 || a.Timeout > 24*3600 {
 				a.Timeout = 3600
 			}

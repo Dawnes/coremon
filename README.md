@@ -52,8 +52,11 @@ the latest, **orange** otherwise.
 | Master self-update | The unprivileged master can only *request* an update; a root systemd unit verifies the signature against the root-owned key and refuses anything not newer. |
 | Agent ↔ master | HTTPS only carries the traffic (self-signed; agents do not rely on it). Every message is encrypted end to end and signed with the master's **payload key** (ed25519 + X25519, AES-256-GCM), which agents trust in two key slots; replies are bound to their request (no replay). The install command carries the sha256 of the install script, which carries the payload key and the agent's checksum. |
 | Agent identity | Single-use enrollment token; each agent then has its **own key pair** and signs every request — no shared secret on the wire. New systems stay **pending** until approved. Agents before 0.3.0 (pinned HTTPS + shared secret) are no longer supported: run a new install command on such a system. |
-| What agents can do | Fixed actions only; package names validated; no arbitrary shell. |
-| UI | User accounts with roles (Administrator, Read-only) checked by the master on every request; PBKDF2 passwords (min. 5 characters), HttpOnly/Secure/SameSite=Strict session, anti-CSRF header, login rate limiting, strict CSP, audit log per user. Read-only users cannot see enrollment tokens. |
+| What agents can do | Fixed actions only; package names validated (by the agent and the master); no arbitrary shell. |
+| What agents send | Checked by the master as if hostile: text cleaned (no control, invisible or shell/markup characters), update results validated (at most 5,000 packages, 2 MB), times in the future set to now, one open heartbeat per agent, about 10 requests per second per agent. |
+| Input | Names (systems 64, groups 48, notes 64 characters) may not contain control or invisible characters or ``< > " ' ` $ \ ; \| &`` — refused by the master, not only the website. Passwords: 5–40 characters when set. |
+| Search engines | `X-Robots-Tag: noindex` on the website, install script and downloads, plus a robots meta tag. |
+| UI | User accounts with roles (Administrator, Read-only) checked by the master on every request; PBKDF2 passwords (5–40 characters), HttpOnly/Secure/SameSite=Strict session, anti-CSRF header, login rate limiting, strict CSP, audit log per user. Read-only users cannot see enrollment tokens. |
 
 Keep the master reachable only from your LAN/VPN.
 

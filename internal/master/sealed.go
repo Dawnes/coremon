@@ -104,6 +104,16 @@ func (s *Server) handleSealed(w http.ResponseWriter, r *http.Request) {
 		}
 		return
 	}
+	// Rate limit per verified agent (checked after the signature, so nobody
+	// can slow down another agent by using its ID); enrollments per address.
+	key := env.Agent
+	if key == "" {
+		key = "enroll:" + clientIP(r)
+	}
+	if !s.agentRate.allow(key, time.Now()) {
+		http.Error(w, "too many requests", http.StatusTooManyRequests)
+		return
+	}
 	if !s.nonces.fresh(env.Nonce) {
 		http.Error(w, "replayed request", http.StatusUnauthorized)
 		return

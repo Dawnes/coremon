@@ -107,7 +107,11 @@ func TestClientIPBehindLocalProxy(t *testing.T) {
 }
 
 func TestAgentReportLimits(t *testing.T) {
-	f := sanitizeFacts(proto.Facts{Hostname: strings.Repeat("h", 5000), IPs: make([]string, 500)})
+	ips := make([]string, 500)
+	for i := range ips {
+		ips[i] = "10.0.0.1"
+	}
+	f := sanitizeFacts(proto.Facts{Hostname: strings.Repeat("h", 5000), IPs: ips})
 	if len(f.Hostname) != maxFactLen || len(f.IPs) != maxIPs {
 		t.Errorf("facts not limited: %d chars, %d IPs", len(f.Hostname), len(f.IPs))
 	}

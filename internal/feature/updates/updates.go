@@ -62,7 +62,7 @@ func pickBackend() (Backend, error) {
 	return nil, errors.New("no supported package manager found (supported: apt)")
 }
 
-var pkgNameRe = regexp.MustCompile(`^[a-z0-9][a-z0-9+.\-]{0,127}(:[a-z0-9]{1,16})?$`)
+var PackageNameRe = regexp.MustCompile(`^[a-z0-9][a-z0-9+.\-]{0,127}(:[a-z0-9]{1,16})?$`)
 
 // Updates implements feature.Feature.
 type Updates struct{}
@@ -109,7 +109,7 @@ func (*Updates) Call(c *feature.Ctx, action string) (any, error) {
 			return nil, errors.New("no packages given")
 		}
 		for _, n := range p.Packages {
-			if !pkgNameRe.MatchString(n) {
+			if !PackageNameRe.MatchString(n) {
 				return nil, fmt.Errorf("invalid package name %q", n)
 			}
 		}

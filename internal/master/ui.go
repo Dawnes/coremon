@@ -2,6 +2,7 @@ package master
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -12,12 +13,14 @@ import (
 	"strings"
 	"time"
 
+	"coremon/internal/feature/updates"
 	"coremon/internal/proto"
 )
 
 const (
 	minPasswordLen = 5
-	maxTokenHours  = 3 // validity of an install command
+	maxPasswordLen = 40 // characters; checked when a password is set
+	maxTokenHours  = 3  // validity of an install command
 )
 
 // ---- views ----
@@ -176,12 +179,36 @@ func (s *Server) handleAgentGet(w http.ResponseWriter, r *http.Request) {
 		"repo": s.repo.summary(), "groups": s.st.st.Groups})
 }
 
-func cleanName(n string) string {
-	n = strings.TrimSpace(n)
-	if len(n) > 64 {
-		n = n[:64]
+var actionNameRe = regexp.MustCompile(`^[a-z][a-z0-9_]{0,31}$`)
+
+const maxActionPackages = 5000
+
+// checkActionParams validates an action request before it goes to agents:
+// plain names, a JSON object as parameters and, for package installs, only
+// names matching the agent's own package pattern.
+func checkActionParams(feature, action string, params json.RawMessage) error {
+	if !actionNameRe.MatchString(feature) || !actionNameRe.MatchString(action) {
+		return errors.New("invalid function or action name")
 	}
-	return n
+	var obj map[string]json.RawMessage
+	if json.Unmarshal(params, &obj) != nil || obj == nil {
+		return errors.New("parameters must be an object")
+	}
+	if raw, ok := obj["packages"]; ok {
+		var pkgs []string
+		if json.Unmarshal(raw, &pkgs) != nil {
+			return errors.New("packages must be a list of names")
+		}
+		if len(pkgs) > maxActionPackages {
+			return fmt.Errorf("at most %d packages at once", maxActionPackages)
+		}
+		for _, p := range pkgs {
+			if !updates.PackageNameRe.MatchString(p) {
+				return fmt.Errorf("invalid package name %q", clip(p, 64))
+			}
+		}
+	}
+	return nil
 }
 
 // setGroup moves an agent to the end of a group. Caller holds s.st.mu.
@@ -213,7 +240,12 @@ func (s *Server) handleAgentUpdate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if req.Name != nil {
-		if n := cleanName(*req.Name); n != "" {
+		n, err := checkName("system name", *req.Name, maxSystemName)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		if n != "" {
 			a.Name = n
 		}
 	}
@@ -264,7 +296,12 @@ func (s *Server) handleApprove(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "agent is not pending", http.StatusConflict)
 		return
 	}
-	if n := cleanName(req.Name); n != "" {
+	n, err := checkName("system name", req.Name, maxSystemName)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	if n != "" {
 		a.Name = n
 	}
 	if err := s.setGroup(a, req.GroupID); err != nil {
@@ -372,6 +409,14 @@ func (s *Server) handleActions(w http.ResponseWriter, r *http.Request) {
 	if len(req.Params) == 0 || string(req.Params) == "null" {
 		req.Params = json.RawMessage("{}")
 	}
+	if err := checkActionParams(req.Feature, req.Action, req.Params); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	if len(req.AgentIDs) > 10000 {
+		http.Error(w, "too many systems", http.StatusBadRequest)
+		return
+	}
 	s.st.mu.Lock()
 	defer s.st.mu.Unlock()
 	jobs := []string{}
@@ -379,7 +424,7 @@ func (s *Server) handleActions(w http.ResponseWriter, r *http.Request) {
 	for _, id := range req.AgentIDs {
 		a := s.st.st.Agents[id]
 		if a == nil {
-			errs = append(errs, id+": not found")
+			errs = append(errs, cleanText(id, 32)+": not found")
 			continue
 		}
 		if a.Status == StatusReportOnly {
@@ -487,12 +532,17 @@ func (s *Server) handleTokenCreate(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, fmt.Sprintf("an install command is valid for at most %d hours", maxTokenHours), http.StatusBadRequest)
 		return
 	}
+	note, err := checkName("note", req.Note, maxNoteLen)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
 	if s.baseURL(r) == "" {
 		http.Error(w, badHostMsg, http.StatusBadRequest)
 		return
 	}
 	tok := randHex(16)
-	t := &EnrollToken{Hash: sha256hex(tok), Prefix: tok[:6], Note: cleanName(req.Note),
+	t := &EnrollToken{Hash: sha256hex(tok), Prefix: tok[:6], Note: note,
 		Created: time.Now().Unix(), Expires: time.Now().Add(time.Duration(req.TTLHours) * time.Hour).Unix()}
 	s.st.mu.Lock()
 	s.st.st.Tokens[t.Hash] = t
@@ -624,14 +674,6 @@ func (s *Server) handleAudit(w http.ResponseWriter, r *http.Request) {
 
 // ---- groups and ordering ----
 
-func cleanGroupName(n string) string {
-	n = strings.TrimSpace(n)
-	if len(n) > 48 {
-		n = n[:48]
-	}
-	return n
-}
-
 func (s *Server) handleGroupCreate(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Name string `json:"name"`
@@ -639,7 +681,11 @@ func (s *Server) handleGroupCreate(w http.ResponseWriter, r *http.Request) {
 	if !readJSON(w, r, &req, 4096) {
 		return
 	}
-	name := cleanGroupName(req.Name)
+	name, err := checkName("group name", req.Name, maxGroupName)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
 	if name == "" {
 		http.Error(w, "group name is required", http.StatusBadRequest)
 		return
@@ -666,7 +712,11 @@ func (s *Server) handleGroupUpdate(w http.ResponseWriter, r *http.Request) {
 	if !readJSON(w, r, &req, 4096) {
 		return
 	}
-	name := cleanGroupName(req.Name)
+	name, err := checkName("group name", req.Name, maxGroupName)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
 	if name == "" {
 		http.Error(w, "group name is required", http.StatusBadRequest)
 		return

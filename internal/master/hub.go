@@ -173,7 +173,7 @@ func (s *Server) enrollCore(req proto.EnrollRequest, ip, agentKey string) (*prot
 	delete(s.st.st.Tokens, h)
 	a := &Agent{
 		ID:          "a_" + randHex(8),
-		Name:        cleanName(req.Facts.Hostname),
+		Name:        cleanText(req.Facts.Hostname, maxSystemName),
 		Status:      StatusPending,
 		EnrolledAt:  time.Now().Unix(),
 		LastSeen:    time.Now().Unix(),
@@ -206,7 +206,7 @@ func (s *Server) pollCore(ctx context.Context, agentID string, req proto.PollReq
 	now := time.Now().Unix()
 	a.LastSeen = now
 	a.Facts = sanitizeFacts(req.Facts)
-	a.CoreVersion = clip(req.CoreVersion, 32)
+	a.CoreVersion = cleanText(req.CoreVersion, 32)
 	a.Protocol = req.Protocol
 	// Agents before protocol 2 have no built-in features.
 	a.Features = sanitizeFeatures(req.Features)
@@ -250,7 +250,24 @@ func (s *Server) pollCore(ctx context.Context, agentID string, req proto.PollReq
 		s.wakes[a.ID] = ch
 	}
 	hb := s.heartbeat()
+	// At most one open heartbeat per agent: a new one ends the previous one,
+	// as a reconnect would.
+	if s.polls == nil {
+		s.polls = map[string]chan struct{}{}
+	}
+	if old := s.polls[agentID]; old != nil {
+		close(old)
+	}
+	mine := make(chan struct{})
+	s.polls[agentID] = mine
 	s.st.mu.Unlock()
+	defer func() {
+		s.st.mu.Lock()
+		if s.polls[agentID] == mine {
+			delete(s.polls, agentID)
+		}
+		s.st.mu.Unlock()
+	}()
 
 	deadline := time.NewTimer(time.Duration(hb) * time.Second)
 	defer deadline.Stop()
@@ -263,6 +280,8 @@ func (s *Server) pollCore(ctx context.Context, agentID string, req proto.PollReq
 		}
 		select {
 		case <-ch:
+		case <-mine: // replaced by a newer heartbeat
+			return &proto.PollResponse{Commands: []proto.Command{}, Heartbeat: hb}, nil
 		case <-deadline.C:
 			return &proto.PollResponse{Commands: []proto.Command{}, Heartbeat: hb}, nil
 		case <-ctx.Done():
@@ -308,9 +327,9 @@ func (s *Server) outputCore(agentID string, req proto.OutputBatch) {
 		if j == nil || j.AgentID != agentID || j.Status != JobRunning || j.LogSize >= maxJobLog {
 			continue
 		}
-		data := it.Data
+		data := cleanLog(it.Data)
 		if j.LogSize+int64(len(data)) > maxJobLog {
-			data = data[:maxJobLog-j.LogSize] + "\n[log truncated]\n"
+			data = clip(data, int(maxJobLog-j.LogSize)) + "\n[log truncated]\n"
 		}
 		f, err := os.OpenFile(s.st.jobLogPath(j.ID), os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600)
 		if err != nil {
@@ -337,7 +356,7 @@ func (s *Server) resultCore(agentID string, res proto.Result, ip string) {
 	if res.OK {
 		j.Status = JobSuccess
 	} else {
-		j.Status, j.Error = JobFailed, clip(res.Error, 2000)
+		j.Status, j.Error = JobFailed, clip(cleanLog(res.Error), maxResultErrLen)
 	}
 	switch {
 	case j.Type == proto.CmdAction && len(res.Data) > 0:
@@ -345,7 +364,12 @@ func (s *Server) resultCore(agentID string, res proto.Result, ip string) {
 			State json.RawMessage `json:"state"`
 		}
 		if json.Unmarshal(res.Data, &d) == nil && len(d.State) > 0 && string(d.State) != "null" {
-			a.State[j.Feature] = d.State
+			state, err := checkState(j.Feature, d.State)
+			if err != nil {
+				j.Status, j.Error = JobFailed, "result refused by the master: "+err.Error()
+				break
+			}
+			a.State[j.Feature] = state
 			a.StateAt[j.Feature] = now
 		}
 	case j.Type == proto.CmdPing:

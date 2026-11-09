@@ -13,6 +13,7 @@ import (
 	"sort"
 	"strings"
 	"time"
+	"unicode/utf8"
 )
 
 var userNameRe = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]{0,31}$`)
@@ -96,7 +97,7 @@ func (s *Server) setCookie(w http.ResponseWriter, tok string) {
 }
 
 func (s *Server) handleSession(w http.ResponseWriter, r *http.Request) {
-	out := map[string]any{"authenticated": false, "version": s.cfg.Version, "build_date": s.cfg.BuildDate, "min_password": minPasswordLen}
+	out := map[string]any{"authenticated": false, "version": s.cfg.Version, "build_date": s.cfg.BuildDate, "min_password": minPasswordLen, "max_password": maxPasswordLen}
 	// For the login page: is the generated first password still in use?
 	_, statErr := os.Stat(s.initialPwPath())
 	s.st.mu.Lock()
@@ -175,8 +176,8 @@ func (s *Server) handlePassword(w http.ResponseWriter, r *http.Request) {
 	if !readJSON(w, r, &req, 4096) {
 		return
 	}
-	if len(req.New) < minPasswordLen {
-		http.Error(w, fmt.Sprintf("new password must be at least %d characters", minPasswordLen), http.StatusBadRequest)
+	if msg := passwordProblem(req.New); msg != "" {
+		http.Error(w, "new "+msg, http.StatusBadRequest)
 		return
 	}
 	me := userFrom(r)
@@ -200,6 +201,15 @@ func (s *Server) handlePassword(w http.ResponseWriter, r *http.Request) {
 	s.setCookie(w, s.sess.create(u.ID))
 	s.audit.write(me.Name, clientIP(r), "password.changed", me.Name, "")
 	writeJSON(w, map[string]bool{"ok": true})
+}
+
+// passwordProblem checks a password that is being set: 5-40 characters
+// (characters, not bytes). "" when fine. Sign-in does not use this.
+func passwordProblem(pw string) string {
+	if n := utf8.RuneCountInString(pw); n < minPasswordLen || n > maxPasswordLen || !utf8.ValidString(pw) {
+		return fmt.Sprintf("password must be %d-%d characters", minPasswordLen, maxPasswordLen)
+	}
+	return ""
 }
 
 // ---- user management (administrators) ----
@@ -234,8 +244,8 @@ func (s *Server) handleUserCreate(w http.ResponseWriter, r *http.Request) {
 	case !validRole(req.Role):
 		http.Error(w, "invalid role", http.StatusBadRequest)
 		return
-	case len(req.Password) < minPasswordLen:
-		http.Error(w, fmt.Sprintf("password must be at least %d characters", minPasswordLen), http.StatusBadRequest)
+	case passwordProblem(req.Password) != "":
+		http.Error(w, passwordProblem(req.Password), http.StatusBadRequest)
 		return
 	}
 	h := hashPassword(req.Password)
@@ -261,8 +271,8 @@ func (s *Server) handleUserUpdate(w http.ResponseWriter, r *http.Request) {
 	if !readJSON(w, r, &req, 4096) {
 		return
 	}
-	if req.Password != nil && len(*req.Password) < minPasswordLen {
-		http.Error(w, fmt.Sprintf("password must be at least %d characters", minPasswordLen), http.StatusBadRequest)
+	if req.Password != nil && passwordProblem(*req.Password) != "" {
+		http.Error(w, passwordProblem(*req.Password), http.StatusBadRequest)
 		return
 	}
 	var h string

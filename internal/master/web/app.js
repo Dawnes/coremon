@@ -267,7 +267,10 @@ document.addEventListener('submit', (e) => {
 });
 
 // ---------- shell & routing ----------
-let session = { version: '', min_password: 5 };
+let session = { version: '', min_password: 5, max_password: 40 };
+// Password length when setting one (sign-in is not limited).
+const pwMin = () => session.min_password || 5, pwMax = () => session.max_password || 40;
+const pwRange = () => `${pwMin()}–${pwMax()} characters`;
 // Read-only users see everything but get no controls that change things.
 // (The master refuses such requests anyway.)
 const canChange = () => !!session.can_change;
@@ -1481,7 +1484,7 @@ function SettingsUsers() {
             <form class="row" style="margin-top:12px;align-items:flex-end" data-submit="create">
               <label class="field">User name<input type="text" name="name" maxlength="32" autocapitalize="none" spellcheck="false" required style="width:180px"></label>
               <label class="field">Role<select name="role">${roleOpts('viewer')}</select></label>
-              <label class="field">Password (min. ${session.min_password || 5})<input type="password" name="pw" autocomplete="new-password" minlength="${session.min_password || 5}" required style="width:180px"></label>
+              <label class="field">Password (${pwRange()})<input type="password" name="pw" autocomplete="new-password" minlength="${pwMin()}" maxlength="${pwMax()}" required style="width:180px"></label>
               <button class="btn primary">${icon('plus')} Add user</button>
             </form>
           </div>
@@ -1508,7 +1511,7 @@ function SettingsUsers() {
       reset: (t) => {
         const u = userBy(t.dataset.id);
         openModal(html`<h3>New password for ${u.name}</h3><form class="form" data-submit="save">
-          <label class="field">New password (min. ${session.min_password || 5})<input type="password" name="pw" autocomplete="new-password" minlength="${session.min_password || 5}" autofocus required></label>
+          <label class="field">New password (${pwRange()})<input type="password" name="pw" autocomplete="new-password" minlength="${pwMin()}" maxlength="${pwMax()}" autofocus required></label>
           <div class="dim small">${u.name} is signed out and signs in again with the new password.</div>
           <div class="actions"><button type="button" class="btn ghost" data-act="cancel">Cancel</button><button class="btn primary">Set password</button></div></form>`, {
           acts: { cancel: () => closeModal(), save: async (f) => { await POST('users/' + u.id, { password: f.pw.value }); closeModal(); toast(`Password of ${u.name} changed`, 'ok'); } },
@@ -1534,8 +1537,8 @@ function SettingsLogin() {
         <div class="panel panel-pad" style="max-width:480px"><h2>Change password</h2>
           <form class="form" data-submit="pw" style="margin-top:0">
             <label class="field">Current password<input type="password" name="cur" autocomplete="current-password" required></label>
-            <label class="field">New password (min. ${min} characters)<input type="password" name="new" autocomplete="new-password" minlength="${min}" required></label>
-            <label class="field">Repeat new password<input type="password" name="new2" autocomplete="new-password" minlength="${min}" required></label>
+            <label class="field">New password (${pwRange()})<input type="password" name="new" autocomplete="new-password" minlength="${pwMin()}" maxlength="${pwMax()}" required></label>
+            <label class="field">Repeat new password<input type="password" name="new2" autocomplete="new-password" minlength="${pwMin()}" maxlength="${pwMax()}" required></label>
             <div><button class="btn primary">Change password</button></div>
           </form>
         </div>`);

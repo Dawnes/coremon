@@ -57,6 +57,8 @@ type Server struct {
 	signingKeyB64 string
 	wakes         map[string]chan struct{}     // guarded by st.mu
 	pings         map[string]chan proto.Result // ping job ID -> waiting UI request; guarded by st.mu
+	polls         map[string]chan struct{}     // agent ID -> its open heartbeat (closed when replaced); guarded by st.mu
+	agentRate     rateLimiter                  // requests per agent
 	idx           *indexSync
 	nonces        nonceCache // sealed requests already seen (replay)
 	osi           osInfo     // OS support dates (distro-info-data)
@@ -263,6 +265,11 @@ func securityHeaders(h http.Handler) http.Handler {
 		hd.Set("X-Content-Type-Options", "nosniff")
 		hd.Set("X-Frame-Options", "DENY")
 		hd.Set("Referrer-Policy", "no-referrer")
+		// Search engines must not index the website, the install script or
+		// the agent downloads (everything except the API).
+		if !strings.HasPrefix(r.URL.Path, "/api/") {
+			hd.Set("X-Robots-Tag", "noindex")
+		}
 		h.ServeHTTP(w, r)
 	})
 }
