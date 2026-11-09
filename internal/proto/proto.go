@@ -31,6 +31,12 @@ type Facts struct {
 	CPUs      int      `json:"cpus"`
 	MemTotal  uint64   `json:"mem_total"` // memory assigned to the system, bytes
 	IPs       []string `json:"ips"`
+	// Network configuration (agent 0.3.2+): the IPv4 default route with the
+	// lowest metric and its interface, and the IPv4 DNS servers in use.
+	Gateway   string   `json:"gateway,omitempty"`
+	GatewayIf string   `json:"gateway_if,omitempty"`
+	DNS       []string `json:"dns,omitempty"`
+	DNSVia    string   `json:"dns_via,omitempty"` // e.g. "systemd-resolved"
 }
 
 // ActionSpec describes one action of a built-in feature.

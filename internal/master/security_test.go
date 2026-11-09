@@ -111,6 +111,14 @@ func TestAgentReportLimits(t *testing.T) {
 	if len(f.Hostname) != maxFactLen || len(f.IPs) != maxIPs {
 		t.Errorf("facts not limited: %d chars, %d IPs", len(f.Hostname), len(f.IPs))
 	}
+	n := sanitizeFacts(proto.Facts{Gateway: "192.168.5.1", GatewayIf: strings.Repeat("e", 100), DNSVia: "<b>x</b>",
+		DNS: append([]string{"1.1.1.1", "2001:db8::1", "<script>", "::ffff:1.2.3.4"}, strings.Split(strings.Repeat("9.9.9.9,", 20), ",")...)})
+	if n.Gateway != "192.168.5.1" || len(n.GatewayIf) != 32 || len(n.DNS) != maxDNS || n.DNS[0] != "1.1.1.1" || n.DNS[1] != "9.9.9.9" || n.DNSVia != "" {
+		t.Errorf("network facts not limited: %+v", n)
+	}
+	if g := sanitizeFacts(proto.Facts{Gateway: "not-an-ip", GatewayIf: "eth0"}); g.Gateway != "" || g.GatewayIf != "" {
+		t.Errorf("bad gateway kept: %+v", g)
+	}
 	feats := make([]proto.FeatureInfo, 100)
 	feats[0].Actions = make([]proto.ActionSpec, 500)
 	feats = sanitizeFeatures(feats)

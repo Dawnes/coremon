@@ -1,11 +1,17 @@
 package master
 
 import (
+	"net"
 	"strings"
 	"unicode/utf8"
 
 	"coremon/internal/proto"
 )
+
+func isIPv4(s string) bool {
+	ip := net.ParseIP(s)
+	return ip != nil && ip.To4() != nil && !strings.Contains(s, ":")
+}
 
 // Limits on what an agent may report. An enrolled system (even one still
 // waiting for approval) must not be able to bloat the master's state.
@@ -14,6 +20,7 @@ const (
 	maxEnrollBody = 64 << 10
 	maxFactLen    = 256 // any text fact
 	maxIPs        = 32
+	maxDNS        = 8
 	maxFeatures   = 16
 	maxActions    = 32
 	maxNameLen    = 64 // feature and action names, titles
@@ -40,6 +47,21 @@ func sanitizeFacts(f proto.Facts) proto.Facts {
 	}
 	for i := range f.IPs {
 		f.IPs[i] = clip(f.IPs[i], 64)
+	}
+	// Network facts: IPv4 addresses only, a short interface name.
+	if !isIPv4(f.Gateway) {
+		f.Gateway, f.GatewayIf = "", ""
+	}
+	f.GatewayIf = clip(strings.TrimSpace(f.GatewayIf), 32)
+	var dns []string
+	for _, s := range f.DNS {
+		if isIPv4(s) && len(dns) < maxDNS {
+			dns = append(dns, s)
+		}
+	}
+	f.DNS = dns
+	if f.DNSVia != "systemd-resolved" {
+		f.DNSVia = ""
 	}
 	if f.UptimeSec < 0 {
 		f.UptimeSec = 0

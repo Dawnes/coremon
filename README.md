@@ -130,7 +130,7 @@ The master needs outbound HTTPS to `github.com` and
   Jobs, not in the audit log.
   *Updates*: select packages (or *Security only*) and *Install selected*, or
   *Upgrade all*; output streams live. *Agent*: install any of the 3 kept agent
-  versions. *System*: host facts.
+  versions. *System*: host facts, including the IPv4 gateway (default route with the lowest metric) and the IPv4 DNS servers in use (the real servers when systemd-resolved is used).
 * **Releases** — version index status, master update, agent versions and a
   per-system version table.
 * **History** — *Jobs* (everything sent to agents, with output) and *Audit
@@ -152,7 +152,7 @@ The master needs outbound HTTPS to `github.com` and
   removed or demoted.
 * The dashboard's **Oldest information** tile shows the oldest data on
   screen: last contact of offline systems, last update check of online ones
-  (paused and pending systems excluded). Agent versions are changed only
+  (report-only and pending systems excluded). When every system is online and checked within the check interval, it shows *All systems current*; an offline system is never current. Agent versions are changed only
   under **Releases**.
 
 Entries, jobs and job output older than the retention period (1–30 days,

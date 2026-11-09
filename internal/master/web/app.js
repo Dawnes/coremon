@@ -590,22 +590,36 @@ function Dashboard() {
     // Oldest information: per system the age of what the dashboard shows -
     // last contact when offline, last update check when online. Report-only and
     // pending systems are left out.
-    let oldest = null;
+    // "Current": online and checked within the check interval + 15 min. An
+    // offline system is never current.
+    let oldest = null, anyOffline = false, anyUnchecked = false;
     for (const a of A) {
       if (a.status !== 'active') continue;
       const ts = a.online ? a.updates?.checked_at : a.last_seen;
+      if (!a.online) anyOffline = true;
+      if (a.online && !ts && hasUpdates(a)) anyUnchecked = true; // waiting for its first check
       if (!ts) continue;
       if (!oldest || ts < oldest.ts) oldest = { ts, a };
     }
+    // An offline system is named even if an online one has older data.
+    if (anyOffline && oldest?.a.online) {
+      const off = A.filter((a) => a.status === 'active' && !a.online && a.last_seen).sort((x, y) => x.last_seen - y.last_seen)[0];
+      if (off) oldest = { ts: off.last_seen, a: off };
+    }
     const age = oldest ? now() - oldest.ts : 0;
     const interval = (d.settings?.check_interval_hours || 6) * 3600;
-    const oc = !oldest ? 'c-green' : age <= interval + 900 ? 'c-green' : age <= Math.max(86400, interval * 2) ? 'c-amber' : 'c-red';
+    const fresh = age <= interval + 900;
+    const allCurrent = !!oldest && fresh && !anyOffline && !anyUnchecked;
+    const oc = !oldest || allCurrent ? 'c-green' : fresh || age <= Math.max(86400, interval * 2) ? 'c-amber' : 'c-red';
+    if (allCurrent) oldest = null;
+    const hours = d.settings?.check_interval_hours || 6;
     setHTML($('#d-stats'), html`
       <div class="panel stat c-green"><div class="label">Systems online</div><div class="value">${online}<small> / ${active.length}</small></div>
         ${reportOnly ? html`<div class="statnote" title="Report-only systems only report; no checks, installs or reboots">${icon('pause')} ${reportOnly} report only</div>` : ''}</div>
       <div class="panel stat ${oc} ${oldest ? 'click' : ''}" ${oldest ? raw(`data-act="open-agent" data-id="${esc(oldest.a.id)}"`) : ''} title="${oldest ? 'Oldest information shown on this dashboard: ' + fmtDate(oldest.ts, true) : ''}">
         <div class="label">Oldest information</div>
         ${oldest ? html`<div class="value datev">${fmtDate(oldest.ts)}</div><div class="statnote">${ago(oldest.ts)} · ${oldest.a.name} (${oldest.a.online ? 'last update check' : 'offline'})</div>`
+          : allCurrent ? html`<div class="value datev">All systems current</div><div class="statnote">every system checked within ${hours} h</div>`
           : html`<div class="value">—</div><div class="statnote">nothing to report</div>`}</div>
       <div class="panel stat c-amber"><div class="label">Pending updates</div><div class="value">${totUpd}</div></div>
       <div class="panel stat c-red"><div class="label">Security updates</div><div class="value">${totSec}</div></div>
@@ -910,7 +924,10 @@ function AgentPage([id]) {
     const kv = [
       ['Hostname', f.hostname], ['Operating system', osLabel(f)], ['Kernel', f.kernel], ['Architecture', `${f.os}/${f.arch}`],
       ['Virtualization', f.virt], ['Uptime', a.online ? dur(f.uptime_sec) : 'offline'], ['CPUs', f.cpus], ['Memory (assigned)', bytes(f.mem_total)],
-      ['IP addresses', (f.ips || []).join(', ')], ['Agent ID', a.id], ['Agent version', a.core_version], ['Enrolled', fmtDate(a.enrolled_at)], ['Last seen', fmtDate(a.last_seen, true)],
+      ['IP addresses', (f.ips || []).join(', ')],
+      ['IPv4 gateway', f.gateway ? f.gateway + (f.gateway_if ? ` (${f.gateway_if})` : '') : '—'],
+      ['DNS servers', f.dns?.length ? f.dns.join(', ') + (f.dns_via ? ` (via ${f.dns_via})` : '') : '—'],
+      ['Agent ID', a.id], ['Agent version', a.core_version], ['Enrolled', fmtDate(a.enrolled_at)], ['Last seen', fmtDate(a.last_seen, true)],
     ];
     return html`<div class="panel panel-pad"><div class="facts">${kv.map(([k, v]) => html`<div><div class="k">${k}</div><div class="v">${v ?? '—'}</div></div>`)}</div></div>`;
   }
