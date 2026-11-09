@@ -685,6 +685,13 @@ function Dashboard() {
       const c = e.target.closest('.card[data-id]');
       if (c && c.dataset.id === st.drag.id) return null;
       if (c) {
+        // Within the same group a drop takes the target's place (so two
+        // neighbours swap wherever you drop); from another group, the half
+        // of the card decides before or after.
+        for (const l of layoutOf(st.data).values()) {
+          const from = l.indexOf(st.drag.id), to = l.indexOf(c.dataset.id);
+          if (from >= 0 && to >= 0) return { el: c, kind: 'card', id: c.dataset.id, after: from < to };
+        }
         const b = c.getBoundingClientRect();
         return { el: c, kind: 'card', id: c.dataset.id, after: e.clientX > b.left + b.width / 2 };
       }
@@ -774,7 +781,7 @@ function Dashboard() {
       c.addEventListener('dragend', onDragEnd);
       if (session.initial_password) setHTML($('#d-notice'), html`<div class="notice">You are using the generated initial password. <a href="#/settings">Change it in Settings</a>.</div>`);
     },
-    async refresh() { const d = await GET('overview'); if (!st.drag) { st.data = d; render(); } },
+    async refresh() { const d = await GET('overview'); d.groups ||= []; if (!st.drag) { st.data = d; render(); } },
     acts: {
       filter: (t) => { st.filter = t.dataset.f; render(); },
       fold: (t) => { const g = t.dataset.gid; st.folded.has(g) ? st.folded.delete(g) : st.folded.add(g); render(); },

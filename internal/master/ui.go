@@ -736,7 +736,7 @@ func (s *Server) handleLayout(w http.ResponseWriter, r *http.Request) {
 	for _, g := range s.st.st.Groups {
 		byID[g.ID] = g
 	}
-	var order []*Group
+	order := []*Group{} // never nil: stored and sent as [] even without groups
 	seenG := map[string]bool{}
 	seenA := map[string]bool{}
 	for _, gl := range req.Groups {
