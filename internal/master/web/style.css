@@ -175,6 +175,7 @@ input[type=checkbox] { accent-color: var(--cyan); width: 16px; height: 16px; cur
 .badge.reboot { color: #ddd6fe; background: rgba(167, 139, 250, 0.14); border-color: rgba(167, 139, 250, 0.32); }
 .badge.info { color: #bae6fd; background: rgba(96, 165, 250, 0.12); border-color: rgba(96, 165, 250, 0.28); }
 .badge.mute { color: var(--muted); background: rgba(148, 163, 255, 0.06); border-color: var(--line); }
+.badge.xs { font-size: 10.5px; padding: 0 6px; line-height: 16px; }
 .badge.new { color: #a5f3fc; background: rgba(34, 211, 238, 0.1); border-color: rgba(34, 211, 238, 0.25); }
 /* Icons inside text elements are text-sized (an <svg> without a size fills its container). */
 .badge svg, .notice svg, .verpill svg, .statnote svg, .small svg { width: 1.1em; height: 1.1em; flex: none; vertical-align: -0.2em; }

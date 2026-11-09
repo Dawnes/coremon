@@ -60,6 +60,7 @@ func collectFacts() proto.Facts {
 	read := func(p string) string { b, _ := os.ReadFile(p); return string(b) }
 	f.Gateway, f.GatewayIf = defaultGateway(read("/proc/net/route"))
 	f.DNS, f.DNSVia = dnsServers(read)
+	f.Health = currentHealth()
 	return f
 }
 

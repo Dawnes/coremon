@@ -21,6 +21,21 @@ type Settings struct {
 	MasterURL          string `json:"master_url"`     // used in install commands; empty = derive from browser
 	GitHubRepo         string `json:"github_repo"`    // owner/name publishing the version index
 	GitHubSeeded       bool   `json:"github_seeded"`
+	OSInfoDays         int    `json:"os_info_days"` // how often the OS support dates are looked up: 3, 14, 30 or 90
+}
+
+// osInfoChoices are the allowed lookup intervals in days.
+var osInfoChoices = []int{3, 14, 30, 90}
+
+const defaultOSInfoDays = 14
+
+func validOSInfoDays(d int) bool {
+	for _, c := range osInfoChoices {
+		if d == c {
+			return true
+		}
+	}
+	return false
 }
 
 const (
@@ -46,6 +61,9 @@ func (s *Settings) normalize() {
 	s.RetentionDays = clamp(s.RetentionDays, minRetention, maxRetention)
 	if s.UIPort != 443 {
 		s.UIPort = 8443
+	}
+	if !validOSInfoDays(s.OSInfoDays) {
+		s.OSInfoDays = defaultOSInfoDays
 	}
 }
 

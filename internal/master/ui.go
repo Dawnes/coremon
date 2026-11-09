@@ -47,6 +47,7 @@ type agentView struct {
 	ModeSupport  bool                       `json:"mode_support"`      // agent enforces report-only itself (protocol 3+)
 	AgentReport  bool                       `json:"agent_report_only"` // mode the agent itself confirmed
 	Sealed       bool                       `json:"sealed"`            // uses the payload key (0.3.0+)
+	OSSupport    *osSupport                 `json:"os_support,omitempty"`
 	Facts        proto.Facts                `json:"facts"`
 	Features     []string                   `json:"features"`
 	Updates      *updatesSummary            `json:"updates,omitempty"`
@@ -69,6 +70,7 @@ func (s *Server) view(a *Agent, full bool) agentView {
 	v.Legacy = a.CoreVersion != "" && versionLess(a.CoreVersion, minAgentVersion)
 	v.ModeSupport, v.AgentReport = a.Protocol >= 3, a.ReportOnly
 	v.Sealed = a.Protocol >= 5 || a.AgentKey != ""
+	v.OSSupport = s.supportFor(a.Facts.OSID, a.Facts.OSVersion, time.Now())
 	for _, f := range a.Features {
 		v.Features = append(v.Features, f.Name)
 	}
@@ -516,6 +518,7 @@ func (s *Server) handleSettingsGet(w http.ResponseWriter, r *http.Request) {
 	s.st.mu.Lock()
 	defer s.st.mu.Unlock()
 	writeJSON(w, map[string]any{"settings": s.st.st.Settings, "pin": s.currentPin(), "suggested_url": s.derivedURL(r), "index_url": url,
+		"os_info": s.osInfoStatus(s.st.st.Settings.OSInfoDays), "os_info_choices": osInfoChoices,
 		"next_purge": s.nextPurgeAt().Unix(), "agent_port": s.agentPort(), "ui_port_error": s.uiPortError(),
 		"limits": map[string]int{"heartbeat_min": minHeartbeat, "heartbeat_max": maxHeartbeat, "retention_min": minRetention, "retention_max": maxRetention}})
 }
@@ -574,11 +577,22 @@ func (s *Server) handleSettingsSave(w http.ResponseWriter, r *http.Request) {
 	req.GitHubSeeded = true
 	s.st.mu.Lock()
 	old := s.st.st.Settings
+	if req.OSInfoDays == 0 {
+		req.OSInfoDays = old.OSInfoDays // a page from before this setting
+	}
+	if !validOSInfoDays(req.OSInfoDays) {
+		s.st.mu.Unlock()
+		bad("OS support lookup must be every 3, 14, 30 or 90 days")
+		return
+	}
 	s.st.st.Settings = req
 	s.st.markDirty()
 	s.st.mu.Unlock()
-	s.audit.write(actor(r), clientIP(r), "settings.saved", "", fmt.Sprintf("check=%dh heartbeat=%ds retention=%dd port=%d url=%q repo=%q",
-		req.CheckIntervalHours, req.HeartbeatSec, req.RetentionDays, req.UIPort, req.MasterURL, req.GitHubRepo))
+	s.audit.write(actor(r), clientIP(r), "settings.saved", "", fmt.Sprintf("check=%dh heartbeat=%ds retention=%dd port=%d url=%q repo=%q os-info=%dd",
+		req.CheckIntervalHours, req.HeartbeatSec, req.RetentionDays, req.UIPort, req.MasterURL, req.GitHubRepo, req.OSInfoDays))
+	if old.OSInfoDays != req.OSInfoDays {
+		s.kickOSInfo()
+	}
 	if old.GitHubRepo != req.GitHubRepo {
 		s.kickIndex()
 	}

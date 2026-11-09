@@ -405,6 +405,35 @@ function osLabel(f) { return f.os_name || [f.os_id, f.os_version].filter(Boolean
 const hasUpdates = (a) => (a.features || []).includes('updates');
 const canReboot = (a) => (a.features || []).includes('system');
 // First IPv4 address; the others on hover.
+// ---------- health and OS support ----------
+const ymd = (s) => (s ? s.split('-').reverse().join('-') : ''); // YYYY-MM-DD -> DD-MM-YYYY
+function osSupportText(o, osID) {
+  if (!o) return '—';
+  const esm = o.esm_until ? ` (ESM with Ubuntu Pro until ${ymd(o.esm_until)})` : '';
+  switch (o.phase) {
+    case 'security': return `security support until ${ymd(o.until)}${o.lts_until ? `, then LTS until ${ymd(o.lts_until)}` : ''}`;
+    case 'lts': return `LTS until ${ymd(o.until)}`;
+    case 'standard': return `standard support until ${ymd(o.until)}${esm}`;
+    case 'ended': return osID === 'ubuntu' ? `standard support ended ${ymd(o.end)}${esm}` : `support ended ${ymd(o.end)}`;
+    default: return 'supported, no end date yet';
+  }
+}
+function upgradedBy(by) {
+  if (by === 'coremon') return 'Coremon';
+  if (by === 'automatic') return 'automatic updates';
+  if (by === 'root') return 'root via apt';
+  if (by?.startsWith('user:')) return `${by.slice(5)} via apt`;
+  return 'apt';
+}
+// Small badges on a dashboard card: failed services, OS support, automatic updates.
+function healthBadges(a) {
+  const h = a.facts?.health, o = a.os_support, out = [];
+  if (h?.failed_count > 0) out.push(html`<span class="badge sec xs" title="Failed services: ${(h.failed || []).join(', ')}${h.failed_count > (h.failed || []).length ? ', …' : ''}">${h.failed_count} failed</span>`);
+  if (o?.status === 'expired') out.push(html`<span class="badge sec xs" title="${osLabel(a.facts)}: ${osSupportText(o, a.facts.os_id)}">EOL</span>`);
+  else if (o?.status === 'soon') out.push(html`<span class="badge upd xs" title="${osLabel(a.facts)}: ${osSupportText(o, a.facts.os_id)}">EOL soon</span>`);
+  if (h?.auto_updates === 'on') out.push(html`<span class="badge info xs" title="Automatic updates (unattended-upgrades) are on">auto</span>`);
+  return out;
+}
 function ipLabel(f) {
   const ips = f.ips || [];
   if (!ips.length) return html`<span class="dim">—</span>`;
@@ -540,7 +569,7 @@ function Dashboard() {
           <div style="min-width:0"><div class="name">${a.name}</div><div class="os">${osLabel(f)} · ${f.arch || '?'} · ${f.virt || ''}</div><div class="os">${ipLabel(f)}</div></div>
           ${selectable ? html`<input type="checkbox" class="selbox" data-act="sel" data-id="${a.id}" ${st.sel.has(a.id) ? 'checked' : ''} title="Select">` : ''}</div>
         ${mid}
-        ${a.status !== 'pending' ? html`<div class="inforow"><span class="uptime" title="uptime">${icon('clock')}${a.online ? 'up ' + dur(f.uptime_sec) : 'offline'}</span><span class="spacer"></span>${verPill(a)}</div>` : ''}
+        ${a.status !== 'pending' ? html`<div class="inforow"><span class="uptime" title="uptime">${icon('clock')}${a.online ? 'up ' + dur(f.uptime_sec) : 'offline'}</span>${healthBadges(a)}<span class="spacer"></span>${verPill(a)}</div>` : ''}
         <div class="foot">
           ${a.busy ? html`<span class="spin"></span><span>${a.busy} job${a.busy > 1 ? 's' : ''}</span>` : html`<span>${a.online ? (u ? when(u.checked_at, 'checked ') : 'online') : a.status === 'pending' ? '' : when(a.last_seen, 'seen ')}</span>`}
         </div>
@@ -619,7 +648,7 @@ function Dashboard() {
       <div class="panel stat ${oc} ${oldest ? 'click' : ''}" ${oldest ? raw(`data-act="open-agent" data-id="${esc(oldest.a.id)}"`) : ''} title="${oldest ? 'Oldest information shown on this dashboard: ' + fmtDate(oldest.ts, true) : ''}">
         <div class="label">Oldest information</div>
         ${oldest ? html`<div class="value datev">${fmtDate(oldest.ts)}</div><div class="statnote">${ago(oldest.ts)} · ${oldest.a.name} (${oldest.a.online ? 'last update check' : 'offline'})</div>`
-          : allCurrent ? html`<div class="value datev">All systems current</div><div class="statnote">every system checked within ${hours} h</div>`
+          : allCurrent ? html`<div class="value datev">All systems current</div><div class="statnote">all checked within ${hours} h</div>`
           : html`<div class="value">—</div><div class="statnote">nothing to report</div>`}</div>
       <div class="panel stat c-amber"><div class="label">Pending updates</div><div class="value">${totUpd}</div></div>
       <div class="panel stat c-red"><div class="label">Security updates</div><div class="value">${totSec}</div></div>
@@ -644,7 +673,7 @@ function Dashboard() {
     for (const id of [...st.sel]) if (!A.some((a) => a.id === id && a.status === 'active')) st.sel.delete(id);
     const n = st.sel.size;
     setHTML($('#d-bulk'), n ? html`<div class="bulkbar"><b>${n}</b> selected<span class="spacer"></span>
-      <button class="btn sm" data-act="bulk-check">${icon('refresh')} Check now</button>
+      <button class="btn sm" data-act="bulk-check">${icon('refresh')} Check selected</button>
       <button class="btn warn sm" data-act="bulk-upgrade">${icon('zap')} Upgrade all packages</button>
       <button class="btn ghost sm" data-act="bulk-clear">Clear</button></div>` : '');
   }
@@ -731,7 +760,7 @@ function Dashboard() {
     mount(el) {
       el.innerHTML = r(html`
         <div class="page-head"><div><h1>Dashboard</h1><div class="sub">Update status across your fleet</div></div><span class="spacer"></span>
-          ${ifChange(html`<button class="btn" data-act="check-all">${icon('refresh')} Check all</button>`)}</div>
+          ${ifChange(html`<button class="btn" data-act="check-all">${icon('refresh')} Check now</button>`)}</div>
         <div id="d-notice"></div>
         <div class="stats" id="d-stats"></div>
         <div class="toolbar"><input type="search" class="search" id="d-q" placeholder="Search name, OS, IP, group…"><div class="chips" id="d-chips"></div></div>
@@ -920,13 +949,18 @@ function AgentPage([id]) {
       <tbody>${jobs.map((j) => html`<tr class="click" data-act="open-job" data-id="${j.id}"><td><b>${jobTitle(j)}</b><div class="dim small">${jobParams(j)}</div></td><td>${statusBadge(j.status)}</td><td class="muted">${j.actor}</td><td class="muted">${when(j.created)}</td><td class="muted">${j.finished ? dur(j.finished - (j.started || j.created)) : '—'}</td></tr>`)}</tbody></table></div>`;
   }
   function systemTab(a) {
-    const f = a.facts;
+    const f = a.facts, h = f.health;
     const kv = [
       ['Hostname', f.hostname], ['Operating system', osLabel(f)], ['Kernel', f.kernel], ['Architecture', `${f.os}/${f.arch}`],
       ['Virtualization', f.virt], ['Uptime', a.online ? dur(f.uptime_sec) : 'offline'], ['CPUs', f.cpus], ['Memory (assigned)', bytes(f.mem_total)],
       ['IP addresses', (f.ips || []).join(', ')],
       ['IPv4 gateway', f.gateway ? f.gateway + (f.gateway_if ? ` (${f.gateway_if})` : '') : '—'],
       ['DNS servers', f.dns?.length ? f.dns.join(', ') + (f.dns_via ? ` (via ${f.dns_via})` : '') : '—'],
+      ['OS support', a.os_support ? html`${a.os_support.status === 'expired' ? html`<span class="badge sec xs">EOL</span> ` : a.os_support.status === 'soon' ? html`<span class="badge upd xs">EOL soon</span> ` : ''}${osSupportText(a.os_support, f.os_id)}` : '—'],
+      ['Failed services', !h || h.failed_count < 0 ? '—' : h.failed_count === 0 ? 'none'
+        : html`<span class="badge sec xs">${h.failed_count} failed</span> ${(h.failed || []).join(', ')}${h.failed_count > (h.failed || []).length ? ', …' : ''}`],
+      ['Automatic updates', ({ on: html`<span class="badge info xs">on</span> unattended-upgrades`, off: 'off', not_installed: 'not installed' })[h?.auto_updates] || '—'],
+      ['Last upgrade', h?.last_upgrade ? `${fmtDate(h.last_upgrade.time)} (${ago(h.last_upgrade.time)}, ${h.last_upgrade.packages} package${h.last_upgrade.packages === 1 ? '' : 's'}) · by ${upgradedBy(h.last_upgrade.by)}` : h ? 'none recorded' : '—'],
       ['Agent ID', a.id], ['Agent version', a.core_version], ['Enrolled', fmtDate(a.enrolled_at)], ['Last seen', fmtDate(a.last_seen, true)],
     ];
     return html`<div class="panel panel-pad"><div class="facts">${kv.map(([k, v]) => html`<div><div class="k">${k}</div><div class="v">${v ?? '—'}</div></div>`)}</div></div>`;
@@ -1319,6 +1353,15 @@ function SettingsGeneral() {
       ? html`<div class="notice" style="margin:0">After saving, the first cleanup with ${days} day${days === 1 ? '' : 's'} runs at <b>${fmtDate(p.at)}</b> and removes ${what}.</div>`
       : html`Cleanup runs every full hour. Next cleanup: <b>${fmtDate(p.at)}</b>, removing ${what}.`);
   }
+  // OS support lookup: when last fetched, next check, last error.
+  function osInfoBox(o) {
+    if (!o) return;
+    const host = (o.source || '').replace(/^https?:\/\//, '').split('/')[0];
+    setHTML($('#osinfo-box'), html`<div class="dim small">End-of-support dates of Debian and Ubuntu, from Debian's distro-info-data (${host}).
+      ${o.fetched_at ? html`Last fetched ${fmtDate(o.fetched_at)}` : 'Not fetched yet'}${o.next_at ? html` · next check ${fmtDate(o.next_at)}` : ''}.
+      ${ifChange(html`<button type="button" class="btn ghost sm" data-act="osinfo-check" ${st.osChecking ? 'disabled' : ''}>${icon('refresh')} Check now</button>`)}</div>
+      ${o.error ? html`<div class="notice red small" style="margin:6px 0 0">Last lookup failed (${fmtDate(o.last_try)}): ${o.error}. Retrying every 6 hours; the previous dates stay in use.</div>` : ''}`);
+  }
   // Master URL: locked; administrators can Change it or go back to automatic.
   // Takes effect on Save, like the other fields.
   function urlBox() {
@@ -1356,6 +1399,9 @@ function SettingsGeneral() {
             ${d.ui_port_error ? html`<div class="notice red" style="margin:0">${d.ui_port_error}</div>` : ''}
             <div id="url-box"></div>
             <div class="dim small">Automatic: the address your browser uses, with the agent port. Change it only if agents reach the master under a different name.</div>
+            <label class="field">Look up OS support dates<select name="osinfo">
+              ${(d.os_info_choices || [3, 14, 30, 90]).map((n) => html`<option value="${n}" ${n === s.os_info_days ? 'selected' : ''}>every ${n} days${n === 14 ? ' (default)' : ''}</option>`)}</select></label>
+            <div id="osinfo-box"></div>
             <label class="field">GitHub repository for releases<input type="text" name="gh" placeholder="owner/name" value="${s.github_repo}"></label>
             <div class="dim small mono" style="word-break:break-all">${d.index_url ? 'Version index: ' + d.index_url : ''}</div>
             ${ifChange(html`<div><button class="btn primary">Save</button></div>`)}
@@ -1365,6 +1411,7 @@ function SettingsGeneral() {
       st.url = s.master_url || '';
       st.editing = false;
       urlBox();
+      osInfoBox(d.os_info);
       const f = $('form[data-submit=save]', el);
       const upd = () => {
         const days = +f.ret.value;
@@ -1379,12 +1426,20 @@ function SettingsGeneral() {
     },
     unmount() { clearTimeout(st.timer); },
     acts: {
+      'osinfo-check': async () => {
+        st.osChecking = true; osInfoBox(st.d.os_info);
+        try {
+          const res = await POST('osinfo/check');
+          st.d.os_info = res.os_info;
+          toast(res.os_info.error ? 'OS support lookup failed' : 'OS support dates updated', res.os_info.error ? 'err' : 'ok');
+        } finally { st.osChecking = false; osInfoBox(st.d.os_info); }
+      },
       'url-change': () => { st.editing = true; urlBox(); },
       'url-auto': () => { st.url = ''; st.editing = false; urlBox(); toast('Automatic address — press Save to apply'); },
       save: async (f) => {
         const url = st.editing ? f.url.value.trim() : st.url;
         const res = await POST('settings', { check_interval_hours: +f.interval.value, heartbeat_sec: +f.hb.value, retention_days: +f.ret.value,
-          ui_port: +f.port.value, master_url: url, github_repo: f.gh.value });
+          ui_port: +f.port.value, master_url: url, github_repo: f.gh.value, os_info_days: +f.osinfo.value });
         st.url = res.settings.master_url || '';
         st.editing = false;
         urlBox();

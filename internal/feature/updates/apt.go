@@ -26,6 +26,8 @@ var aptOpts = []string{
 	"-o", "Dpkg::Options::=--force-confdef",
 	"-o", "Dpkg::Options::=--force-confold",
 	"-o", "DPkg::Lock::Timeout=300",
+	// Marks the run as Coremon's in apt's history log (no effect on apt).
+	"-o", "Coremon::Run=1",
 }
 
 func (aptBackend) Name() string { return "apt" }

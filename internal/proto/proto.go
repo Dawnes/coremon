@@ -37,6 +37,24 @@ type Facts struct {
 	GatewayIf string   `json:"gateway_if,omitempty"`
 	DNS       []string `json:"dns,omitempty"`
 	DNSVia    string   `json:"dns_via,omitempty"` // e.g. "systemd-resolved"
+	// Health (agent 0.3.3+), collected every few minutes; nil from older agents.
+	Health *Health `json:"health,omitempty"`
+}
+
+// Health is what the agent reports about the system's state.
+type Health struct {
+	At          int64    `json:"at"`           // when collected (unix)
+	FailedCount int      `json:"failed_count"` // failed systemd units; -1 = unknown
+	Failed      []string `json:"failed"`       // their names (at most 10)
+	AutoUpdates string   `json:"auto_updates"` // on | off | not_installed | "" (unknown)
+	LastUpgrade *Upgrade `json:"last_upgrade,omitempty"`
+}
+
+// Upgrade is the last apt run that upgraded packages.
+type Upgrade struct {
+	Time     int64  `json:"time"`     // end of the run (unix)
+	Packages int    `json:"packages"` // number of packages upgraded
+	By       string `json:"by"`       // coremon | automatic | root | user:<name>
 }
 
 // ActionSpec describes one action of a built-in feature.

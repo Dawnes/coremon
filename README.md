@@ -105,7 +105,7 @@ change the password under **Settings**. Within a minute the master has
 downloaded the agent versions (see **Releases**).
 
 Re-running the same command upgrades an existing master and keeps its data.
-The master needs outbound HTTPS to `github.com` and
+The master needs outbound HTTPS to `github.com`, `salsa.debian.org` (OS support dates from Debian's distro-info-data, looked up every 3/14/30/90 days — Settings → General) and
 `release-assets.githubusercontent.com` / `objects.githubusercontent.com`.
 
 ## Add systems
@@ -119,9 +119,9 @@ The master needs outbound HTTPS to `github.com` and
 ## Day-to-day
 
 * **Dashboard** — systems in your groups and order (drag cards and group
-  headers to arrange; fold groups; select a whole group). Filters for updates,
+  headers to arrange; fold groups; select a whole group). Cards show small badges for failed services, an expired (or soon expiring) OS and automatic updates. Filters for updates,
   security, reboot, offline, pending and outdated agents; bulk *Check now*,
-  *Upgrade all packages* and *Agent → latest*.
+  *Upgrade all packages* and *Agent → latest*. *Check now* checks every system, *Check selected* the selected ones.
 * **System page** (for operating a system) — *Ping*, *Report only* and *Reboot*.
   *Ping* (every user, agents 0.3.1+) asks the agent to answer at once without
   doing anything: it shows the round trip, the agent version, which payload
@@ -130,7 +130,7 @@ The master needs outbound HTTPS to `github.com` and
   Jobs, not in the audit log.
   *Updates*: select packages (or *Security only*) and *Install selected*, or
   *Upgrade all*; output streams live. *Agent*: install any of the 3 kept agent
-  versions. *System*: host facts, including the IPv4 gateway (default route with the lowest metric) and the IPv4 DNS servers in use (the real servers when systemd-resolved is used).
+  versions. *System*: host facts — OS support status, failed services, automatic updates (unattended-upgrades), last upgrade (from apt's history: when, how many packages, started by whom) — and the IPv4 gateway (default route with the lowest metric) and the IPv4 DNS servers in use (the real servers when systemd-resolved is used).
 * **Releases** — version index status, master update, agent versions and a
   per-system version table.
 * **History** — *Jobs* (everything sent to agents, with output) and *Audit

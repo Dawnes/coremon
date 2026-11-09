@@ -387,6 +387,7 @@ func (a *Agent) execute(ctx context.Context, c proto.Command) {
 			break
 		}
 		data, err = a.callFeature(ctx, c, timeout)
+		healthStale() // an install or upgrade changes the last upgrade
 	case proto.CmdPing:
 		// Answer at once; nothing is done on the system.
 		keys, used := a.cl.getPins()

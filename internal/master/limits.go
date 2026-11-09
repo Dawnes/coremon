@@ -16,14 +16,15 @@ func isIPv4(s string) bool {
 // Limits on what an agent may report. An enrolled system (even one still
 // waiting for approval) must not be able to bloat the master's state.
 const (
-	maxPollBody   = 256 << 10 // heartbeat request
-	maxEnrollBody = 64 << 10
-	maxFactLen    = 256 // any text fact
-	maxIPs        = 32
-	maxDNS        = 8
-	maxFeatures   = 16
-	maxActions    = 32
-	maxNameLen    = 64 // feature and action names, titles
+	maxPollBody    = 256 << 10 // heartbeat request
+	maxEnrollBody  = 64 << 10
+	maxFactLen     = 256 // any text fact
+	maxIPs         = 32
+	maxDNS         = 8
+	maxFailedUnits = 10
+	maxFeatures    = 16
+	maxActions     = 32
+	maxNameLen     = 64 // feature and action names, titles
 )
 
 func clip(s string, n int) string {
@@ -62,6 +63,37 @@ func sanitizeFacts(f proto.Facts) proto.Facts {
 	f.DNS = dns
 	if f.DNSVia != "systemd-resolved" {
 		f.DNSVia = ""
+	}
+	if h := f.Health; h != nil {
+		c := *h
+		if c.FailedCount < -1 || c.FailedCount > 100000 {
+			c.FailedCount = -1
+		}
+		if len(c.Failed) > maxFailedUnits {
+			c.Failed = c.Failed[:maxFailedUnits]
+		}
+		names := make([]string, 0, len(c.Failed))
+		for _, n := range c.Failed {
+			names = append(names, clip(strings.TrimSpace(n), 128))
+		}
+		c.Failed = names
+		switch c.AutoUpdates {
+		case "on", "off", "not_installed":
+		default:
+			c.AutoUpdates = ""
+		}
+		if u := c.LastUpgrade; u != nil {
+			lu := *u
+			if lu.Packages < 0 || lu.Packages > 100000 {
+				lu.Packages = 0
+			}
+			if lu.By != "coremon" && lu.By != "automatic" && lu.By != "root" && !strings.HasPrefix(lu.By, "user:") {
+				lu.By = ""
+			}
+			lu.By = clip(lu.By, 40)
+			c.LastUpgrade = &lu
+		}
+		f.Health = &c
 	}
 	if f.UptimeSec < 0 {
 		f.UptimeSec = 0

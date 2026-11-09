@@ -41,6 +41,8 @@ type Config struct {
 	GitHubRepo string
 	// IndexURL overrides the version index location (testing).
 	IndexURL string
+	// OSInfoURL overrides the base URL of the distro-info files (testing).
+	OSInfoURL string
 }
 
 // Server is the master.
@@ -57,6 +59,7 @@ type Server struct {
 	pings         map[string]chan proto.Result // ping job ID -> waiting UI request; guarded by st.mu
 	idx           *indexSync
 	nonces        nonceCache // sealed requests already seen (replay)
+	osi           osInfo     // OS support dates (distro-info-data)
 
 	handler http.Handler
 
@@ -205,6 +208,8 @@ func New(cfg Config) (*Server, error) {
 	s.cleanupLegacy()
 	s.repo.scan()
 	s.idx = newIndexSync()
+	s.osi.kick = make(chan struct{}, 1)
+	s.loadOSInfo()
 	if !st.st.Settings.GitHubSeeded && cfg.GitHubRepo != "" && ghRepoRe.MatchString(cfg.GitHubRepo) {
 		st.st.Settings.GitHubRepo = cfg.GitHubRepo
 		st.st.Settings.GitHubSeeded = true
@@ -305,6 +310,7 @@ func (s *Server) routes() http.Handler {
 	view("GET /api/ui/releases", s.handleReleases)
 	change("POST /api/ui/releases/check", s.handleReleasesCheck)
 	change("POST /api/ui/master/update", s.handleMasterUpdate)
+	change("POST /api/ui/osinfo/check", s.handleOSInfoCheck)
 	change("GET /api/ui/users", s.handleUsers)
 	change("POST /api/ui/users", s.handleUserCreate)
 	change("POST /api/ui/users/{id}", s.handleUserUpdate)
@@ -328,6 +334,7 @@ func (s *Server) Run(ctx context.Context) error {
 	go s.st.flushLoop(stop)
 	go s.schedulerLoop(stop)
 	go s.indexLoop(stop)
+	go s.osInfoLoop(stop)
 	handler := s.routes()
 	s.handler = handler
 	s.applyUIPort(handler)
