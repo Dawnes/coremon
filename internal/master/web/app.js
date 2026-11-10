@@ -567,17 +567,18 @@ function Dashboard() {
     const f = a.facts;
     let accent = 'a-ok';
     if (a.status === 'pending') accent = 'a-pend';
+    else if (a.below_min) accent = 'a-upd';
     else if (!a.online) accent = 'a-off';
     else if (u?.security) accent = 'a-sec';
     else if (u?.total) accent = 'a-upd';
-    const selectable = a.status === 'active' && canChange();
+    const selectable = a.status === 'active' && !a.below_min && canChange();
     let mid;
     if (a.status === 'pending') {
       mid = html`<div class="mid"><div><div class="biglbl">Waiting for approval</div><div class="dim small">enrolled ${when(a.enrolled_at)}</div></div>
         <div class="badges">${ifChange(html`<button class="btn primary sm" data-act="approve" data-id="${a.id}">${icon('check')} Approve</button>`)}</div></div>`;
-    } else if (a.legacy) {
-      mid = html`<div class="mid"><div class="big dim">—</div><div class="biglbl">agent ${a.core_version} is too old<br>to connect</div>
-        <div class="badges"><span class="small dim">run a new install command</span></div></div>`;
+    } else if (a.below_min) {
+      mid = html`<div class="mid"><div class="big some">↑</div><div class="biglbl">agent update<br>required</div>
+        <div class="badges">${ifChange(html`<button class="btn primary sm" data-act="agent-update" data-id="${a.id}" ${a.online ? '' : 'disabled'} title="${a.online ? `Update to agent ${a.core_latest}` : 'The system is offline'}">${icon('up')} Update agent</button>`)}</div></div>`;
     } else if (!hasUpdates(a) && a.online) {
       mid = html`<div class="mid"><div class="big dim">—</div><div class="biglbl">no update function</div><div class="badges"></div></div>`;
     } else if (!u) {
@@ -589,10 +590,12 @@ function Dashboard() {
     return html`
       <div class="card ${accent} ${st.sel.has(a.id) ? 'sel' : ''}" data-act="open-agent" data-id="${a.id}" ${canChange() ? raw('data-drag="agent" draggable="true"') : ''}>
         <div class="top">${ifChange(html`<span class="grip" title="Drag to reorder or move to another group">${icon('grip')}</span>`)}${agentDot(a)}
-          <div style="min-width:0"><div class="name">${a.name}</div><div class="os">${osLabel(f)} · ${f.arch || '?'} · ${f.virt || ''}</div><div class="os">${ipLabel(f)}</div></div>
+          <div style="min-width:0"><div class="name">${a.name}</div>${a.below_min
+            ? html`<div class="os">agent ${a.core_version} · lowest allowed ${a.min_agent}</div><div class="os">upgrade only — no data shown</div>`
+            : html`<div class="os">${osLabel(f)} · ${f.arch || '?'} · ${f.virt || ''}</div><div class="os">${ipLabel(f)}</div>`}</div>
           ${selectable ? html`<input type="checkbox" class="selbox" data-act="sel" data-id="${a.id}" ${st.sel.has(a.id) ? 'checked' : ''} title="Select">` : ''}</div>
         ${mid}
-        ${a.status !== 'pending' ? html`<div class="inforow"><span class="uptime" title="${lastReboot(a)}">${icon('clock')}${a.online ? 'up ' + dur(f.uptime_sec) : 'offline'}</span>${healthBadges(a)}<span class="spacer"></span>${verPill(a)}</div>` : ''}
+        ${a.status !== 'pending' ? html`<div class="inforow"><span class="uptime" title="${a.below_min ? '' : lastReboot(a)}">${icon('clock')}${!a.online ? 'offline' : a.below_min ? 'online' : 'up ' + dur(f.uptime_sec)}</span>${healthBadges(a)}<span class="spacer"></span>${verPill(a)}</div>` : ''}
         <div class="foot">
           ${a.busy ? html`<span class="spin"></span><span>${a.busy} job${a.busy > 1 ? 's' : ''}</span>` : html`<span>${a.online ? (u ? when(u.checked_at, 'checked ') : 'online') : a.status === 'pending' ? '' : when(a.last_seen, 'seen ')}</span>`}
         </div>
@@ -646,7 +649,7 @@ function Dashboard() {
     // offline system is never current.
     let oldest = null, anyOffline = false, anyUnchecked = false;
     for (const a of A) {
-      if (a.status !== 'active') continue;
+      if (a.status !== 'active' || a.below_min) continue; // upgrade-only systems have no data here
       const ts = a.online ? a.updates?.checked_at : a.last_seen;
       if (!a.online) anyOffline = true;
       if (a.online && !ts && hasUpdates(a)) anyUnchecked = true; // waiting for its first check
@@ -655,7 +658,7 @@ function Dashboard() {
     }
     // An offline system is named even if an online one has older data.
     if (anyOffline && oldest?.a.online) {
-      const off = A.filter((a) => a.status === 'active' && !a.online && a.last_seen).sort((x, y) => x.last_seen - y.last_seen)[0];
+      const off = A.filter((a) => a.status === 'active' && !a.below_min && !a.online && a.last_seen).sort((x, y) => x.last_seen - y.last_seen)[0];
       if (off) oldest = { ts: off.last_seen, a: off };
     }
     const age = oldest ? now() - oldest.ts : 0;
@@ -802,7 +805,8 @@ function Dashboard() {
       c.addEventListener('dragend', onDragEnd);
       if (session.initial_password) setHTML($('#d-notice'), html`<div class="notice">You are using the generated initial password. <a href="#/settings">Change it in Settings</a>.</div>`);
     },
-    async refresh() { const d = await GET('overview'); d.groups ||= []; if (!st.drag) { st.data = d; render(); } },
+    // Systems too old to connect (before 0.3.0) are only listed under Settings > Systems.
+    async refresh() { const d = await GET('overview'); d.groups ||= []; d.agents = d.agents.filter((a) => !a.legacy); if (!st.drag) { st.data = d; render(); } },
     acts: {
       filter: (t) => { st.filter = t.dataset.f; render(); },
       fold: (t) => { const g = t.dataset.gid; st.folded.has(g) ? st.folded.delete(g) : st.folded.add(g); render(); },
@@ -828,6 +832,13 @@ function Dashboard() {
         const ids = st.data.agents.filter((a) => a.status === 'active' && a.online && hasUpdates(a)).map((a) => a.id);
         if (!ids.length) return toast('No online systems with the update function', 'err');
         return runAction(ids, 'updates', 'check', {}, { open: false });
+      },
+      'agent-update': async (t) => {
+        const a = st.data.agents.find((x) => x.id === t.dataset.id);
+        if (!(await confirmBox(`Update the agent on ${a.name}?`, `Agent ${a.core_version} is older than the lowest allowed version ${a.min_agent}. It is updated to ${a.core_latest}; afterwards the system reports normally again.`, { okText: 'Update agent' }))) return;
+        const res = await POST(`agents/${a.id}/core`, {});
+        if (res.job) openJob(res.job); else toast('Update requested — it runs when the system is online', 'ok');
+        view.refresh();
       },
     },
   };
@@ -861,7 +872,7 @@ function SystemList() {
   lastDashSub = 'list';
   const st = { filter: 'all', q: '', data: null, sort: 'name', dir: 1 };
   const byText = (x, y) => String(x).localeCompare(String(y), undefined, { numeric: true, sensitivity: 'base' });
-  const statusText = (a) => (a.status === 'pending' ? 'pending' : !a.online ? 'offline' : a.status === 'report_only' ? 'report only' : 'online');
+  const statusText = (a) => (a.status === 'pending' ? 'pending' : a.below_min ? 'update required' : !a.online ? 'offline' : a.status === 'report_only' ? 'report only' : 'online');
   const lastTs = (a) => (a.online ? a.updates?.checked_at || 0 : a.last_seen || 0);
   const healthN = (a) => (a.facts?.health?.failed_count > 0 ? 2 : 0) + (a.facts?.health?.auto_updates === 'on' ? 1 : 0);
   const COLS = [
@@ -886,17 +897,18 @@ function SystemList() {
   }
   function last(a) {
     if (a.status === 'pending') return html`<span class="dim">enrolled ${when(a.enrolled_at)}</span>`;
+    if (a.below_min) return html`<span class="dim">seen ${when(a.last_seen)}</span>`;
     if (!a.online) return html`<span class="c-red">offline</span><span class="dim">, seen ${when(a.last_seen)}</span>`;
     return a.updates?.checked_at ? when(a.updates.checked_at) : html`<span class="dim">waiting for first check</span>`;
   }
   function row(a) {
     const u = a.updates, o = a.os_support, f = a.facts;
     return html`<tr>
-      <td class="nowrap" title="${statusText(a)}">${agentDot(a)}${statusText(a) === 'online' ? '' : html` <span class="small ${a.status === 'pending' || a.status === 'report_only' ? 'c-amber' : 'c-red'}">${statusText(a)}</span>`}</td>
+      <td class="nowrap" title="${statusText(a)}${a.below_min ? ` (agent ${a.core_version}, lowest allowed ${a.min_agent})` : ''}">${agentDot(a)}${statusText(a) === 'online' ? '' : html` <span class="small ${a.status === 'pending' || a.status === 'report_only' || a.below_min ? 'c-amber' : 'c-red'}">${statusText(a)}</span>`}</td>
       <td class="nowrap"><a href="#/system/${a.id}"><b>${a.name}</b></a></td>
       <td class="opt muted">${groupName(a.group_id)}</td>
       <td class="opt small nowrap">${(f.ips || [])[0] || ''}</td>
-      <td class="opt nowrap" title="${osLabel(f)}">${clipText(osShort(f), 14)}${o?.status === 'expired' ? html` <span class="badge sec xs" title="${osSupportText(o, f.os_id)}">EOL</span>` : o?.status === 'soon' ? html` <span class="badge upd xs" title="${osSupportText(o, f.os_id)}">EOL soon</span>` : ''}</td>
+      <td class="opt nowrap" title="${a.below_min ? '' : osLabel(f)}">${a.below_min ? html`<span class="dim">—</span>` : clipText(osShort(f), 14)}${o?.status === 'expired' ? html` <span class="badge sec xs" title="${osSupportText(o, f.os_id)}">EOL</span>` : o?.status === 'soon' ? html` <span class="badge upd xs" title="${osSupportText(o, f.os_id)}">EOL soon</span>` : ''}</td>
       <td class="num"><b class="${u?.security ? 'c-red' : u?.total ? 'c-amber' : 'dim'}">${u ? u.total : '—'}</b></td>
       <td>${!u ? html`<span class="dim">—</span>` : u.reboot_required ? html`<span class="badge reboot xs">required</span>` : html`<span class="badge ok xs">no</span>`}</td>
       <td class="opt mono small"><span class="${!a.core_version ? 'dim' : a.core_is_latest ? 'c-green' : 'c-amber'}" title="${a.core_is_latest ? 'latest agent' : a.core_latest ? 'latest is ' + a.core_latest : ''}">${a.core_version || '—'}</span></td>
@@ -928,7 +940,7 @@ function SystemList() {
         <div id="l-table"></div>`);
       $('#l-q').addEventListener('input', (e) => { st.q = e.target.value; render(); });
     },
-    async refresh() { const d = await GET('overview'); d.groups ||= []; st.data = d; render(); },
+    async refresh() { const d = await GET('overview'); d.groups ||= []; d.agents = d.agents.filter((a) => !a.legacy); st.data = d; render(); },
     acts: {
       filter: (t) => { st.filter = t.dataset.f; render(); },
       sort: (t) => { const k = t.dataset.k; st.dir = st.sort === k ? -st.dir : 1; st.sort = k; render(); },
@@ -1043,17 +1055,20 @@ function AgentPage([id]) {
         <div><div class="row"><a href="#/dashboard/${lastDashSub}" class="btn ghost sm iconbtn" title="Back">${icon('back')}</a>${agentDot(a)}<h1>${a.name}</h1>
           ${a.status === 'report_only' ? html`<span class="badge info">${icon('pause')} report only</span>` : ''}${a.status === 'pending' ? html`<span class="badge upd">pending approval</span>` : ''}
           <span class="tag">${icon('folder')} ${g ? g.name : 'Ungrouped'}</span>${verPill(a)}</div>
-          <div class="sub">${osLabel(f)} · ${f.kernel || ''} · ${f.arch} · ${f.virt} · <span title="${lastReboot(a)}">${a.online ? 'online, up ' + dur(f.uptime_sec) : raw('offline, last seen ' + r(when(a.last_seen)))}</span></div></div>
+          <div class="sub">${a.below_min ? html`agent ${a.core_version} · upgrade only · ${a.online ? 'online' : raw('offline, last seen ' + r(when(a.last_seen)))}` : html`${osLabel(f)} · ${f.kernel || ''} · ${f.arch} · ${f.virt} · <span title="${lastReboot(a)}">${a.online ? 'online, up ' + dur(f.uptime_sec) : raw('offline, last seen ' + r(when(a.last_seen)))}</span>`}</div></div>
         <span class="spacer"></span>
         ${a.busy ? html`<span class="row muted"><span class="spin"></span>${a.busy} job(s) active</span>` : ''}
-        ${!a.removing ? html`<button class="btn sm" data-act="ping" ${canPing(a) ? '' : 'disabled'}
+        ${!a.removing && !a.below_min ? html`<button class="btn sm" data-act="ping" ${canPing(a) ? '' : 'disabled'}
           title="${canPing(a) ? 'Check the connection and keys with the agent now; nothing is done on the system' : `Agent ${a.core_version || '?'} cannot answer a ping; update the agent first`}">${icon('pulse')} Ping</button>` : ''}
-        ${a.status === 'active' && canChange() ? html`<button class="btn sm" data-act="report-only">${icon('pause')} Report only</button>` : ''}
-        ${a.status === 'report_only' && canChange() ? html`<button class="btn sm" data-act="allow-changes">${icon('play')} Allow changes</button>` : ''}
-        ${a.status === 'active' && canChange() ? html`<button class="btn warn sm" data-act="reboot" ${a.online && canReboot(a) ? '' : 'disabled'}
+        ${a.status === 'active' && !a.below_min && canChange() ? html`<button class="btn sm" data-act="report-only">${icon('pause')} Report only</button>` : ''}
+        ${a.status === 'report_only' && !a.below_min && canChange() ? html`<button class="btn sm" data-act="allow-changes">${icon('play')} Allow changes</button>` : ''}
+        ${a.status === 'active' && !a.below_min && canChange() ? html`<button class="btn warn sm" data-act="reboot" ${a.online && canReboot(a) ? '' : 'disabled'}
           title="${canReboot(a) ? (a.online ? 'Reboot this system' : 'The system is offline') : `Agent ${a.core_version} cannot reboot; update the agent first`}">${icon('refresh')} Reboot</button>` : ''}
       </div>
-      ${a.status === 'report_only' ? html`<div class="notice blue"><b>Report only:</b> this system only reports.
+      ${a.below_min ? html`<div class="notice row"><span><b>Agent update required.</b> Agent ${a.core_version} is older than the lowest allowed version ${a.min_agent}:
+        the master stores and shows none of this system's data and runs nothing on it until the agent is updated.</span><span class="spacer"></span>
+        ${ifChange(html`<button class="btn primary sm" data-act="agent-update" ${a.online ? '' : 'disabled'}>${icon('up')} Update agent to ${a.core_latest}</button>`)}</div>` : ''}
+      ${a.status === 'report_only' && !a.below_min ? html`<div class="notice blue"><b>Report only:</b> this system only reports.
         <span class="small">${!a.mode_support ? html`Enforced by the master only — agent ${a.core_version} cannot enforce it itself; update the agent.`
           : a.agent_report_only ? html`${icon('check')} Confirmed by the agent.`
           : html`Waiting for the agent to confirm${a.online ? '…' : ' (the system is offline)'}.`}</span></div>` : ''}
@@ -1153,7 +1168,9 @@ function AgentPage([id]) {
     if (!d) return;
     const a = d.agent;
     setHTML($('#a-head'), header(a, d.groups));
-    const tabs = [['updates', 'Updates'], ['agent', 'Agent'], ['jobs', 'Jobs'], ['system', 'System']];
+    // Upgrade only: just the Agent tab (version and update), no data.
+    const tabs = a.below_min ? [['agent', 'Agent']] : [['updates', 'Updates'], ['agent', 'Agent'], ['jobs', 'Jobs'], ['system', 'System']];
+    if (!tabs.some(([k]) => k === st.tab)) st.tab = tabs[0][0];
     setHTML($('#a-tabs'), tabs.map(([k, l]) => html`<button class="${st.tab === k ? 'on' : ''}" data-act="tab" data-t="${k}">${l}${k === 'updates' && a.updates?.total ? html` <span class="badge upd">${a.updates.total}</span>` : ''}${k === 'agent' && !a.core_is_latest && a.core_latest ? html` <span class="badge upd">↑</span>` : ''}</button>`));
     const body = { updates: updatesTab, agent: agentTab, jobs: jobsTab, system: systemTab }[st.tab](a);
     setHTML($('#a-body'), body);
@@ -1171,6 +1188,11 @@ function AgentPage([id]) {
     },
     acts: {
       tab: (t) => { st.tab = t.dataset.t; render(); },
+      'agent-update': async () => {
+        const res = await POST(`agents/${id}/core`, {});
+        if (res.job) openJob(res.job); else toast('Update requested — it runs when the system is online', 'ok');
+        refresh();
+      },
       check: () => runAction([id], 'updates', 'check', {}),
       install: async () => {
         const pk = [...st.sel];
@@ -1245,7 +1267,8 @@ function Systems() {
         : html`<div class="muted small" style="margin-top:10px">No groups yet. All systems are shown together.</div>`}`);
     const act = d.agents.filter((a) => a.status !== 'pending').sort(byName);
     setHTML($('#s-all'), act.length ? html`<div class="panel"><table class="tbl"><thead><tr><th>System</th><th>IP address</th><th>Group</th><th>OS</th><th>Agent</th><th>Last seen</th><th class="w1"></th></tr></thead>
-      <tbody>${act.map((a) => html`<tr><td>${agentDot(a)} <a href="#/system/${a.id}"><b>${a.name}</b></a> ${a.status === 'report_only' ? html`<span class="badge info">report only</span>` : ''}</td>
+      <tbody>${act.map((a) => html`<tr><td>${agentDot(a)} ${a.legacy ? html`<b>${a.name}</b> <span class="badge sec xs" title="Agents before 0.3.0 can no longer connect and cannot be updated">cannot connect — run a new install command</span>`
+        : html`<a href="#/system/${a.id}"><b>${a.name}</b></a>`} ${a.status === 'report_only' && !a.legacy ? html`<span class="badge info">report only</span>` : ''}${a.below_min ? html`<span class="badge upd xs">update required</span>` : ''}</td>
         <td class="mono small">${ipLabel(a.facts)}</td>
         <td>${canChange() ? html`<select class="sm" data-change="set-group" data-id="${a.id}" title="Group">${groupOptions(d.groups, a.group_id)}</select>` : html`<span class="muted">${d.groups.find((g) => g.id === a.group_id)?.name || 'Ungrouped'}</span>`}</td>
         <td class="muted">${osLabel(a.facts)}</td><td>${verPill(a)}</td>
@@ -1416,7 +1439,9 @@ function Releases() {
     if (!R || !d) return;
     const ix = R.index, m = R.master, repo = R.repo;
     const published = new Map((ix.agents || []).map((v) => [v.version, v.published]));
-    const agents = d.agents.filter((a) => a.status !== 'pending');
+    // Systems too old to connect cannot be updated, so they are not offered.
+    const agents = d.agents.filter((a) => a.status !== 'pending' && !a.legacy);
+    const minAgent = R.min_agent || '';
     setHTML($('#r-index'), html`<div class="panel panel-pad">
       <div class="row"><h2 style="margin:0">Version index</h2><span class="spacer"></span>
         ${ix.syncing || st.checking ? html`<span class="row muted small"><span class="spin"></span>checking…</span>` : html`<span class="muted small">${ix.checked_at ? when(ix.checked_at, 'checked ') : 'not checked yet'} · every 6 hours</span>`}
@@ -1442,7 +1467,7 @@ function Releases() {
         ${outdated.length && canChange() ? html`<button class="btn sm" data-act="all-latest">${icon('up')} Update ${outdated.length} outdated agent(s) to ${repo.core_latest}</button>` : ''}</div>
       <div class="panel"><table class="tbl"><thead><tr><th>System</th><th>Agent</th>${ifChange(html`<th>Change to</th>`)}</tr></thead>
       <tbody>${[...agents].sort(byName).map((a) => html`<tr><td>${agentDot(a)} <a href="#/system/${a.id}"><b>${a.name}</b></a></td><td>${verPill(a)}</td>
-        ${ifChange(html`<td><form class="row" style="flex-wrap:nowrap" data-submit="set" data-id="${a.id}"><select name="v">${versionOptions({ core: repo.core.filter((v) => v.platforms.includes(`${a.facts.os}-${a.facts.arch}`) && !(a.sealed && versionLess(v.version, '0.3.0'))) }, a.core_version)}</select><button class="btn sm" ${a.status === 'active' ? '' : 'disabled'}>Apply</button></form></td>`)}</tr>`)}</tbody></table></div>` : '');
+        ${ifChange(html`<td><form class="row" style="flex-wrap:nowrap" data-submit="set" data-id="${a.id}"><select name="v">${versionOptions({ core: repo.core.filter((v) => v.platforms.includes(`${a.facts.os}-${a.facts.arch}`) && !(a.sealed && versionLess(v.version, '0.3.0')) && !(minAgent && versionLess(v.version, minAgent))) }, a.core_version)}</select><button class="btn sm" ${a.status === 'active' ? '' : 'disabled'}>Apply</button></form></td>`)}</tr>`)}</tbody></table></div>` : '');
   }
   return {
     interval: 5000,
@@ -1585,6 +1610,10 @@ function SettingsGeneral() {
             <label class="field">Look up OS support dates<select name="osinfo">
               ${(d.os_info_choices || [3, 14, 30, 90]).map((n) => html`<option value="${n}" ${n === s.os_info_days ? 'selected' : ''}>every ${n} days${n === 14 ? ' (default)' : ''}</option>`)}</select></label>
             <div id="osinfo-box"></div>
+            <label class="field">Lowest allowed agent version<select name="minagent">
+              ${[...(d.agent_versions || [])].reverse().map((v, i) => html`<option value="${v}" ${v === (s.min_agent_version || d.min_agent) ? 'selected' : ''}>${v}${i === 0 ? ' (oldest stored)' : ''}</option>`)}</select></label>
+            <div class="dim small">Older agents can still connect, but only to be updated: the master stores and shows none of their data and runs nothing else on them.
+              Agents too old to connect at all (before 0.3.0) need a new install command.</div>
             <label class="field">GitHub repository for releases<input type="text" name="gh" placeholder="owner/name" value="${s.github_repo}"></label>
             <div class="dim small mono" style="word-break:break-all">${d.index_url ? 'Version index: ' + d.index_url : ''}</div>
             ${ifChange(html`<div><button class="btn primary">Save</button></div>`)}
@@ -1622,7 +1651,7 @@ function SettingsGeneral() {
       save: async (f) => {
         const url = st.editing ? f.url.value.trim() : st.url;
         const res = await POST('settings', { check_interval_hours: +f.interval.value, heartbeat_sec: +f.hb.value, retention_days: +f.ret.value,
-          ui_port: +f.port.value, master_url: url, github_repo: f.gh.value, os_info_days: +f.osinfo.value });
+          ui_port: +f.port.value, master_url: url, github_repo: f.gh.value, os_info_days: +f.osinfo.value, min_agent_version: f.minagent?.value || '' });
         st.url = res.settings.master_url || '';
         st.editing = false;
         urlBox();
@@ -1772,6 +1801,8 @@ function SettingsIdentity() {
         ${canChange() ? html`<div class="row" style="margin-top:14px"><span class="muted small">Renewed automatically ${d.cert_renew_days} days before it expires.</span><span class="spacer"></span>
           <button class="btn" data-act="new-cert">${icon('refresh')} Generate new certificate</button></div>` : ''}
       </div>`);
+    // Systems too old to connect are only listed under Settings > Systems.
+    d.agents = d.agents.filter((a) => !(a.core_version && versionLess(a.core_version, '0.3.0')));
     setHTML($('#id-agents'), d.agents.length ? html`<div class="panel"><table class="tbl">
       <thead><tr><th>System</th><th>Slot 1</th><th>Slot 2</th><th>Status</th><th>Reported</th></tr></thead>
       <tbody>${d.agents.map((a) => html`<tr><td>${agentDot(a)} <a href="#/system/${a.id}"><b>${a.name}</b></a></td>

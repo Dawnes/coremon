@@ -205,26 +205,34 @@ func (s *Server) pollCore(ctx context.Context, agentID string, req proto.PollReq
 	}
 	now := time.Now().Unix()
 	a.LastSeen = now
-	a.Facts = sanitizeFacts(req.Facts)
 	a.CoreVersion = cleanText(req.CoreVersion, 32)
 	a.Protocol = req.Protocol
-	// Agents before protocol 2 have no built-in features.
-	a.Features = sanitizeFeatures(req.Features)
 	if len(req.Running) > 256 {
 		req.Running = req.Running[:256]
-	}
-	if a.Features == nil {
-		a.Features = []proto.FeatureInfo{}
 	}
 	if a.DesiredCore != "" && a.DesiredCore == a.CoreVersion {
 		a.DesiredCore = ""
 	}
-	a.ReportOnly = req.ReportOnly
 	if a.Protocol >= 4 {
+		// Key slots also below the minimum: a key rotation must not cut it off.
 		a.Pins = [2]string{clip(req.Pins[0], 256), clip(req.Pins[1], 256)}
 		a.PinsAt = now
 	}
-	s.syncMode(a, "scheduler") // the master's decision wins; sent in this same reply
+	if s.belowMin(a) {
+		// Upgrade only: just the platform (for the right update); none of its
+		// data is stored. What was stored before stays, hidden, until updated.
+		f := sanitizeFacts(proto.Facts{OS: req.Facts.OS, Arch: req.Facts.Arch})
+		a.Facts.OS, a.Facts.Arch = f.OS, f.Arch
+	} else {
+		a.Facts = sanitizeFacts(req.Facts)
+		// Agents before protocol 2 have no built-in features.
+		a.Features = sanitizeFeatures(req.Features)
+		if a.Features == nil {
+			a.Features = []proto.FeatureInfo{}
+		}
+		a.ReportOnly = req.ReportOnly
+		s.syncMode(a, "scheduler") // the master's decision wins; sent in this same reply
+	}
 	s.syncPins(a, "scheduler")
 	// Commands the agent no longer runs but never reported: lost (e.g. the
 	// agent restarted mid-command).
@@ -303,7 +311,7 @@ func (s *Server) takeCommands(agentID string) []proto.Command {
 		if j.AgentID != agentID || j.Status != JobQueued {
 			continue
 		}
-		if !jobAllowed(a, j) {
+		if !jobAllowed(a, j) || (s.belowMin(a) && !upgradeOnlyJob(j.Type)) {
 			continue
 		}
 		j.Status, j.Started = JobRunning, now
@@ -322,10 +330,18 @@ func (s *Server) takeCommands(agentID string) []proto.Command {
 func (s *Server) outputCore(agentID string, req proto.OutputBatch) {
 	s.st.mu.Lock()
 	defer s.st.mu.Unlock()
+	a := s.st.st.Agents[agentID]
+	if a == nil {
+		return
+	}
+	upgradeOnly := s.belowMin(a)
 	for _, it := range req.Items {
 		j := s.st.jobByID(it.CommandID)
 		if j == nil || j.AgentID != agentID || j.Status != JobRunning || j.LogSize >= maxJobLog {
 			continue
+		}
+		if upgradeOnly && !upgradeOnlyJob(j.Type) {
+			continue // below the minimum: only an agent update's output is kept
 		}
 		data := cleanLog(it.Data)
 		if j.LogSize+int64(len(data)) > maxJobLog {
@@ -353,6 +369,12 @@ func (s *Server) resultCore(agentID string, res proto.Result, ip string) {
 	}
 	now := time.Now().Unix()
 	j.Finished = now
+	if s.belowMin(a) && !upgradeOnlyJob(j.Type) {
+		// E.g. a check that was running when the minimum was raised.
+		j.Status, j.Error = JobFailed, "result discarded: the agent is older than the lowest allowed version"
+		s.st.markDirty()
+		return
+	}
 	if res.OK {
 		j.Status = JobSuccess
 	} else {
@@ -513,6 +535,9 @@ func (s *Server) schedulerTick() {
 		if a.DesiredCore != "" && a.CoreVersion != a.DesiredCore &&
 			!s.recentFailure(a.ID, proto.CmdCoreUpdate, "", 10*time.Minute) {
 			s.requestCore(a, a.DesiredCore, "scheduler")
+		}
+		if s.belowMin(a) {
+			continue // upgrade only: no mode sync, no checks
 		}
 		if !s.recentFailure(a.ID, proto.CmdSetMode, "", 2*time.Minute) {
 			s.syncMode(a, "scheduler")

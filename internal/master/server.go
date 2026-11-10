@@ -213,6 +213,7 @@ func New(cfg Config) (*Server, error) {
 		return nil, err
 	}
 	s.cleanupLegacy()
+	s.raiseMinAgent()
 	s.repo.scan()
 	s.idx = newIndexSync()
 	s.osi.kick = make(chan struct{}, 1)

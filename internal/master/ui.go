@@ -51,6 +51,8 @@ type agentView struct {
 	AgentReport  bool                       `json:"agent_report_only"` // mode the agent itself confirmed
 	Sealed       bool                       `json:"sealed"`            // uses the payload key (0.3.0+)
 	OSSupport    *osSupport                 `json:"os_support,omitempty"`
+	BelowMin     bool                       `json:"below_min"`           // older than the lowest allowed version: upgrade only
+	MinAgent     string                     `json:"min_agent,omitempty"` // that lowest allowed version
 	Facts        proto.Facts                `json:"facts"`
 	Features     []string                   `json:"features"`
 	Updates      *updatesSummary            `json:"updates,omitempty"`
@@ -96,6 +98,14 @@ func (s *Server) view(a *Agent, full bool) agentView {
 	}
 	if full {
 		v.State, v.StateAt = a.State, a.StateAt
+	}
+	if s.belowMin(a) {
+		// Upgrade only: none of the stored data is shown (it stays, hidden,
+		// until the agent is updated).
+		v.BelowMin, v.MinAgent = true, s.minAgent()
+		v.Facts = proto.Facts{OS: a.Facts.OS, Arch: a.Facts.Arch}
+		v.Features, v.Updates, v.OSSupport, v.State, v.StateAt = []string{}, nil, nil, nil, nil
+		v.ModeSupport, v.AgentReport, v.IsMaster = false, false, false
 	}
 	return v
 }
@@ -258,6 +268,10 @@ func (s *Server) handleAgentUpdate(w http.ResponseWriter, r *http.Request) {
 	if req.ReportOnly == nil {
 		req.ReportOnly = req.Paused
 	}
+	if req.ReportOnly != nil && s.belowMin(a) {
+		http.Error(w, upgradeOnlyMsg(a, s.minAgent()), http.StatusConflict)
+		return
+	}
 	if req.ReportOnly != nil && a.Status != StatusPending {
 		var j *Job
 		switch {
@@ -361,6 +375,14 @@ func (s *Server) handleCoreUpdate(w http.ResponseWriter, r *http.Request) {
 	if req.Version == "" {
 		req.Version = s.repo.coreLatest()
 	}
+	if tooOldToConnect(a) {
+		http.Error(w, a.Name+": agent "+a.CoreVersion+" cannot connect and cannot be updated — run a new install command", http.StatusConflict)
+		return
+	}
+	if min := s.minAgent(); min != "" && versionLess(req.Version, min) {
+		http.Error(w, fmt.Sprintf("agent %s is older than the lowest allowed version %s", req.Version, min), http.StatusBadRequest)
+		return
+	}
 	goos, arch := a.Facts.OS, a.Facts.Arch
 	if goos == "" {
 		goos = "linux"
@@ -425,6 +447,10 @@ func (s *Server) handleActions(w http.ResponseWriter, r *http.Request) {
 		a := s.st.st.Agents[id]
 		if a == nil {
 			errs = append(errs, cleanText(id, 32)+": not found")
+			continue
+		}
+		if s.belowMin(a) {
+			errs = append(errs, upgradeOnlyMsg(a, s.minAgent()))
 			continue
 		}
 		if a.Status == StatusReportOnly {
@@ -569,6 +595,7 @@ func (s *Server) handleSettingsGet(w http.ResponseWriter, r *http.Request) {
 	defer s.st.mu.Unlock()
 	writeJSON(w, map[string]any{"settings": s.st.st.Settings, "pin": s.currentPin(), "suggested_url": s.derivedURL(r), "index_url": url,
 		"os_info": s.osInfoStatus(s.st.st.Settings.OSInfoDays), "os_info_choices": osInfoChoices,
+		"agent_versions": s.repo.coreVersions(), "min_agent": s.minAgent(),
 		"next_purge": s.nextPurgeAt().Unix(), "agent_port": s.agentPort(), "ui_port_error": s.uiPortError(),
 		"limits": map[string]int{"heartbeat_min": minHeartbeat, "heartbeat_max": maxHeartbeat, "retention_min": minRetention, "retention_max": maxRetention}})
 }
@@ -630,6 +657,13 @@ func (s *Server) handleSettingsSave(w http.ResponseWriter, r *http.Request) {
 	if req.OSInfoDays == 0 {
 		req.OSInfoDays = old.OSInfoDays // a page from before this setting
 	}
+	if req.MinAgentVersion == "" {
+		req.MinAgentVersion = old.MinAgentVersion // a page from before this setting
+	} else if !contains(s.repo.coreVersions(), req.MinAgentVersion) {
+		s.st.mu.Unlock()
+		bad("lowest allowed agent version must be one of the versions stored on the master")
+		return
+	}
 	if !validOSInfoDays(req.OSInfoDays) {
 		s.st.mu.Unlock()
 		bad("OS support lookup must be every 3, 14, 30 or 90 days")
@@ -638,8 +672,8 @@ func (s *Server) handleSettingsSave(w http.ResponseWriter, r *http.Request) {
 	s.st.st.Settings = req
 	s.st.markDirty()
 	s.st.mu.Unlock()
-	s.audit.write(actor(r), clientIP(r), "settings.saved", "", fmt.Sprintf("check=%dh heartbeat=%ds retention=%dd port=%d url=%q repo=%q os-info=%dd",
-		req.CheckIntervalHours, req.HeartbeatSec, req.RetentionDays, req.UIPort, req.MasterURL, req.GitHubRepo, req.OSInfoDays))
+	s.audit.write(actor(r), clientIP(r), "settings.saved", "", fmt.Sprintf("check=%dh heartbeat=%ds retention=%dd port=%d url=%q repo=%q os-info=%dd min-agent=%s",
+		req.CheckIntervalHours, req.HeartbeatSec, req.RetentionDays, req.UIPort, req.MasterURL, req.GitHubRepo, req.OSInfoDays, req.MinAgentVersion))
 	if old.OSInfoDays != req.OSInfoDays {
 		s.kickOSInfo()
 	}

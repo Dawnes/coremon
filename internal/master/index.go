@@ -210,6 +210,7 @@ func (s *Server) syncIndex() (err error) {
 	}
 	if len(listed) > 0 {
 		s.pruneCore(func(v string) bool { return !listed[v] })
+		s.raiseMinAgent()
 	}
 
 	// Master: only a newer version for this platform. Never a downgrade.
@@ -321,9 +322,13 @@ func (s *Server) cleanupLegacy() {
 
 func (s *Server) releasesView() map[string]any {
 	ml := s.repo.masterLatest()
+	s.st.mu.Lock()
+	min := s.minAgent()
+	s.st.mu.Unlock()
 	return map[string]any{
-		"index": s.idx.status(),
-		"repo":  s.repo.summary(),
+		"index":     s.idx.status(),
+		"repo":      s.repo.summary(),
+		"min_agent": min,
 		"master": map[string]any{
 			"version": s.cfg.Version,
 			"latest":  ml,

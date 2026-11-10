@@ -177,12 +177,3 @@ func TestCertRecovery(t *testing.T) {
 		t.Fatal("leftover file")
 	}
 }
-
-func contains(l []string, s string) bool {
-	for _, x := range l {
-		if x == s {
-			return true
-		}
-	}
-	return false
-}

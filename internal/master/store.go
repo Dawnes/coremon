@@ -21,7 +21,8 @@ type Settings struct {
 	MasterURL          string `json:"master_url"`     // used in install commands; empty = derive from browser
 	GitHubRepo         string `json:"github_repo"`    // owner/name publishing the version index
 	GitHubSeeded       bool   `json:"github_seeded"`
-	OSInfoDays         int    `json:"os_info_days"` // how often the OS support dates are looked up: 3, 14, 30 or 90
+	OSInfoDays         int    `json:"os_info_days"`      // how often the OS support dates are looked up: 3, 14, 30 or 90
+	MinAgentVersion    string `json:"min_agent_version"` // lowest allowed agent version; "" = the oldest stored one
 }
 
 // osInfoChoices are the allowed lookup intervals in days.

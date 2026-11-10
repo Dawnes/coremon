@@ -165,6 +165,14 @@ change the period, the first cleanup is the next full hour, or the hour after
 that if it is less than 3 minutes away; Settings shows when and what will be
 removed before you save.
 
+**Lowest allowed agent version** (Settings → General): one of the agent
+versions stored on the master (at least the oldest one; raised automatically
+when that version is no longer stored). Older agents can still connect, but
+only to be updated: the master stores and shows none of their data, and runs
+nothing else on them (only agent update, uninstall and key-slot changes). Their
+card shows *Update agent*. Agents before 0.3.0 cannot connect at all; they are
+only listed under Settings → Systems, to be removed or reinstalled.
+
 **Website port**: 8443 (default) or 443. With 443 the website is reachable
 at `https://<master>` as well; agents always keep using port 8443.
 
