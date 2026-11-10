@@ -14,6 +14,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 )
 
@@ -53,6 +54,15 @@ func loadCert(certPath, keyPath string) (tls.Certificate, string, error) {
 	return cert, base64.StdEncoding.EncodeToString(sum[:]), nil
 }
 
+// certCN is the certificate's name: "coremon <host>", or just "coremon" when
+// the host is called that (any case) or unknown.
+func certCN(host string) string {
+	if host == "" || strings.EqualFold(host, "coremon") {
+		return "coremon"
+	}
+	return "coremon " + host
+}
+
 func createCert(certPath, keyPath string, extra []string) error {
 	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
@@ -62,7 +72,7 @@ func createCert(certPath, keyPath string, extra []string) error {
 	serial, _ := rand.Int(rand.Reader, new(big.Int).Lsh(big.NewInt(1), 120))
 	tpl := &x509.Certificate{
 		SerialNumber:          serial,
-		Subject:               pkix.Name{CommonName: "coremon master " + host, Organization: []string{"coremon"}},
+		Subject:               pkix.Name{CommonName: certCN(host), Organization: []string{"coremon"}},
 		NotBefore:             time.Now().Add(-time.Hour),
 		NotAfter:              time.Now().AddDate(certValidity, 0, 0),
 		KeyUsage:              x509.KeyUsageDigitalSignature,

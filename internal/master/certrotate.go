@@ -17,7 +17,7 @@ import (
 
 const (
 	certValidity  = 1                   // years
-	certRenewLead = 30 * 24 * time.Hour // renew this long before expiry
+	certRenewLead = 10 * 24 * time.Hour // renew this long before expiry
 	certRetry     = time.Hour           // after a failed automatic renewal
 )
 

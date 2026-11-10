@@ -88,9 +88,18 @@ func TestCertRotation(t *testing.T) {
 	if s.currentPin() != pin {
 		t.Fatal("renewed too early")
 	}
-	s.renewCertIfDue(until.Add(-29 * 24 * time.Hour))
+	s.renewCertIfDue(until.Add(-11 * 24 * time.Hour))
+	if s.currentPin() != pin {
+		t.Fatal("renewed 11 days before expiry (should be 10)")
+	}
+	s.renewCertIfDue(until.Add(-9 * 24 * time.Hour))
 	if s.currentPin() == pin {
-		t.Fatal("not renewed 29 days before expiry")
+		t.Fatal("not renewed 9 days before expiry")
+	}
+	for host, want := range map[string]string{"web-01": "coremon web-01", "coremon": "coremon", "Coremon": "coremon", "coremon-master": "coremon coremon-master", "": "coremon"} {
+		if got := certCN(host); got != want {
+			t.Errorf("certCN(%q) = %q, want %q", host, got, want)
+		}
 	}
 	if e := s.audit.list("", "", 1); e[0].Actor != "scheduler" {
 		t.Fatalf("renewal audit: %+v", e[0])

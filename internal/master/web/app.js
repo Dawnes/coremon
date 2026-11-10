@@ -53,6 +53,7 @@ const ICONS = {
   folder: '<path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7Z"/>',
   clock: '<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>',
   pulse: '<path d="M3 12h4l3-8 4 16 3-8h4"/>',
+  info: '<circle cx="12" cy="12" r="9"/><path d="M12 11v6M12 7.5v.01"/>',
 };
 const icon = (n) => raw(`<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">${ICONS[n] || ''}</svg>`);
 
@@ -324,11 +325,13 @@ const NAV = [
   ['releases', 'box', 'Releases'],
   ['history', 'jobs', 'History'],
   ['settings', 'cog', 'Settings'],
+  ['about', 'info', 'About'],
 ];
 // Submenus, always shown below their menu item. The first entry opens when
 // the menu item itself is clicked.
 const SUBNAV = {
   dashboard: () => [['overview', 'Overview'], ['list', 'List']],
+  about: () => [['about', 'About'], ['license', 'License']],
   history: () => [['jobs', 'Jobs'], ['audit', 'Audit log']],
   settings: () => [['general', 'General'], ['systems', 'Systems'], ...(canChange() ? [['users', 'Users']] : []), ['login', 'Login'], ['identity', 'Identity']],
 };
@@ -384,6 +387,7 @@ function route() {
     settings: { general: SettingsGeneral, systems: Systems, users: SettingsUsers, login: SettingsLogin, identity: SettingsIdentity },
     history: { jobs: Jobs, audit: Audit },
     dashboard: { overview: Dashboard, list: SystemList },
+    about: { about: AboutPage, license: LicensePage },
   };
   const views = { system: AgentPage, releases: Releases };
   // A page of its own (e.g. a system) wins over the submenu it belongs to.
@@ -588,7 +592,7 @@ function Dashboard() {
           <div style="min-width:0"><div class="name">${a.name}</div><div class="os">${osLabel(f)} · ${f.arch || '?'} · ${f.virt || ''}</div><div class="os">${ipLabel(f)}</div></div>
           ${selectable ? html`<input type="checkbox" class="selbox" data-act="sel" data-id="${a.id}" ${st.sel.has(a.id) ? 'checked' : ''} title="Select">` : ''}</div>
         ${mid}
-        ${a.status !== 'pending' ? html`<div class="inforow"><span class="uptime" title="uptime">${icon('clock')}${a.online ? 'up ' + dur(f.uptime_sec) : 'offline'}</span>${healthBadges(a)}<span class="spacer"></span>${verPill(a)}</div>` : ''}
+        ${a.status !== 'pending' ? html`<div class="inforow"><span class="uptime" title="${lastReboot(a)}">${icon('clock')}${a.online ? 'up ' + dur(f.uptime_sec) : 'offline'}</span>${healthBadges(a)}<span class="spacer"></span>${verPill(a)}</div>` : ''}
         <div class="foot">
           ${a.busy ? html`<span class="spin"></span><span>${a.busy} job${a.busy > 1 ? 's' : ''}</span>` : html`<span>${a.online ? (u ? when(u.checked_at, 'checked ') : 'online') : a.status === 'pending' ? '' : when(a.last_seen, 'seen ')}</span>`}
         </div>
@@ -829,6 +833,24 @@ function Dashboard() {
   };
 }
 
+// Last reboot: the agent reports its uptime with every heartbeat, so the
+// time of that report (last seen) minus the uptime is the boot time.
+function lastReboot(a) {
+  const up = a.facts?.uptime_sec;
+  if (!up || !a.last_seen) return '';
+  return `Last reboot: ${fmtDate(a.last_seen - up)}${a.online ? '' : ' (as last reported)'}`;
+}
+// Cut text to n characters with an ellipsis.
+const clipText = (s, n) => (s && s.length > n ? s.slice(0, n - 1).trimEnd() + '…' : s);
+// List, Health column: ok or "N failed", plus auto; — when not known.
+function healthCell(a) {
+  const h = a.facts?.health;
+  if (!h || h.failed_count < 0) return html`<span class="dim">—</span>`;
+  const main = h.failed_count > 0
+    ? html`<span class="badge sec xs" title="Failed services: ${(h.failed || []).join(', ')}${h.failed_count > (h.failed || []).length ? ', …' : ''}">${h.failed_count} failed</span>`
+    : html`<span class="badge ok xs">ok</span>`;
+  return html`${main}${h.auto_updates === 'on' ? html` <span class="badge info xs" title="Automatic updates (unattended-upgrades) are on">auto</span>` : ''}`;
+}
 // Short OS name for narrow places: "Debian 13", "Ubuntu 22.04".
 const osShort = (f) => (f.os_id && f.os_version ? f.os_id.charAt(0).toUpperCase() + f.os_id.slice(1) + ' ' + f.os_version : osLabel(f));
 
@@ -874,11 +896,11 @@ function SystemList() {
       <td class="nowrap"><a href="#/system/${a.id}"><b>${a.name}</b></a></td>
       <td class="opt muted">${groupName(a.group_id)}</td>
       <td class="opt small nowrap">${(f.ips || [])[0] || ''}</td>
-      <td class="opt nowrap" title="${osLabel(f)}">${osShort(f)}${o?.status === 'expired' ? html` <span class="badge sec xs" title="${osSupportText(o, f.os_id)}">EOL</span>` : o?.status === 'soon' ? html` <span class="badge upd xs" title="${osSupportText(o, f.os_id)}">EOL soon</span>` : ''}</td>
+      <td class="opt nowrap" title="${osLabel(f)}">${clipText(osShort(f), 14)}${o?.status === 'expired' ? html` <span class="badge sec xs" title="${osSupportText(o, f.os_id)}">EOL</span>` : o?.status === 'soon' ? html` <span class="badge upd xs" title="${osSupportText(o, f.os_id)}">EOL soon</span>` : ''}</td>
       <td class="num"><b class="${u?.security ? 'c-red' : u?.total ? 'c-amber' : 'dim'}">${u ? u.total : '—'}</b></td>
-      <td>${u?.reboot_required ? html`<span class="badge reboot xs">reboot</span>` : ''}</td>
+      <td>${!u ? html`<span class="dim">—</span>` : u.reboot_required ? html`<span class="badge reboot xs">required</span>` : html`<span class="badge ok xs">no</span>`}</td>
       <td class="opt mono small"><span class="${!a.core_version ? 'dim' : a.core_is_latest ? 'c-green' : 'c-amber'}" title="${a.core_is_latest ? 'latest agent' : a.core_latest ? 'latest is ' + a.core_latest : ''}">${a.core_version || '—'}</span></td>
-      <td class="opt nowrap">${healthBadges(a, { eol: false })}</td>
+      <td class="opt nowrap">${healthCell(a)}</td>
       <td class="small nowrap">${last(a)}</td></tr>`;
   }
   function render() {
@@ -910,6 +932,58 @@ function SystemList() {
     acts: {
       filter: (t) => { st.filter = t.dataset.f; render(); },
       sort: (t) => { const k = t.dataset.k; st.dir = st.sort === k ? -st.dir : 1; st.sort = k; render(); },
+    },
+  };
+}
+
+// ---------- About ----------
+const COPYRIGHT = '© 2026 Dawnes, the Developer';
+function AboutPage() {
+  return {
+    async mount(el) {
+      el.innerHTML = r(html`${subTabs('about', 'about')}<div class="about"><div class="panel about-card"><div class="about-dim">Loading…</div></div></div>`);
+      const [ov, set] = await Promise.all([GET('overview').catch(() => null), GET('settings').catch(() => null)]);
+      const latest = ov?.repo?.core?.[0]?.version || '';
+      const repo = set?.settings?.github_repo || 'Dawnes/coremon';
+      setHTML($('.about-card', el), html`
+        <img src="favicon.svg" alt="" class="about-logo">
+        <div class="about-name">Coremon</div>
+        <div class="about-ver">v${session.version}${session.build_date ? html` <span class="about-dim">· released ${ymd(session.build_date)}</span>` : ''}</div>
+        <div class="about-rows">
+          <div><span class="about-dim">Latest agent</span><span class="mono">${latest || '—'}</span></div>
+          <div><span class="about-dim">Project</span><a href="https://github.com/${repo}" target="_blank" rel="noopener noreferrer">github.com/${repo}</a></div>
+          <div><span class="about-dim">License</span><a href="#/about/license">PolyForm Noncommercial 1.0.0</a></div>
+        </div>
+        <div class="about-copy">${COPYRIGHT}</div>`);
+    },
+  };
+}
+function LicensePage() {
+  return {
+    async mount(el) {
+      el.innerHTML = r(html`${subTabs('about', 'license')}<div class="page-head"><div><h1>License</h1><div class="sub">How Coremon may be used</div></div></div>
+        <div class="stack" style="max-width:860px">
+          <div class="notice blue">Coremon is licensed under the <b>PolyForm Noncommercial License 1.0.0</b>: free for personal, hobby,
+            educational and non-profit use. Commercial use requires permission from Dawnes, the Developer
+            (<a href="https://github.com/Dawnes" target="_blank" rel="noopener noreferrer">github.com/Dawnes</a>).</div>
+          <div class="panel panel-pad"><h2>Coremon</h2><div class="legal" id="lic-main">Loading…</div></div>
+          <div class="panel panel-pad"><h2>Third-party software</h2><pre class="legal" id="lic-third">Loading…</pre></div>
+          <div class="dim small">${COPYRIGHT}</div></div>`);
+      const text = (p) => fetch(p, { cache: 'no-cache' }).then((x) => (x.ok ? x.text() : Promise.reject(new Error(x.status)))).catch(() => 'Could not load the license text.');
+      const [main, third] = await Promise.all([text('legal/LICENSE.txt'), text('legal/THIRD-PARTY-NOTICES.txt')]);
+      // The license is Markdown: headings become headings, link markup is
+      // dropped. Built with textContent only, never as HTML.
+      const box = $('#lic-main', el);
+      box.textContent = '';
+      for (const block of main.split(/\n\s*\n/)) {
+        const s = block.trim();
+        if (!s) continue;
+        const m = s.match(/^(#{1,2})\s+(.*)$/);
+        const n = document.createElement(m ? (m[1].length === 1 ? 'h3' : 'h4') : 'p');
+        n.textContent = (m ? m[2] : s).replace(/\[([^\]]+)\]\([^)]*\)/g, '$1').replace(/^<(https?:[^>]+)>$/, '$1').replace(/\s*\n\s*/g, ' ');
+        box.appendChild(n);
+      }
+      $('#lic-third', el).textContent = third;
     },
   };
 }
@@ -969,7 +1043,7 @@ function AgentPage([id]) {
         <div><div class="row"><a href="#/dashboard/${lastDashSub}" class="btn ghost sm iconbtn" title="Back">${icon('back')}</a>${agentDot(a)}<h1>${a.name}</h1>
           ${a.status === 'report_only' ? html`<span class="badge info">${icon('pause')} report only</span>` : ''}${a.status === 'pending' ? html`<span class="badge upd">pending approval</span>` : ''}
           <span class="tag">${icon('folder')} ${g ? g.name : 'Ungrouped'}</span>${verPill(a)}</div>
-          <div class="sub">${osLabel(f)} · ${f.kernel || ''} · ${f.arch} · ${f.virt} · ${a.online ? 'online, up ' + dur(f.uptime_sec) : raw('offline, last seen ' + r(when(a.last_seen)))}</div></div>
+          <div class="sub">${osLabel(f)} · ${f.kernel || ''} · ${f.arch} · ${f.virt} · <span title="${lastReboot(a)}">${a.online ? 'online, up ' + dur(f.uptime_sec) : raw('offline, last seen ' + r(when(a.last_seen)))}</span></div></div>
         <span class="spacer"></span>
         ${a.busy ? html`<span class="row muted"><span class="spin"></span>${a.busy} job(s) active</span>` : ''}
         ${!a.removing ? html`<button class="btn sm" data-act="ping" ${canPing(a) ? '' : 'disabled'}

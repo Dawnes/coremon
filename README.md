@@ -207,7 +207,7 @@ switch). *Cancel* discards the new key. The HTTPS certificate is separate and
 not touched by this.
 
 **HTTPS certificate** (Settings → Identity): self-signed, valid for 1 year
-and renewed automatically 30 days before it expires; *Generate new
+and renewed automatically 10 days before it expires; *Generate new
 certificate* replaces it at once. Browsers ask once to accept the new one;
 agents are not affected.
 
@@ -230,3 +230,13 @@ built-in functions · `internal/master` server + embedded `web/` ·
 `internal/release` version index · `internal/proto` wire types ·
 `internal/sign` · `deploy/` installer, units, index update ·
 `.github/workflows/` CI and release.
+
+## License
+
+Coremon is licensed under the [PolyForm Noncommercial License 1.0.0](LICENSE):
+free for personal, hobby, educational and non-profit use. Commercial use
+requires permission from Dawnes, the Developer ([github.com/Dawnes](https://github.com/Dawnes)).
+
+Coremon includes the Go standard library; see [THIRD-PARTY-NOTICES](THIRD-PARTY-NOTICES).
+
+© 2026 Dawnes, the Developer

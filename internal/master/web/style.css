@@ -264,6 +264,23 @@ input[type=checkbox] { accent-color: var(--cyan); width: 16px; height: 16px; cur
 .tbl tr.picked { background: rgba(34, 211, 238, 0.06); }
 .tbl tr.click { cursor: pointer; }
 .tbl .w1 { width: 1%; white-space: nowrap; }
+/* About */
+.about { display: flex; justify-content: center; padding: 40px 0; }
+.about-card { text-align: center; padding: 40px 48px 32px; max-width: 460px; width: 100%; }
+.about-logo { width: 88px; height: 88px; filter: drop-shadow(0 8px 28px rgba(34, 211, 238, 0.35)); }
+.about-name { font-size: 30px; font-weight: 700; letter-spacing: -0.01em; margin-top: 14px;
+  background: linear-gradient(90deg, #67e8f9, #a78bfa); -webkit-background-clip: text; background-clip: text; color: transparent; }
+.about-ver { margin-top: 6px; font-size: 15px; font-weight: 600; }
+.about-dim { color: var(--dim); font-weight: 400; }
+.about-rows { margin: 26px 0 22px; display: grid; gap: 8px; font-size: 13.5px; text-align: left; }
+.about-rows > div { display: flex; justify-content: space-between; gap: 16px; padding: 8px 0; border-top: 1px solid var(--line); }
+.about-copy { color: var(--dim); font-size: 12.5px; }
+div.legal { font-size: 13px; line-height: 1.6; color: var(--muted); margin-top: 6px; }
+div.legal h3 { font-size: 16px; color: var(--text); margin: 18px 0 6px; }
+div.legal h4 { font-size: 13.5px; color: var(--text); margin: 16px 0 4px; }
+div.legal p { margin: 0 0 8px; }
+pre.legal { white-space: pre-wrap; word-wrap: break-word; font-size: 12.5px; line-height: 1.55; color: var(--muted); margin: 10px 0 0; font-family: inherit; }
+
 /* Dashboard > List */
 .panel.scrollx { overflow-x: auto; }
 .syslist th, .syslist td { padding-left: 8px; padding-right: 8px; }
