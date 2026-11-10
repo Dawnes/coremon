@@ -1,0 +1,118 @@
+package master
+
+// A new self-signed HTTPS certificate: on request (Settings > Identity) and
+// automatically 30 days before the current one expires. Agents do not rely
+// on it; browsers ask once to accept the new one.
+
+import (
+	"crypto/tls"
+	"crypto/x509"
+	"fmt"
+	"log"
+	"net/url"
+	"os"
+	"time"
+)
+
+const (
+	certValidity  = 1                   // years
+	certRenewLead = 30 * 24 * time.Hour // renew this long before expiry
+	certRetry     = time.Hour           // after a failed automatic renewal
+)
+
+func parseLeaf(c *tls.Certificate) (*x509.Certificate, error) {
+	if c == nil || len(c.Certificate) == 0 {
+		return nil, fmt.Errorf("no certificate")
+	}
+	return x509.ParseCertificate(c.Certificate[0])
+}
+
+// certDates returns when a certificate was made and when it expires.
+func certDates(c *tls.Certificate) (from, until time.Time) {
+	leaf, err := parseLeaf(c)
+	if err != nil {
+		return
+	}
+	return leaf.NotBefore, leaf.NotAfter
+}
+
+// certNames: the names the certificate is made for besides the host name and
+// IP addresses: -san flags and a Master URL set by hand.
+func (s *Server) certNames() []string {
+	names := append([]string{}, s.cfg.SANs...)
+	s.st.mu.Lock()
+	mu := s.st.st.Settings.MasterURL
+	s.st.mu.Unlock()
+	if u, err := url.Parse(mu); err == nil && u.Hostname() != "" {
+		names = append(names, u.Hostname())
+	}
+	return names
+}
+
+// rotateCert replaces the HTTPS certificate with a new one and uses it at
+// once (new connections). The files are swapped so that an interrupted
+// rotation is completed at the next start (see recoverCert).
+func (s *Server) rotateCert(actor, ip string) error {
+	s.certMu.Lock()
+	defer s.certMu.Unlock()
+	crt, key := certPaths(s.cfg.DataDir, "current")
+	if err := createCert(crt+".new", key+".new", s.certNames()); err != nil {
+		return fmt.Errorf("create certificate: %w", err)
+	}
+	cert, pin, err := loadCert(crt+".new", key+".new")
+	if err != nil {
+		os.Remove(crt + ".new")
+		os.Remove(key + ".new")
+		return fmt.Errorf("load new certificate: %w", err)
+	}
+	if err := os.Rename(key+".new", key); err != nil {
+		return err
+	}
+	if err := os.Rename(crt+".new", crt); err != nil {
+		return err
+	}
+	s.keyMu.Lock()
+	old := s.keys.tlsPin
+	s.keys.cert, s.keys.tlsPin = &cert, pin
+	s.keyMu.Unlock()
+	_, until := certDates(&cert)
+	s.audit.write(actor, ip, "identity.cert", "", fmt.Sprintf("new HTTPS certificate %s → %s, valid until %s",
+		shortPin(old), shortPin(pin), until.Format("02-01-2006")))
+	log.Printf("HTTPS certificate replaced (%s), valid until %s", actor, until.Format("2006-01-02"))
+	return nil
+}
+
+// recoverCert completes a rotation that was interrupted between the two
+// file renames, so the key and certificate always match.
+func recoverCert(dir string) {
+	crt, key := certPaths(dir, "current")
+	if _, _, err := loadCert(crt, key); err == nil {
+		os.Remove(crt + ".new")
+		os.Remove(key + ".new")
+		return
+	}
+	if _, _, err := loadCert(crt+".new", key); err == nil { // key already renamed
+		os.Rename(crt+".new", crt)
+		return
+	}
+	if _, _, err := loadCert(crt+".new", key+".new"); err == nil {
+		os.Rename(key+".new", key)
+		os.Rename(crt+".new", crt)
+	}
+}
+
+// renewCertIfDue renews the certificate automatically when it expires within
+// certRenewLead; after a failure it waits certRetry.
+func (s *Server) renewCertIfDue(now time.Time) {
+	s.keyMu.Lock()
+	cert := s.keys.cert
+	s.keyMu.Unlock()
+	_, until := certDates(cert)
+	if until.IsZero() || until.Sub(now) > certRenewLead || now.Sub(s.certTried) < certRetry {
+		return
+	}
+	s.certTried = now
+	if err := s.rotateCert("scheduler", ""); err != nil {
+		log.Printf("automatic HTTPS certificate renewal failed: %v (retrying in %s)", err, certRetry)
+	}
+}

@@ -121,11 +121,12 @@ The master needs outbound HTTPS to `github.com`, `salsa.debian.org` (OS support 
 
 ## Day-to-day
 
-* **Dashboard** — systems in your groups and order (drag cards and group
+* **Dashboard → Overview** — systems in your groups and order (drag cards and group
   headers to arrange; fold groups; select a whole group). Cards show small badges for failed services, an expired (or soon expiring) OS and automatic updates. Filters for updates,
   security, reboot, offline, pending and outdated agents; bulk *Check now*,
   *Upgrade all packages* and *Agent → latest*. *Check now* checks every system, *Check selected* the selected ones.
-* **System page** (for operating a system) — *Ping*, *Report only* and *Reboot*.
+* **Dashboard → List** — every system on one line (status, name, group, IP, OS, updates, reboot, agent, health, last check), grouped and sorted A–Z; click a column header to sort, again to reverse. View only.
+* **System page** (`#/system/<id>`, for operating a system) — *Ping*, *Report only* and *Reboot*.
   *Ping* (every user, agents 0.3.1+) asks the agent to answer at once without
   doing anything: it shows the round trip, the agent version, which payload
   key the connection used, the agent's key slots and its clock difference —
@@ -204,6 +205,11 @@ stores it in its second key slot; the page shows both slots of every system.
 one. If systems are missing the new key, the switch warns (default: don't
 switch). *Cancel* discards the new key. The HTTPS certificate is separate and
 not touched by this.
+
+**HTTPS certificate** (Settings → Identity): self-signed, valid for 1 year
+and renewed automatically 30 days before it expires; *Generate new
+certificate* replaces it at once. Browsers ask once to accept the new one;
+agents are not affected.
 
 If the payload key is ever lost (`/var/lib/coremon-master/payload.key`),
 agents reject the new one by design. Run a new install command on each

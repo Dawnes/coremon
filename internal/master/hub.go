@@ -449,6 +449,7 @@ func (s *Server) schedulerLoop(stop <-chan struct{}) {
 	defer t.Stop()
 	for {
 		s.schedulerTick()
+		s.renewCertIfDue(time.Now())
 		if due := s.nextPurgeAt(); !time.Now().Before(due) {
 			s.purge()
 			s.setNextPurge(nextFullHour(time.Now()))

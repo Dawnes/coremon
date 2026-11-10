@@ -53,7 +53,9 @@ type Server struct {
 	sess          *sessions
 	audit         *auditLog
 	keyMu         sync.Mutex
-	keys          keyState // TLS keys: current and, during a rotation, next
+	keys          keyState   // TLS keys: current and, during a rotation, next
+	certMu        sync.Mutex // one HTTPS certificate rotation at a time
+	certTried     time.Time  // last automatic renewal attempt (scheduler only)
 	signingKeyB64 string
 	wakes         map[string]chan struct{}     // guarded by st.mu
 	pings         map[string]chan proto.Result // ping job ID -> waiting UI request; guarded by st.mu

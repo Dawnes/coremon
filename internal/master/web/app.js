@@ -320,7 +320,7 @@ function showLogin() {
 }
 
 const NAV = [
-  ['', 'dash', 'Dashboard'],
+  ['dashboard', 'dash', 'Dashboard'],
   ['releases', 'box', 'Releases'],
   ['history', 'jobs', 'History'],
   ['settings', 'cog', 'Settings'],
@@ -328,6 +328,7 @@ const NAV = [
 // Submenus, always shown below their menu item. The first entry opens when
 // the menu item itself is clicked.
 const SUBNAV = {
+  dashboard: () => [['overview', 'Overview'], ['list', 'List']],
   history: () => [['jobs', 'Jobs'], ['audit', 'Audit log']],
   settings: () => [['general', 'General'], ['systems', 'Systems'], ...(canChange() ? [['users', 'Users']] : []), ['login', 'Login'], ['identity', 'Identity']],
 };
@@ -339,7 +340,11 @@ function currentRoute() {
     const items = SUBNAV[p[0]]();
     return [p[0], items.some(([k]) => k === p[1]) ? p[1] : items[0][0]];
   }
-  return [p[0] === 'agent' ? '' : p[0], ''];
+  // The start page is Overview; a system page belongs to the submenu it was
+  // opened from.
+  if (p[0] === '') return ['dashboard', 'overview'];
+  if (p[0] === 'system') return ['dashboard', lastDashSub];
+  return [p[0], ''];
 }
 const releasedLabel = () => (session.build_date ? 'Released: ' + session.build_date.split('-').reverse().join('-') : '');
 // On narrow screens the submenu is shown as tabs at the top of the page.
@@ -378,9 +383,11 @@ function route() {
   const subViews = {
     settings: { general: SettingsGeneral, systems: Systems, users: SettingsUsers, login: SettingsLogin, identity: SettingsIdentity },
     history: { jobs: Jobs, audit: Audit },
+    dashboard: { overview: Dashboard, list: SystemList },
   };
-  const views = { '': Dashboard, agent: AgentPage, releases: Releases };
-  const V = (subViews[section] && subViews[section][sub]) || views[parts[0]] || Dashboard;
+  const views = { system: AgentPage, releases: Releases };
+  // A page of its own (e.g. a system) wins over the submenu it belongs to.
+  const V = views[parts[0]] || (subViews[section] && subViews[section][sub]) || Dashboard;
   renderShell();
   view = V(parts.slice(1));
   const el = $('#view');
@@ -429,8 +436,8 @@ function upgradedBy(by) {
   return 'apt';
 }
 // Small badges on a dashboard card: failed services, OS support, automatic updates.
-function healthBadges(a) {
-  const h = a.facts?.health, o = a.os_support, out = [];
+function healthBadges(a, { eol = true } = {}) {
+  const h = a.facts?.health, o = eol ? a.os_support : null, out = [];
   if (h?.failed_count > 0) out.push(html`<span class="badge sec xs" title="Failed services: ${(h.failed || []).join(', ')}${h.failed_count > (h.failed || []).length ? ', …' : ''}">${h.failed_count} failed</span>`);
   if (o?.status === 'expired') out.push(html`<span class="badge sec xs" title="${osLabel(a.facts)}: ${osSupportText(o, a.facts.os_id)}">EOL</span>`);
   else if (o?.status === 'soon') out.push(html`<span class="badge upd xs" title="${osLabel(a.facts)}: ${osSupportText(o, a.facts.os_id)}">EOL soon</span>`);
@@ -522,26 +529,35 @@ async function saveLayout(groupsOrder, lists) {
   await POST('layout', body);
 }
 
-// ---------- Dashboard ----------
+// ---------- Dashboard: shared filter (Overview and List) ----------
+const FILTER_CHIPS = [['all', 'All'], ['updates', 'Updates'], ['security', 'Security'], ['reboot', 'Reboot'], ['offline', 'Offline'], ['pending', 'Pending'], ['agent', 'Agent outdated']];
+function agentMatches(a, f, q, groups) {
+  const u = a.updates || {};
+  if (f === 'updates' && !(u.total > 0)) return false;
+  if (f === 'security' && !(u.security > 0)) return false;
+  if (f === 'reboot' && !u.reboot_required) return false;
+  if (f === 'offline' && (a.online || a.status === 'pending')) return false;
+  if (f === 'pending' && a.status !== 'pending') return false;
+  if (f === 'agent' && (a.core_is_latest || !a.core_version)) return false;
+  if (q) {
+    const g = groups.find((x) => x.id === a.group_id);
+    const hay = `${a.name} ${osLabel(a.facts)} ${(a.facts.ips || []).join(' ')} ${g ? g.name : ''} ${a.core_version}`.toLowerCase();
+    if (!hay.includes(q.toLowerCase())) return false;
+  }
+  return true;
+}
+function filterChips(agents, cur, test) {
+  return FILTER_CHIPS.map(([k, l]) => html`<button class="chip ${cur === k ? 'on' : ''}" data-act="filter" data-f="${k}">${l}<span class="n">${agents.filter((a) => test(a, k)).length}</span></button>`);
+}
+// The dashboard submenu a system page was opened from (Overview or List).
+let lastDashSub = 'overview';
+
+// ---------- Dashboard: Overview ----------
 function Dashboard() {
+  lastDashSub = 'overview';
   const st = { filter: 'all', q: '', sel: new Set(), data: null, folded: new Set(), drag: null };
   const filtering = () => st.filter !== 'all' || st.q !== '';
-  const matches = (a) => {
-    const u = a.updates || {};
-    const f = st.filter;
-    if (f === 'updates' && !(u.total > 0)) return false;
-    if (f === 'security' && !(u.security > 0)) return false;
-    if (f === 'reboot' && !u.reboot_required) return false;
-    if (f === 'offline' && (a.online || a.status === 'pending')) return false;
-    if (f === 'pending' && a.status !== 'pending') return false;
-    if (f === 'agent' && (a.core_is_latest || !a.core_version)) return false;
-    if (st.q) {
-      const g = st.data.groups.find((x) => x.id === a.group_id);
-      const hay = `${a.name} ${osLabel(a.facts)} ${(a.facts.ips || []).join(' ')} ${g ? g.name : ''} ${a.core_version}`.toLowerCase();
-      if (!hay.includes(st.q.toLowerCase())) return false;
-    }
-    return true;
-  };
+  const matches = (a) => agentMatches(a, st.filter, st.q, st.data.groups);
   function card(a) {
     const u = a.updates;
     const f = a.facts;
@@ -657,9 +673,7 @@ function Dashboard() {
       <div class="panel stat c-red"><div class="label">Security updates</div><div class="value">${totSec}</div></div>
       <div class="panel stat c-violet"><div class="label">Reboot required</div><div class="value">${reboot}</div></div>
       <div class="panel stat c-cyan"><div class="label">Active jobs</div><div class="value">${d.active_jobs}</div></div>`);
-    const count = (f) => { const save = st.filter; st.filter = f; const n = A.filter(matches).length; st.filter = save; return n; };
-    const chips = [['all', 'All'], ['updates', 'Updates'], ['security', 'Security'], ['reboot', 'Reboot'], ['offline', 'Offline'], ['pending', 'Pending'], ['agent', 'Agent outdated']];
-    setHTML($('#d-chips'), chips.map(([k, l]) => html`<button class="chip ${st.filter === k ? 'on' : ''}" data-act="filter" data-f="${k}">${l}<span class="n">${count(k)}</span></button>`));
+    setHTML($('#d-chips'), filterChips(A, st.filter, (a, f) => agentMatches(a, f, st.q, d.groups)));
     if (!A.length) {
       setHTML($('#d-cards'), html`<div class="panel empty"><div class="big">🛰️</div><div>No systems yet.</div>${ifChange(html`<div style="margin-top:14px"><a class="btn primary" href="#/settings/systems">${icon('plus')} Add your first system</a></div>`)}</div>`);
     } else {
@@ -769,7 +783,7 @@ function Dashboard() {
     interval: 5000,
     mount(el) {
       el.innerHTML = r(html`
-        <div class="page-head"><div><h1>Dashboard</h1><div class="sub">Update status across your fleet</div></div><span class="spacer"></span>
+        ${subTabs('dashboard', 'overview')}<div class="page-head"><div><h1>Overview</h1><div class="sub">Update status across your fleet</div></div><span class="spacer"></span>
           ${ifChange(html`<button class="btn" data-act="check-all">${icon('refresh')} Check now</button>`)}</div>
         <div id="d-notice"></div>
         <div class="stats" id="d-stats"></div>
@@ -788,7 +802,7 @@ function Dashboard() {
     acts: {
       filter: (t) => { st.filter = t.dataset.f; render(); },
       fold: (t) => { const g = t.dataset.gid; st.folded.has(g) ? st.folded.delete(g) : st.folded.add(g); render(); },
-      'open-agent': (t) => { location.hash = '#/agent/' + t.dataset.id; },
+      'open-agent': (t) => { location.hash = '#/system/' + t.dataset.id; },
       sel: (t) => { t.checked ? st.sel.add(t.dataset.id) : st.sel.delete(t.dataset.id); render(); },
       'sel-group': (t) => {
         const gid = t.dataset.gid;
@@ -811,6 +825,91 @@ function Dashboard() {
         if (!ids.length) return toast('No online systems with the update function', 'err');
         return runAction(ids, 'updates', 'check', {}, { open: false });
       },
+    },
+  };
+}
+
+// Short OS name for narrow places: "Debian 13", "Ubuntu 22.04".
+const osShort = (f) => (f.os_id && f.os_version ? f.os_id.charAt(0).toUpperCase() + f.os_id.slice(1) + ' ' + f.os_version : osLabel(f));
+
+// ---------- Dashboard: List ----------
+// Every system on one line, view only. Grouped (groups A-Z, then Ungrouped),
+// systems A-Z; a column header sorts within the groups, again reverses.
+function SystemList() {
+  lastDashSub = 'list';
+  const st = { filter: 'all', q: '', data: null, sort: 'name', dir: 1 };
+  const byText = (x, y) => String(x).localeCompare(String(y), undefined, { numeric: true, sensitivity: 'base' });
+  const statusText = (a) => (a.status === 'pending' ? 'pending' : !a.online ? 'offline' : a.status === 'report_only' ? 'report only' : 'online');
+  const lastTs = (a) => (a.online ? a.updates?.checked_at || 0 : a.last_seen || 0);
+  const healthN = (a) => (a.facts?.health?.failed_count > 0 ? 2 : 0) + (a.facts?.health?.auto_updates === 'on' ? 1 : 0);
+  const COLS = [
+    // key, title, sort value, class (opt = hidden on narrow screens)
+    ['status', '●', (a) => statusText(a), 'dotcol'],
+    ['name', 'Name', (a) => a.name, ''],
+    ['group', 'Group', (a) => groupName(a.group_id), 'opt'],
+    ['ip', 'IP', (a) => (a.facts.ips || [])[0] || '', 'opt'],
+    ['os', 'OS', (a) => osShort(a.facts), 'opt'],
+    ['updates', 'Updates', (a) => a.updates?.total ?? -1, 'num'],
+    ['reboot', 'Reboot', (a) => (a.updates?.reboot_required ? 1 : 0), ''],
+    ['agent', 'Agent', (a) => a.core_version || '', 'opt'],
+    ['health', 'Health', healthN, 'opt'],
+    ['last', 'Checked', lastTs, ''],
+  ];
+  const groupName = (id) => st.data?.groups.find((g) => g.id === id)?.name || '';
+  function cmp(x, y) {
+    const col = COLS.find((c) => c[0] === st.sort);
+    const vx = col[2](x), vy = col[2](y);
+    const c = typeof vx === 'number' ? vx - vy : byText(vx, vy);
+    return st.dir * (c || byText(x.name, y.name));
+  }
+  function last(a) {
+    if (a.status === 'pending') return html`<span class="dim">enrolled ${when(a.enrolled_at)}</span>`;
+    if (!a.online) return html`<span class="c-red">offline</span><span class="dim">, seen ${when(a.last_seen)}</span>`;
+    return a.updates?.checked_at ? when(a.updates.checked_at) : html`<span class="dim">waiting for first check</span>`;
+  }
+  function row(a) {
+    const u = a.updates, o = a.os_support, f = a.facts;
+    return html`<tr>
+      <td class="nowrap" title="${statusText(a)}">${agentDot(a)}${statusText(a) === 'online' ? '' : html` <span class="small ${a.status === 'pending' || a.status === 'report_only' ? 'c-amber' : 'c-red'}">${statusText(a)}</span>`}</td>
+      <td class="nowrap"><a href="#/system/${a.id}"><b>${a.name}</b></a></td>
+      <td class="opt muted">${groupName(a.group_id)}</td>
+      <td class="opt small nowrap">${(f.ips || [])[0] || ''}</td>
+      <td class="opt nowrap" title="${osLabel(f)}">${osShort(f)}${o?.status === 'expired' ? html` <span class="badge sec xs" title="${osSupportText(o, f.os_id)}">EOL</span>` : o?.status === 'soon' ? html` <span class="badge upd xs" title="${osSupportText(o, f.os_id)}">EOL soon</span>` : ''}</td>
+      <td class="num"><b class="${u?.security ? 'c-red' : u?.total ? 'c-amber' : 'dim'}">${u ? u.total : '—'}</b></td>
+      <td>${u?.reboot_required ? html`<span class="badge reboot xs">reboot</span>` : ''}</td>
+      <td class="opt mono small"><span class="${!a.core_version ? 'dim' : a.core_is_latest ? 'c-green' : 'c-amber'}" title="${a.core_is_latest ? 'latest agent' : a.core_latest ? 'latest is ' + a.core_latest : ''}">${a.core_version || '—'}</span></td>
+      <td class="opt nowrap">${healthBadges(a, { eol: false })}</td>
+      <td class="small nowrap">${last(a)}</td></tr>`;
+  }
+  function render() {
+    const d = st.data;
+    if (!d) return;
+    const A = d.agents;
+    setHTML($('#l-chips'), filterChips(A, st.filter, (a, f) => agentMatches(a, f, st.q, d.groups)));
+    const shown = A.filter((a) => agentMatches(a, st.filter, st.q, d.groups));
+    if (!A.length) return setHTML($('#l-table'), html`<div class="panel empty">No systems yet.</div>`);
+    if (!shown.length) return setHTML($('#l-table'), html`<div class="panel empty">No systems match this filter.</div>`);
+    const groups = [...d.groups].sort((x, y) => byText(x.name, y.name));
+    const known = new Set(groups.map((g) => g.id));
+    const secs = [...groups.map((g) => [g.name, shown.filter((a) => a.group_id === g.id)]), ['Ungrouped', shown.filter((a) => !known.has(a.group_id))]]
+      .filter(([, list]) => list.length);
+    const head = COLS.map(([k, t, , cls]) => html`<th class="${cls} sortable ${st.sort === k ? 'on' : ''}" data-act="sort" data-k="${k}" title="Sort by ${k === 'status' ? 'status' : t.toLowerCase()}">${t}${st.sort === k ? (st.dir > 0 ? ' ▲' : ' ▼') : ''}</th>`);
+    setHTML($('#l-table'), html`<div class="panel scrollx"><table class="tbl syslist"><thead><tr>${head}</tr></thead>
+      ${secs.map(([name, list]) => html`<tbody>${groups.length ? html`<tr class="grow"><td colspan="${COLS.length}">${name} <span class="dim small">${list.length}</span></td></tr>` : ''}
+        ${[...list].sort(cmp).map(row)}</tbody>`)}</table></div>`);
+  }
+  return {
+    interval: 5000,
+    mount(el) {
+      el.innerHTML = r(html`${subTabs('dashboard', 'list')}<div class="page-head"><div><h1>List</h1><div class="sub">All systems at a glance</div></div></div>
+        <div class="toolbar"><input type="search" class="search" id="l-q" placeholder="Search name, OS, IP, group…"><div class="chips" id="l-chips"></div></div>
+        <div id="l-table"></div>`);
+      $('#l-q').addEventListener('input', (e) => { st.q = e.target.value; render(); });
+    },
+    async refresh() { const d = await GET('overview'); d.groups ||= []; st.data = d; render(); },
+    acts: {
+      filter: (t) => { st.filter = t.dataset.f; render(); },
+      sort: (t) => { const k = t.dataset.k; st.dir = st.sort === k ? -st.dir : 1; st.sort = k; render(); },
     },
   };
 }
@@ -867,7 +966,7 @@ function AgentPage([id]) {
     const g = groups.find((x) => x.id === a.group_id);
     return html`
       <div class="page-head">
-        <div><div class="row"><a href="#/" class="btn ghost sm iconbtn" title="Back">${icon('back')}</a>${agentDot(a)}<h1>${a.name}</h1>
+        <div><div class="row"><a href="#/dashboard/${lastDashSub}" class="btn ghost sm iconbtn" title="Back">${icon('back')}</a>${agentDot(a)}<h1>${a.name}</h1>
           ${a.status === 'report_only' ? html`<span class="badge info">${icon('pause')} report only</span>` : ''}${a.status === 'pending' ? html`<span class="badge upd">pending approval</span>` : ''}
           <span class="tag">${icon('folder')} ${g ? g.name : 'Ungrouped'}</span>${verPill(a)}</div>
           <div class="sub">${osLabel(f)} · ${f.kernel || ''} · ${f.arch} · ${f.virt} · ${a.online ? 'online, up ' + dur(f.uptime_sec) : raw('offline, last seen ' + r(when(a.last_seen)))}</div></div>
@@ -1072,7 +1171,7 @@ function Systems() {
         : html`<div class="muted small" style="margin-top:10px">No groups yet. All systems are shown together.</div>`}`);
     const act = d.agents.filter((a) => a.status !== 'pending').sort(byName);
     setHTML($('#s-all'), act.length ? html`<div class="panel"><table class="tbl"><thead><tr><th>System</th><th>IP address</th><th>Group</th><th>OS</th><th>Agent</th><th>Last seen</th><th class="w1"></th></tr></thead>
-      <tbody>${act.map((a) => html`<tr><td>${agentDot(a)} <a href="#/agent/${a.id}"><b>${a.name}</b></a> ${a.status === 'report_only' ? html`<span class="badge info">report only</span>` : ''}</td>
+      <tbody>${act.map((a) => html`<tr><td>${agentDot(a)} <a href="#/system/${a.id}"><b>${a.name}</b></a> ${a.status === 'report_only' ? html`<span class="badge info">report only</span>` : ''}</td>
         <td class="mono small">${ipLabel(a.facts)}</td>
         <td>${canChange() ? html`<select class="sm" data-change="set-group" data-id="${a.id}" title="Group">${groupOptions(d.groups, a.group_id)}</select>` : html`<span class="muted">${d.groups.find((g) => g.id === a.group_id)?.name || 'Ungrouped'}</span>`}</td>
         <td class="muted">${osLabel(a.facts)}</td><td>${verPill(a)}</td>
@@ -1225,7 +1324,7 @@ function Jobs() {
       setHTML($('#j-sys'), html`<option value="">All systems</option>${sysOpts.map(([id, n]) => html`<option value="${id}" ${st.agent === id ? 'selected' : ''}>${n}</option>`)}`);
       setHTML($('#j-list'), jobs.length ? html`<div class="panel"><table class="tbl"><thead><tr><th>Job</th><th>System</th><th>Status</th><th>By</th><th>Created</th><th>Duration</th></tr></thead>
         <tbody>${jobs.map((j) => html`<tr class="click" data-act="open-job" data-id="${j.id}"><td><b>${jobTitle(j)}</b><div class="dim small">${jobParams(j)}${j.error ? html` <span style="color:var(--red)">${j.error}</span>` : ''}</div></td>
-          <td>${names[j.agent_id] ? html`<a href="#/agent/${j.agent_id}">${names[j.agent_id]}</a>` : html`<span class="dim">${j.agent_id}</span>`}</td>
+          <td>${names[j.agent_id] ? html`<a href="#/system/${j.agent_id}">${names[j.agent_id]}</a>` : html`<span class="dim">${j.agent_id}</span>`}</td>
           <td>${statusBadge(j.status)}</td><td class="muted">${j.actor}</td><td class="muted">${when(j.created)}</td>
           <td class="muted">${j.finished ? dur(j.finished - (j.started || j.created)) : '—'}</td></tr>`)}</tbody></table></div>` : html`<div class="panel empty">${st.agent || st.user || st.active ? 'No jobs for this filter.' : 'No jobs.'}</div>`);
     },
@@ -1268,7 +1367,7 @@ function Releases() {
       <div class="row" style="margin:6px 0 12px"><h2 style="font-size:15px;margin:0">Agents per system</h2><span class="spacer"></span>
         ${outdated.length && canChange() ? html`<button class="btn sm" data-act="all-latest">${icon('up')} Update ${outdated.length} outdated agent(s) to ${repo.core_latest}</button>` : ''}</div>
       <div class="panel"><table class="tbl"><thead><tr><th>System</th><th>Agent</th>${ifChange(html`<th>Change to</th>`)}</tr></thead>
-      <tbody>${[...agents].sort(byName).map((a) => html`<tr><td>${agentDot(a)} <a href="#/agent/${a.id}"><b>${a.name}</b></a></td><td>${verPill(a)}</td>
+      <tbody>${[...agents].sort(byName).map((a) => html`<tr><td>${agentDot(a)} <a href="#/system/${a.id}"><b>${a.name}</b></a></td><td>${verPill(a)}</td>
         ${ifChange(html`<td><form class="row" style="flex-wrap:nowrap" data-submit="set" data-id="${a.id}"><select name="v">${versionOptions({ core: repo.core.filter((v) => v.platforms.includes(`${a.facts.os}-${a.facts.arch}`) && !(a.sealed && versionLess(v.version, '0.3.0'))) }, a.core_version)}</select><button class="btn sm" ${a.status === 'active' ? '' : 'disabled'}>Apply</button></form></td>`)}</tr>`)}</tbody></table></div>` : '');
   }
   return {
@@ -1594,10 +1693,14 @@ function SettingsIdentity() {
       <div class="panel panel-pad" style="margin-top:18px"><h2>Website certificate (HTTPS)</h2>
         <div class="muted small">Carries the traffic; self-signed for now. Agents do not rely on it.</div>
         ${d.full ? html`<div class="keyrow"><span class="klbl">Fingerprint</span><code class="mono">sha256//${d.https}</code></div>` : ''}
+        <div class="keyrow"><span class="klbl">Valid</span><span>${fmtDate(d.cert_from)} – ${fmtDate(d.cert_until)}
+          ${d.cert_until - now() < d.cert_renew_days * 86400 ? html` <span class="badge upd xs">renewing soon</span>` : ''}</span></div>
+        ${canChange() ? html`<div class="row" style="margin-top:14px"><span class="muted small">Renewed automatically ${d.cert_renew_days} days before it expires.</span><span class="spacer"></span>
+          <button class="btn" data-act="new-cert">${icon('refresh')} Generate new certificate</button></div>` : ''}
       </div>`);
     setHTML($('#id-agents'), d.agents.length ? html`<div class="panel"><table class="tbl">
       <thead><tr><th>System</th><th>Slot 1</th><th>Slot 2</th><th>Status</th><th>Reported</th></tr></thead>
-      <tbody>${d.agents.map((a) => html`<tr><td>${agentDot(a)} <a href="#/agent/${a.id}"><b>${a.name}</b></a></td>
+      <tbody>${d.agents.map((a) => html`<tr><td>${agentDot(a)} <a href="#/system/${a.id}"><b>${a.name}</b></a></td>
         <td>${a.sealed ? slot(a.slots[0]) : html`<span class="dim">—</span>`}</td>
         <td>${a.sealed ? slot(a.slots[1]) : html`<span class="dim">—</span>`}</td>
         <td>${status(a, d)}</td>
@@ -1621,6 +1724,13 @@ function SettingsIdentity() {
       'gen-key': async () => {
         if (!(await confirmBox('Generate a new master key?', 'The master keeps using the current key. The new key is sent to every system over its current, verified connection; you switch when they all have it.', { okText: 'Generate' }))) return;
         await act('generate'); toast('New key generated — distributing to systems', 'ok');
+      },
+      'new-cert': async () => {
+        if (!(await confirmBox('Generate a new HTTPS certificate?', html`The current certificate is replaced by a new self-signed one, valid for 1 year, and the old one is deleted. It is used immediately.
+          <ul style="margin:10px 0 0 18px"><li>Every browser that accepted the old certificate shows the security warning once more (yours too, on the next page load).</li>
+          <li>Agents and install commands are not affected.</li></ul>`, { okText: 'Generate new certificate' }))) return;
+        await act('cert');
+        toast('New certificate in use — reload the page and accept it', 'ok');
       },
       'cancel-key': async () => {
         if (!(await confirmBox('Cancel the new key?', 'The new key is discarded and systems remove it again. The current key stays in use.', { okText: 'Discard new key', danger: true }))) return;

@@ -2,8 +2,8 @@ package master
 
 // Master keys.
 //
-// The HTTPS certificate (tls.crt/tls.key) only carries traffic; it is not
-// rotated here and agents 0.3.0+ do not rely on it. Agents trust the
+// The HTTPS certificate (tls.crt/tls.key) only carries traffic; agents do
+// not rely on it (it is replaced in certrotate.go). Agents trust the
 // master's payload key (payload.key), in two slots, which allows rotation:
 //
 //  1. Generate: a new payload key; the master keeps answering with the old.
@@ -225,7 +225,11 @@ func (s *Server) identityView(full bool) map[string]any {
 		list = append(list, k)
 	}
 	sort.Slice(list, func(i, j int) bool { return strings.ToLower(list[i].Name) < strings.ToLower(list[j].Name) })
-	v := map[string]any{"rotating": next != "", "next_at": nextAt, "agents": list, "full": full}
+	s.keyMu.Lock()
+	certFrom, certUntil := certDates(s.keys.cert)
+	s.keyMu.Unlock()
+	v := map[string]any{"rotating": next != "", "next_at": nextAt, "agents": list, "full": full,
+		"cert_from": certFrom.Unix(), "cert_until": certUntil.Unix(), "cert_renew_days": int(certRenewLead / (24 * time.Hour))}
 	if full {
 		v["current"], v["next"], v["https"] = seal.Fingerprint(cur), seal.Fingerprint(next), tlsPin
 	}
@@ -249,6 +253,9 @@ func (s *Server) handleIdentityAction(w http.ResponseWriter, r *http.Request) {
 		if err = s.generateKey(); err == nil {
 			s.audit.write(actor(r), clientIP(r), "identity.generate", "", "new payload key "+shortPin(seal.Fingerprint(s.desiredPins()[1])))
 		}
+	case "cert":
+		// A new HTTPS certificate; audited by rotateCert.
+		err = s.rotateCert(actor(r), clientIP(r))
 	case "cancel":
 		if err = s.cancelKey(); err == nil {
 			s.audit.write(actor(r), clientIP(r), "identity.cancel", "", "new payload key discarded")

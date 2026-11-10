@@ -29,6 +29,7 @@ func certPaths(dir, slot string) (crt, key string) {
 // self-signed one on first start. Agents pin its public key.
 func loadOrCreateCert(dir string, extraSANs []string) (tls.Certificate, string, error) {
 	certPath, keyPath := certPaths(dir, "current")
+	recoverCert(dir)
 	if _, err := os.Stat(certPath); os.IsNotExist(err) {
 		if err := createCert(certPath, keyPath, extraSANs); err != nil {
 			return tls.Certificate{}, "", err
@@ -63,7 +64,7 @@ func createCert(certPath, keyPath string, extra []string) error {
 		SerialNumber:          serial,
 		Subject:               pkix.Name{CommonName: "coremon master " + host, Organization: []string{"coremon"}},
 		NotBefore:             time.Now().Add(-time.Hour),
-		NotAfter:              time.Now().AddDate(20, 0, 0),
+		NotAfter:              time.Now().AddDate(certValidity, 0, 0),
 		KeyUsage:              x509.KeyUsageDigitalSignature,
 		ExtKeyUsage:           []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
 		BasicConstraintsValid: true,
