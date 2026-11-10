@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"crypto/tls"
 	"encoding/base64"
+	"io"
 	"net"
 	"net/http"
 	"os"
@@ -93,6 +94,57 @@ func TestCertRotation(t *testing.T) {
 	}
 	if e := s.audit.list("", "", 1); e[0].Actor != "scheduler" {
 		t.Fatalf("renewal audit: %+v", e[0])
+	}
+}
+
+// A browser resumes its TLS session (session ticket) and reuses open
+// connections; neither may keep it on the old certificate.
+func TestCertRotationReachesBrowsers(t *testing.T) {
+	pub, _ := keys(t)
+	s := testServer(t, pub, "http://127.0.0.1:1/none", "0.3.0")
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	hs := s.newHTTPSServer(s.routes(), "")
+	go hs.ServeTLS(ln, "", "")
+	defer hs.Close()
+	url := "https://" + ln.Addr().String() + "/"
+	// Like a browser: a TLS session cache and keep-alive connections.
+	browser := &http.Client{Transport: &http.Transport{TLSClientConfig: &tls.Config{InsecureSkipVerify: true,
+		ClientSessionCache: tls.NewLRUClientSessionCache(8)}}}
+	pinOf := func(st *tls.ConnectionState) string {
+		sum := sha256.Sum256(st.PeerCertificates[0].RawSubjectPublicKeyInfo)
+		return base64.StdEncoding.EncodeToString(sum[:])
+	}
+	get := func() *tls.ConnectionState {
+		t.Helper()
+		resp, err := browser.Get(url)
+		if err != nil {
+			t.Fatal(err)
+		}
+		io.Copy(io.Discard, resp.Body)
+		resp.Body.Close()
+		return resp.TLS
+	}
+	old := s.currentPin()
+	if pinOf(get()) != old {
+		t.Fatal("not serving the current certificate")
+	}
+	// A second connection resumes the session (as browsers do).
+	browser.Transport.(*http.Transport).CloseIdleConnections()
+	if st := get(); !st.DidResume {
+		t.Log("note: no session resumption with this Go version")
+	}
+	if err := s.rotateCert("test", ""); err != nil {
+		t.Fatal(err)
+	}
+	// Without closing anything on the client side: the open connection and
+	// the session ticket must both lead to the new certificate.
+	time.Sleep(100 * time.Millisecond)
+	st := get()
+	if pinOf(st) != s.currentPin() || pinOf(st) == old {
+		t.Fatalf("after a new certificate the browser still gets the old one (resumed: %v)", st.DidResume)
 	}
 }
 

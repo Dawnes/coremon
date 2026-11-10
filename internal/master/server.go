@@ -55,7 +55,12 @@ type Server struct {
 	keyMu         sync.Mutex
 	keys          keyState   // TLS keys: current and, during a rotation, next
 	certMu        sync.Mutex // one HTTPS certificate rotation at a time
-	certTried     time.Time  // last automatic renewal attempt (scheduler only)
+	tlsMu         sync.Mutex
+	https         []*http.Server // HTTPS servers (guarded by tlsMu)
+	ticketKeys    [][32]byte     // TLS session ticket keys, newest first (guarded by tlsMu)
+	ticketKeyAt   time.Time      // when the newest ticket key was made
+	tlsCfg        *tls.Config    // TLS settings handed out per connection (guarded by tlsMu)
+	certTried     time.Time      // last automatic renewal attempt (scheduler only)
 	signingKeyB64 string
 	wakes         map[string]chan struct{}     // guarded by st.mu
 	pings         map[string]chan proto.Result // ping job ID -> waiting UI request; guarded by st.mu
@@ -148,9 +153,7 @@ func (s *Server) applyUIPort(handler http.Handler) {
 		log.Printf("website: %s", s.uiErr)
 		return
 	}
-	srv := &http.Server{Handler: handler, ReadHeaderTimeout: 10 * time.Second, ReadTimeout: readTimeout, IdleTimeout: 120 * time.Second,
-		TLSConfig: &tls.Config{MinVersion: tls.VersionTLS12, GetCertificate: s.currentCert},
-		ErrorLog:  log.New(os.Stderr, "http: ", 0)}
+	srv := s.newHTTPSServer(handler, "")
 	s.uiSrv, s.uiErr = srv, ""
 	go func() {
 		if err := srv.ServeTLS(ln, "", ""); err != nil && !errors.Is(err, http.ErrServerClosed) {
@@ -337,6 +340,33 @@ func (s *Server) routes() http.Handler {
 	return securityHeaders(mux)
 }
 
+// newHTTPSServer is the master's HTTPS server (agent port and the extra
+// website port share its TLS setup). The certificate comes from
+// currentCert on every full handshake; session tickets use the master's own
+// ticket keys, so a new certificate can invalidate them (see certrotate.go).
+func (s *Server) newHTTPSServer(handler http.Handler, addr string) *http.Server {
+	// The server copies its TLS config when it starts, so the settings that
+	// change (ticket keys) are handed out per connection instead.
+	cfg := &tls.Config{MinVersion: tls.VersionTLS12, GetCertificate: s.currentCert,
+		GetConfigForClient: func(*tls.ClientHelloInfo) (*tls.Config, error) { return s.tlsNow(), nil }}
+	srv := &http.Server{
+		Addr:              addr,
+		Handler:           handler,
+		ReadHeaderTimeout: 10 * time.Second,
+		ReadTimeout:       readTimeout,
+		IdleTimeout:       120 * time.Second,
+		TLSConfig:         cfg,
+		ErrorLog:          log.New(os.Stderr, "http: ", 0),
+	}
+	s.tlsMu.Lock()
+	if s.tlsCfg == nil {
+		s.applyTicketKeys([][32]byte{newTicketKey()})
+	}
+	s.https = append(s.https, srv)
+	s.tlsMu.Unlock()
+	return srv
+}
+
 // Run serves until ctx is cancelled.
 func (s *Server) Run(ctx context.Context) error {
 	stop := make(chan struct{})
@@ -347,15 +377,7 @@ func (s *Server) Run(ctx context.Context) error {
 	handler := s.routes()
 	s.handler = handler
 	s.applyUIPort(handler)
-	srv := &http.Server{
-		Addr:              s.cfg.Listen,
-		Handler:           handler,
-		ReadHeaderTimeout: 10 * time.Second,
-		ReadTimeout:       readTimeout,
-		IdleTimeout:       120 * time.Second,
-		TLSConfig:         &tls.Config{MinVersion: tls.VersionTLS12, GetCertificate: s.currentCert},
-		ErrorLog:          log.New(os.Stderr, "http: ", 0),
-	}
+	srv := s.newHTTPSServer(handler, s.cfg.Listen)
 	errc := make(chan error, 2)
 	go func() { errc <- srv.ListenAndServeTLS("", "") }()
 	var plain *http.Server

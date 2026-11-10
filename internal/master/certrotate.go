@@ -5,6 +5,7 @@ package master
 // on it; browsers ask once to accept the new one.
 
 import (
+	"crypto/rand"
 	"crypto/tls"
 	"crypto/x509"
 	"fmt"
@@ -75,11 +76,59 @@ func (s *Server) rotateCert(actor, ip string) error {
 	old := s.keys.tlsPin
 	s.keys.cert, s.keys.tlsPin = &cert, pin
 	s.keyMu.Unlock()
+	// Browsers would otherwise keep the old certificate: they resume their
+	// TLS session (no certificate is sent then) and reuse open connections.
+	s.resetTLSSessions()
 	_, until := certDates(&cert)
 	s.audit.write(actor, ip, "identity.cert", "", fmt.Sprintf("new HTTPS certificate %s → %s, valid until %s",
 		shortPin(old), shortPin(pin), until.Format("02-01-2006")))
 	log.Printf("HTTPS certificate replaced (%s), valid until %s", actor, until.Format("2006-01-02"))
 	return nil
+}
+
+func newTicketKey() (k [32]byte) {
+	rand.Read(k[:])
+	return k
+}
+
+// applyTicketKeys builds the TLS settings handed out per connection, with
+// these session ticket keys (tickets made with other keys are rejected, so
+// the browser does a full handshake). Caller holds s.tlsMu.
+func (s *Server) applyTicketKeys(keys [][32]byte) {
+	cfg := &tls.Config{MinVersion: tls.VersionTLS12, GetCertificate: s.currentCert, NextProtos: []string{"h2", "http/1.1"}}
+	cfg.SetSessionTicketKeys(keys)
+	s.ticketKeys, s.ticketKeyAt, s.tlsCfg = keys, time.Now(), cfg
+}
+
+// tlsNow returns the TLS settings for a new connection.
+func (s *Server) tlsNow() *tls.Config {
+	s.tlsMu.Lock()
+	defer s.tlsMu.Unlock()
+	return s.tlsCfg
+}
+
+// resetTLSSessions makes every browser do a full handshake (and so get the
+// current certificate): all session tickets become invalid, and idle
+// keep-alive connections are closed.
+func (s *Server) resetTLSSessions() {
+	s.tlsMu.Lock()
+	defer s.tlsMu.Unlock()
+	s.applyTicketKeys([][32]byte{newTicketKey()})
+	for _, srv := range s.https {
+		srv.SetKeepAlivesEnabled(false) // closes idle connections
+		srv.SetKeepAlivesEnabled(true)
+	}
+}
+
+// renewTicketKeys makes a new session ticket key once a day; the previous one
+// stays valid one more day, so sessions are resumed but not forever.
+func (s *Server) renewTicketKeys(now time.Time) {
+	s.tlsMu.Lock()
+	defer s.tlsMu.Unlock()
+	if len(s.ticketKeys) == 0 || now.Sub(s.ticketKeyAt) < 24*time.Hour {
+		return
+	}
+	s.applyTicketKeys([][32]byte{newTicketKey(), s.ticketKeys[0]})
 }
 
 // recoverCert completes a rotation that was interrupted between the two
