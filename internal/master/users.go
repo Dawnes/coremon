@@ -73,6 +73,11 @@ func (s *Server) requireUI(p perm, h http.HandlerFunc) http.HandlerFunc {
 			http.Error(w, "not logged in", http.StatusUnauthorized)
 			return
 		}
+		if uc.MustChange && r.URL.Path != "/api/ui/password" {
+			// Generated password: changing it is the only thing allowed.
+			http.Error(w, "password change required", http.StatusForbidden)
+			return
+		}
 		if !can(&uc, p) {
 			http.Error(w, "your account is read-only", http.StatusForbidden)
 			return
@@ -82,14 +87,16 @@ func (s *Server) requireUI(p perm, h http.HandlerFunc) http.HandlerFunc {
 }
 
 type userView struct {
-	ID      string `json:"id"`
-	Name    string `json:"name"`
-	Role    string `json:"role"`
-	Created int64  `json:"created"`
+	ID         string `json:"id"`
+	Name       string `json:"name"`
+	Role       string `json:"role"`
+	Created    int64  `json:"created"`
+	Permanent  bool   `json:"permanent"`   // the admin account
+	MustChange bool   `json:"must_change"` // still on a generated password
 }
 
 func viewUser(u *User) userView {
-	return userView{ID: u.ID, Name: u.Name, Role: u.Role, Created: u.Created}
+	return userView{ID: u.ID, Name: u.Name, Role: u.Role, Created: u.Created, Permanent: u.Name == adminName, MustChange: u.MustChange}
 }
 
 func (s *Server) setCookie(w http.ResponseWriter, tok string) {
@@ -112,6 +119,7 @@ func (s *Server) handleSession(w http.ResponseWriter, r *http.Request) {
 				out["user"] = viewUser(u)
 				out["can_change"] = can(u, permChange)
 				out["initial_password"] = statErr == nil && u.ID == s.st.st.InitialUser
+				out["must_change"] = u.MustChange
 			}
 			s.st.mu.Unlock()
 		}
@@ -189,9 +197,13 @@ func (s *Server) handlePassword(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "current password is wrong", http.StatusForbidden)
 		return
 	}
+	if u.MustChange && req.New == req.Current {
+		http.Error(w, "choose a new password, not the generated one", http.StatusBadRequest)
+		return
+	}
 	h := hashPassword(req.New)
 	s.st.mu.Lock()
-	u.PasswordHash = h
+	u.PasswordHash, u.MustChange = h, false
 	if u.ID == s.st.st.InitialUser {
 		os.Remove(s.initialPwPath())
 	}
@@ -292,6 +304,10 @@ func (s *Server) handleUserUpdate(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "invalid role", http.StatusBadRequest)
 			return
 		}
+		if u.Name == adminName {
+			http.Error(w, "the admin account is permanent and stays administrator", http.StatusConflict)
+			return
+		}
 		if u.Role == RoleAdmin && s.st.admins() == 1 {
 			http.Error(w, "this is the last administrator; make someone else administrator first", http.StatusConflict)
 			return
@@ -300,7 +316,7 @@ func (s *Server) handleUserUpdate(w http.ResponseWriter, r *http.Request) {
 		u.Role, signOut = *req.Role, true
 	}
 	if req.Password != nil {
-		u.PasswordHash = h
+		u.PasswordHash, u.MustChange = h, false
 		if u.ID == s.st.st.InitialUser {
 			os.Remove(s.initialPwPath())
 		}
@@ -324,6 +340,10 @@ func (s *Server) handleUserDelete(w http.ResponseWriter, r *http.Request) {
 	}
 	if u.ID == userFrom(r).ID {
 		http.Error(w, "you cannot remove your own account", http.StatusConflict)
+		return
+	}
+	if u.Name == adminName {
+		http.Error(w, "the admin account is permanent and cannot be removed", http.StatusConflict)
 		return
 	}
 	if u.Role == RoleAdmin && s.st.admins() == 1 {

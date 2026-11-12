@@ -62,6 +62,11 @@ func testServer(t *testing.T, pub, indexURL, version string) *Server {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// Most tests sign in as admin with the generated password; the forced
+	// change is tested on its own (TestForcedChangeAndPermanentAdmin).
+	if u := s.st.userByName(adminName); u != nil {
+		u.MustChange = false
+	}
 	return s
 }
 

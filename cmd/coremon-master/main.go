@@ -8,6 +8,7 @@ import (
 	"log"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strings"
 	"syscall"
 
@@ -20,6 +21,11 @@ var (
 )
 
 func main() {
+	// coremon-reset is a second name for this program (a link in
+	// /usr/local/sbin), so it always comes with the signed master release.
+	if strings.TrimSuffix(filepath.Base(os.Args[0]), ".exe") == "coremon-reset" {
+		os.Exit(resetMain(os.Args[1:]))
+	}
 	cmd := "serve"
 	args := os.Args[1:]
 	if len(args) > 0 && !strings.HasPrefix(args[0], "-") {
@@ -34,7 +40,6 @@ func main() {
 	key := fs.String("signing-key", "/etc/coremon-master/signing.pub", "release signing public key (root-owned)")
 	github := fs.String("github", os.Getenv("COREMON_GITHUB_REPO"), "GitHub repository (owner/name) publishing the version index; first start only, then editable in Settings")
 	indexURL := fs.String("index-url", "", "override the version index URL (testing)")
-	user := fs.String("user", "admin", "reset-password: user name (created as administrator if missing)")
 	target := fs.String("target", "/usr/local/bin/coremon-master", "apply-update: binary to replace")
 	fs.Parse(args)
 	log.SetFlags(0)
@@ -42,12 +47,16 @@ func main() {
 	switch cmd {
 	case "version":
 		fmt.Println(version)
-	case "reset-password":
-		pw, err := master.ResetPassword(*data, *user)
-		if err != nil {
-			log.Fatal(err)
+	case "show-state":
+		// Read-only: prints the (obfuscated) state file readably.
+		if !isRoot() {
+			log.Fatal("show-state: run as root")
 		}
-		fmt.Printf("New password for %s: %s\n(restart the master service: systemctl restart coremon-master)\n", *user, pw)
+		out, err := master.ShowState(*data)
+		if err != nil {
+			log.Fatalf("show-state: %v", err)
+		}
+		os.Stdout.Write(out)
 	case "apply-update":
 		if err := master.ApplyUpdate(*data, *key, *target, version); err != nil {
 			log.Fatalf("apply-update: %v", err)
@@ -70,7 +79,7 @@ func main() {
 			log.Fatal(err)
 		}
 	default:
-		fmt.Fprintf(os.Stderr, "usage: coremon-master [serve|apply-update|reset-password|version] [flags]\n")
+		fmt.Fprintf(os.Stderr, "usage: coremon-master [serve|apply-update|show-state|version] [flags]\n(password reset: coremon-reset)\n")
 		os.Exit(2)
 	}
 }

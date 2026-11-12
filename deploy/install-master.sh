@@ -73,6 +73,8 @@ if [ -x /usr/local/bin/coremon-master ]; then
   echo "coremon: replacing master ${OLD:-?} with $VERSION"
 fi
 install -m 0755 "$BIN" /usr/local/bin/coremon-master
+# coremon-reset (password reset by root) is the same program under another name.
+ln -sfn /usr/local/bin/coremon-master /usr/local/sbin/coremon-reset
 mkdir -p "$DATA/release" "$DATA/update"
 # Agent versions are downloaded by the master itself from the version index.
 # Masters before 0.2 also stored separate modules; those are not used anymore.
@@ -111,8 +113,10 @@ echo
 echo "Coremon master $(/usr/local/bin/coremon-master version) is running."
 echo "  UI:       https://${IP:-<this-host>}:8443"
 if [ -f "$DATA/initial-password.txt" ]; then
-  echo "  password: $(cat "$DATA/initial-password.txt")   (initial; change it under Settings)"
+  echo "  user:     admin"
+  echo "  password: $(cat "$DATA/initial-password.txt")   (generated; you must change it at the first sign-in)"
 fi
+echo "  forgot a password? as root: coremon-reset   (or: coremon-reset -user <name>)"
 [ -s /etc/coremon-master/master.env ] && echo "  releases: version index of https://github.com/$REPO"
 echo
 echo "The master downloads the agent versions within a minute (see Releases)."

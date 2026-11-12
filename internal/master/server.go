@@ -224,10 +224,15 @@ func New(cfg Config) (*Server, error) {
 		st.markDirty()
 	}
 
-	if len(st.st.Users) == 0 {
+	// The permanent admin account: created on the first start, restored if it
+	// is missing (it cannot be deleted in the website, but an older version
+	// allowed it). Its generated password goes to initial-password.txt and
+	// must be changed at the first sign-in.
+	if st.userByName(adminName) == nil {
+		restored := len(st.st.Users) > 0
 		pw := randHex(8)
-		u := &User{ID: "u_" + randHex(6), Name: "admin", Role: RoleAdmin, PasswordHash: hashPassword(pw), Created: time.Now().Unix()}
-		st.st.Users = []*User{u}
+		u := &User{ID: "u_" + randHex(6), Name: adminName, Role: RoleAdmin, PasswordHash: hashPassword(pw), Created: time.Now().Unix(), MustChange: true}
+		st.st.Users = append(st.st.Users, u)
 		st.st.InitialUser = u.ID
 		if err := os.WriteFile(s.initialPwPath(), []byte(pw+"\n"), 0o600); err != nil {
 			return nil, err
@@ -235,32 +240,48 @@ func New(cfg Config) (*Server, error) {
 		if err := st.writeNow(); err != nil {
 			return nil, err
 		}
-		log.Printf("initial password of user admin written to %s", s.initialPwPath())
+		if restored {
+			s.audit.write("master", "", "user.admin_restored", adminName, "the permanent admin account was missing and has been restored")
+			log.Printf("the admin account was missing: restored, password written to %s", s.initialPwPath())
+		} else {
+			log.Printf("initial password of user admin written to %s", s.initialPwPath())
+		}
+	}
+	// A generated first password still in use must be changed (also for
+	// masters installed before this rule).
+	if u := st.userByID(st.st.InitialUser); u != nil && !u.MustChange {
+		if _, err := os.Stat(s.initialPwPath()); err == nil {
+			u.MustChange = true
+			st.markDirty()
+		}
 	}
 	return s, nil
 }
 
-// ResetPassword sets a new random password for a user (created as an
-// administrator if it does not exist) and returns it. Run it while the
-// master is stopped, or restart the master afterwards.
+// ResetPassword gives an existing user a new random password that must be
+// changed at the next sign-in, and records it in the audit log. For
+// coremon-reset, while the master is stopped.
 func ResetPassword(dataDir, name string) (string, error) {
 	st, err := openStore(dataDir)
 	if err != nil {
 		return "", err
 	}
-	pw := randHex(8)
 	u := st.userByName(name)
 	if u == nil {
-		if !userNameRe.MatchString(name) {
-			return "", fmt.Errorf("invalid user name %q", name)
+		var admins []string
+		for _, x := range st.st.Users {
+			if x.Role == RoleAdmin {
+				admins = append(admins, x.Name)
+			}
 		}
-		u = &User{ID: "u_" + randHex(6), Name: name, Role: RoleAdmin, Created: time.Now().Unix()}
-		st.st.Users = append(st.st.Users, u)
+		return "", fmt.Errorf("there is no user %q; administrators: %s", name, strings.Join(admins, ", "))
 	}
-	u.PasswordHash = hashPassword(pw)
+	pw := randHex(8)
+	u.PasswordHash, u.MustChange = hashPassword(pw), true
 	if err := st.writeNow(); err != nil {
 		return "", err
 	}
+	(&auditLog{path: filepath.Join(dataDir, "audit.jsonl")}).write("root", "", "password.reset", name, "new generated password via coremon-reset on the master (must be changed at the next sign-in)")
 	return pw, nil
 }
 

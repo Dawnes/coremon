@@ -11,6 +11,7 @@ import (
 	"sync"
 	"time"
 
+	"coremon/internal/feature/apps"
 	"coremon/internal/feature/updates"
 )
 
@@ -25,6 +26,9 @@ const (
 func checkState(feature string, raw json.RawMessage) (json.RawMessage, error) {
 	if len(raw) > maxStateBytes {
 		return nil, fmt.Errorf("result too large (%d bytes, at most %d)", len(raw), maxStateBytes)
+	}
+	if feature == "apps" {
+		return checkApps(raw)
 	}
 	if feature != "updates" {
 		return raw, nil
@@ -73,6 +77,37 @@ func checkState(feature string, raw json.RawMessage) (json.RawMessage, error) {
 		return nil, errors.New("result too large")
 	}
 	return out, nil
+}
+
+// extraStates may come along with another function's result (the
+// application scan with every update check, install and upgrade).
+var extraStates = map[string]bool{"apps": true}
+
+const maxApps = 64
+
+// checkApps validates an application scan: a short list of rows with plain
+// names and cleaned versions.
+func checkApps(raw json.RawMessage) (json.RawMessage, error) {
+	var s apps.State
+	if err := json.Unmarshal(raw, &s); err != nil {
+		return nil, errors.New("result is not a valid application list")
+	}
+	if len(s.Apps) > maxApps {
+		return nil, fmt.Errorf("result lists more than %d applications", maxApps)
+	}
+	s.ScannedAt = notFuture(s.ScannedAt)
+	for i := range s.Apps {
+		p := &s.Apps[i]
+		p.Name = cleanText(p.Name, 40)
+		p.Version, p.Full = cleanText(p.Version, 64), cleanText(p.Full, 128)
+		if p.Package != "" && !updates.PackageNameRe.MatchString(p.Package) {
+			p.Package = ""
+		}
+		if !p.Installed {
+			p.Version, p.Full, p.Package = "", "", ""
+		}
+	}
+	return json.Marshal(s)
 }
 
 // rateLimiter allows each agent about rate requests per second with a

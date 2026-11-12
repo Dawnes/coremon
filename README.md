@@ -133,7 +133,7 @@ The master needs outbound HTTPS to `github.com`, `salsa.debian.org` (OS support 
   or, without an answer within 15 s, the last contact. Pings are listed under
   Jobs, not in the audit log.
   *Updates*: select packages (or *Security only*) and *Install selected*, or
-  *Upgrade all*; output streams live. *Agent*: install any of the 3 kept agent
+  *Upgrade all*; output streams live. *Applications*: whether Apache, Docker, Fail2ban, Java, MariaDB/MySQL, Nginx, Node.js, OpenSSL, PHP, PostgreSQL, Postfix, Python, Redis, Samba, the SSH server and WireGuard are installed, with their versions (from the package manager; scanned with every update check and after installs; *Refresh now* also works on report-only systems). *Agent*: install any of the 3 kept agent
   versions. *System*: host facts — OS support status, failed services, automatic updates (unattended-upgrades), last upgrade (from apt's history: when, how many packages, started by whom) — and the IPv4 gateway (default route with the lowest metric) and the IPv4 DNS servers in use (the real servers when systemd-resolved is used).
 * **Releases** — version index status, master update, agent versions and a
   per-system version table.
@@ -151,7 +151,7 @@ The master needs outbound HTTPS to `github.com`, `salsa.debian.org` (OS support 
   (administrators: add users, set role, reset password, remove), *Login*
   (your own password) and *Identity* (payload key rotation and the key status of every system; key fingerprints are shown to administrators only). The *Master URL* used in install commands is automatic (the address your browser uses, with the agent port); administrators can *Change* it, e.g. for a DNS name agents use.
 * **Users** — sign in with user name and password; the first user is
-  `admin`. *Read-only* users see everything (except enrollment tokens) and
+  `admin`, which is permanent (it cannot be removed or demoted, and is restored at start-up if missing). A generated password (installation, `coremon-reset`) must be changed at the first sign-in before anything else. *Read-only* users see everything (except enrollment tokens) and
   change nothing but their own password. The last administrator cannot be
   removed or demoted.
 * The dashboard's **Oldest information** tile shows the oldest data on
@@ -202,8 +202,9 @@ actions `Mutating`.
 | Master update logs | `journalctl -u coremon-master-update` |
 | Agent logs | `journalctl -u coremon-agent -f` |
 | Upgrade master by hand | re-run the `install-master.sh` one-liner |
-| Reset a password | `systemctl stop coremon-master && sudo -u coremon coremon-master reset-password -user admin && systemctl start coremon-master` (creates the user as administrator if it does not exist) |
-| Back up the master | `/var/lib/coremon-master` and `/etc/coremon-master` |
+| Reset a password | `coremon-reset` as root (or `coremon-reset -user <name>` for another existing user): the master restarts briefly, the new generated password is shown on screen only and must be changed at the next sign-in |
+| Look inside the stored state | `coremon-master show-state` as root (read-only; the file itself is not human-readable) |
+| Back up the master | `/var/lib/coremon-master` and `/etc/coremon-master` (the state is in `state.dat`: compressed and scrambled, not human-readable) |
 | Reverse proxy | add `-http 127.0.0.1:8080` to the master's `ExecStart` (loopback-only plain HTTP for a local proxy); agents keep using the agent port |
 
 **Payload key rotation** (Settings → Identity, agents 0.3.0+): *Generate new

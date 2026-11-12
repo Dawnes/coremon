@@ -177,7 +177,14 @@ type User struct {
 	Role         string `json:"role"`
 	PasswordHash string `json:"password_hash"`
 	Created      int64  `json:"created"`
+	// MustChange: a generated password (install, coremon-reset, restored
+	// admin); the user can only change it before doing anything else.
+	MustChange bool `json:"must_change,omitempty"`
 }
+
+// adminName is the permanent administrator account: it cannot be deleted
+// or demoted, and is restored at start-up if missing.
+const adminName = "admin"
 
 func (s *store) userByName(name string) *User {
 	for _, u := range s.st.Users {
@@ -232,8 +239,8 @@ type store struct {
 }
 
 func openStore(dir string) (*store, error) {
-	s := &store{path: filepath.Join(dir, "state.json"), dir: dir}
-	b, err := os.ReadFile(s.path)
+	s := &store{path: filepath.Join(dir, stateFile), dir: dir}
+	b, err := readStateJSON(dir)
 	if err == nil {
 		if err := json.Unmarshal(b, &s.st); err != nil {
 			return nil, err
@@ -304,7 +311,11 @@ func (s *store) nextOrder(groupID string) int {
 func (s *store) markDirty() { s.dirty = true }
 
 func (s *store) writeNow() error {
-	b, err := json.Marshal(&s.st)
+	js, err := json.Marshal(&s.st)
+	if err != nil {
+		return err
+	}
+	b, err := encodeState(js)
 	if err != nil {
 		return err
 	}
@@ -312,7 +323,12 @@ func (s *store) writeNow() error {
 	if err := os.WriteFile(tmp, b, 0o600); err != nil {
 		return err
 	}
-	return os.Rename(tmp, s.path)
+	if err := os.Rename(tmp, s.path); err != nil {
+		return err
+	}
+	// Converted from an older version: the plain file is no longer needed.
+	os.Remove(filepath.Join(s.dir, oldStateFile))
+	return nil
 }
 
 func (s *store) flushLoop(stop <-chan struct{}) {

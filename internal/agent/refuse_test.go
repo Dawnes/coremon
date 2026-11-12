@@ -89,4 +89,13 @@ func TestAgentRefusesActionsInReportOnly(t *testing.T) {
 	if !immediate(proto.CmdPing) || immediate(proto.CmdAction) {
 		t.Fatal("ping must be handled at once, actions not")
 	}
+
+	// Report only still refuses actions, except the application scan.
+	scan := &spyFeature{}
+	a.feats["apps"], a.locks["apps"] = scan, &sync.Mutex{}
+	a.execute(ctx, proto.Command{ID: "s", Type: proto.CmdAction, Feature: "apps", Action: "scan", Params: json.RawMessage(`{}`)})
+	a.execute(ctx, proto.Command{ID: "j3", Type: proto.CmdAction, Feature: "updates", Action: "install", Params: json.RawMessage(`{"packages":["curl"]}`)})
+	if !scan.called || spy.called {
+		t.Fatalf("report only: scan ran %v (want true), install ran %v (want false)", scan.called, spy.called)
+	}
 }

@@ -128,7 +128,24 @@ func ApplyUpdate(dataDir, keyPath, target, current string) error {
 	}
 	log.Printf("installed coremon-master %s; restarting service", version)
 	ensurePortCapability()
+	EnsureResetLink(target)
 	return exec.Command("systemctl", "restart", "coremon-master.service").Run()
+}
+
+// ResetLink is where coremon-reset lives: a second name for the master
+// binary (the program acts on the name it is started with), so it comes
+// with every signed master update.
+const ResetLink = "/usr/local/sbin/coremon-reset"
+
+// EnsureResetLink creates the coremon-reset link if it is missing (root).
+func EnsureResetLink(target string) {
+	if cur, err := os.Readlink(ResetLink); err == nil && cur == target {
+		return
+	}
+	os.Remove(ResetLink)
+	if err := os.Symlink(target, ResetLink); err != nil {
+		log.Printf("coremon-reset link: %v", err)
+	}
 }
 
 const (

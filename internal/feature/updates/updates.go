@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"coremon/internal/feature"
+	"coremon/internal/feature/apps"
 	"coremon/internal/proto"
 )
 
@@ -133,7 +134,9 @@ func list(c *feature.Ctx, b Backend) (any, error) {
 	}
 	finish(s)
 	c.Log("%d update(s) available, %d security, reboot required: %v", s.Total, s.Security, s.RebootRequired)
-	return map[string]any{"state": s}, nil
+	// Every check, install and upgrade also rescans the applications, so the
+	// Applications tab follows the same timer and is current after changes.
+	return map[string]any{"state": s, "states": map[string]any{"apps": apps.Scan()}}, nil
 }
 
 func finish(s *Snapshot) {

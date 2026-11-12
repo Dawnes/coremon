@@ -69,8 +69,9 @@ func (s *Server) enqueue(a *Agent, j *Job) *Job {
 
 // jobAllowed: which jobs a system may receive in its status.
 //   - pending: only an uninstall
-//   - report only: no actions (checks, installs, reboots); agent version
-//     changes, mode changes and uninstall are fine
+//   - report only: no actions (checks, installs, reboots) except the
+//     application scan, which only reads; agent version changes, mode
+//     changes and uninstall are fine
 //   - active: everything
 func jobAllowed(a *Agent, j *Job) bool {
 	if j.Type == proto.CmdSetPins || j.Type == proto.CmdPing {
@@ -80,10 +81,14 @@ func jobAllowed(a *Agent, j *Job) bool {
 	case StatusActive:
 		return true
 	case StatusReportOnly:
-		return j.Type != proto.CmdAction
+		return j.Type != proto.CmdAction || readOnlyAction(j.Feature)
 	}
 	return j.Type == proto.CmdUninstall
 }
+
+// readOnlyAction: a function that only reads, so it may run on report-only
+// systems (the application scan's "Refresh now").
+func readOnlyAction(feature string) bool { return feature == "apps" }
 
 // syncMode sends the master's decision (active or report only) to an agent
 // that supports report-only mode and has not confirmed it yet. actor is the
@@ -383,7 +388,8 @@ func (s *Server) resultCore(agentID string, res proto.Result, ip string) {
 	switch {
 	case j.Type == proto.CmdAction && len(res.Data) > 0:
 		var d struct {
-			State json.RawMessage `json:"state"`
+			State  json.RawMessage            `json:"state"`
+			States map[string]json.RawMessage `json:"states"` // extra states, e.g. the application scan with a check
 		}
 		if json.Unmarshal(res.Data, &d) == nil && len(d.State) > 0 && string(d.State) != "null" {
 			state, err := checkState(j.Feature, d.State)
@@ -393,6 +399,15 @@ func (s *Server) resultCore(agentID string, res proto.Result, ip string) {
 			}
 			a.State[j.Feature] = state
 			a.StateAt[j.Feature] = now
+		}
+		for feat, raw := range d.States {
+			if !extraStates[feat] || feat == j.Feature || len(raw) == 0 || string(raw) == "null" {
+				continue
+			}
+			if state, err := checkState(feat, raw); err == nil {
+				a.State[feat] = state
+				a.StateAt[feat] = now
+			}
 		}
 	case j.Type == proto.CmdPing:
 		s.pingAnswered(j, res)

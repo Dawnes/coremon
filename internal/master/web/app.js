@@ -406,7 +406,45 @@ window.addEventListener('hashchange', () => { if (view && $('#view')) route(); }
 async function boot() {
   session = await fetch('/api/ui/session', { headers: { 'X-Coremon': '1' } }).then((r) => r.json());
   if (!session.authenticated) return showLogin();
+  if (session.must_change) return showMustChange();
   route();
+}
+
+// A generated password (installation, coremon-reset, restored admin) must be
+// changed before anything else; the master refuses everything else too.
+function showMustChange() {
+  clearInterval(refreshTimer);
+  closeAllModals();
+  setHTML($('#app'), html`
+    <div class="login"><div class="panel">
+      <div class="brand"><img src="favicon.svg" alt=""><span>Coremon</span></div>
+      <div class="muted">Signed in as <b>${session.user?.name}</b> with a generated password. Choose your own password to continue.</div>
+      <form data-submit="change" id="change-form">
+        <label class="field">Current (generated) password<input type="password" name="cur" autocomplete="current-password" autofocus required></label>
+        <label class="field">New password (${pwRange()})<input type="password" name="new" autocomplete="new-password" minlength="${pwMin()}" maxlength="${pwMax()}" required></label>
+        <label class="field">Repeat new password<input type="password" name="new2" autocomplete="new-password" minlength="${pwMin()}" maxlength="${pwMax()}" required></label>
+        <div class="loginerr" id="change-err" role="alert"></div>
+        <button class="btn primary" type="submit">Change password and continue</button>
+      </form>
+      <div class="hint"><a href="#" data-act="logout">Sign out</a></div>
+    </div></div>`);
+  view = {
+    acts: {
+      change: async (f) => {
+        const err = $('#change-err');
+        err.textContent = '';
+        if (f.new.value !== f.new2.value) { err.textContent = 'The new passwords do not match'; return; }
+        try {
+          await POST('password', { current: f.cur.value, new: f.new.value });
+          toast('Password changed', 'ok');
+          if (location.hash && location.hash !== '#/') history.replaceState(null, '', location.pathname + location.search + '#/');
+          await boot();
+        } catch (e) {
+          err.textContent = /wrong/i.test(e.message || '') ? 'The current password is wrong' : e.message;
+        }
+      },
+    },
+  };
 }
 
 // ---------- shared bits ----------
@@ -1146,6 +1184,27 @@ function AgentPage([id]) {
     return html`<div class="panel"><table class="tbl"><thead><tr><th>Job</th><th>Status</th><th>By</th><th>Created</th><th>Duration</th></tr></thead>
       <tbody>${jobs.map((j) => html`<tr class="click" data-act="open-job" data-id="${j.id}"><td><b>${jobTitle(j)}</b><div class="dim small">${jobParams(j)}</div></td><td>${statusBadge(j.status)}</td><td class="muted">${j.actor}</td><td class="muted">${when(j.created)}</td><td class="muted">${j.finished ? dur(j.finished - (j.started || j.created)) : '—'}</td></tr>`)}</tbody></table></div>`;
   }
+  // Applications: what is installed according to the package manager. Scanned
+  // with every update check, after installs, and on "Refresh now" (which also
+  // works on report-only systems: it only reads).
+  function appsTab(a) {
+    if (!(a.features || []).includes('apps')) {
+      return html`<div class="panel panel-pad"><span class="dim">— not reported by this agent</span></div>`;
+    }
+    let s = null;
+    try { s = a.state?.apps ? (typeof a.state.apps === 'string' ? JSON.parse(a.state.apps) : a.state.apps) : null; } catch { s = null; }
+    const busy = (st.data.jobs || []).some((j) => j.feature === 'apps' && (j.status === 'queued' || j.status === 'running'));
+    const btn = ifChange(html`<button class="btn sm" data-act="apps-scan" ${a.online && !busy ? '' : 'disabled'} title="${a.online ? 'Scan the installed applications now' : 'The system is offline'}">
+      ${busy ? html`<span class="spin"></span>` : icon('refresh')} Refresh now</button>`);
+    const head = html`<div class="row" style="margin-bottom:12px"><span class="muted small">${s?.scanned_at ? html`Scanned ${when(s.scanned_at)} · from the package manager` : 'Not scanned yet'}</span><span class="spacer"></span>${btn}</div>`;
+    if (!s?.apps?.length) {
+      return html`${head}<div class="panel empty"><div>No scan yet — it runs with the next update check${a.status === 'report_only' ? ' (not on report-only systems: use Refresh now)' : ''}.</div></div>`;
+    }
+    return html`${head}<div class="panel"><table class="tbl"><thead><tr><th>Application</th><th>Installed</th><th>Version</th></tr></thead>
+      <tbody>${s.apps.map((x) => x.installed
+        ? html`<tr><td><b>${x.name}</b></td><td><span class="badge ok xs">yes</span></td><td class="mono small" title="${x.full}${x.package ? ' (' + x.package + ')' : ''}">${x.version || '—'}</td></tr>`
+        : html`<tr class="dimrow"><td>${x.name}</td><td><span class="dim small">not detected</span></td><td></td></tr>`)}</tbody></table></div>`;
+  }
   function systemTab(a) {
     const f = a.facts, h = f.health;
     const kv = [
@@ -1169,10 +1228,10 @@ function AgentPage([id]) {
     const a = d.agent;
     setHTML($('#a-head'), header(a, d.groups));
     // Upgrade only: just the Agent tab (version and update), no data.
-    const tabs = a.below_min ? [['agent', 'Agent']] : [['updates', 'Updates'], ['agent', 'Agent'], ['jobs', 'Jobs'], ['system', 'System']];
+    const tabs = a.below_min ? [['agent', 'Agent']] : [['updates', 'Updates'], ['agent', 'Agent'], ['jobs', 'Jobs'], ['system', 'System'], ['apps', 'Applications']];
     if (!tabs.some(([k]) => k === st.tab)) st.tab = tabs[0][0];
     setHTML($('#a-tabs'), tabs.map(([k, l]) => html`<button class="${st.tab === k ? 'on' : ''}" data-act="tab" data-t="${k}">${l}${k === 'updates' && a.updates?.total ? html` <span class="badge upd">${a.updates.total}</span>` : ''}${k === 'agent' && !a.core_is_latest && a.core_latest ? html` <span class="badge upd">↑</span>` : ''}</button>`));
-    const body = { updates: updatesTab, agent: agentTab, jobs: jobsTab, system: systemTab }[st.tab](a);
+    const body = { updates: updatesTab, agent: agentTab, jobs: jobsTab, system: systemTab, apps: appsTab }[st.tab](a);
     setHTML($('#a-body'), body);
   }
   const a = () => st.data.agent;
@@ -1194,6 +1253,7 @@ function AgentPage([id]) {
         refresh();
       },
       check: () => runAction([id], 'updates', 'check', {}),
+      'apps-scan': async () => { await runAction([id], 'apps', 'scan', {}, { open: false }); refresh(); },
       install: async () => {
         const pk = [...st.sel];
         if (!pk.length) return;
@@ -1670,11 +1730,13 @@ function SettingsUsers() {
   function render() {
     const me = session.user?.id;
     setHTML($('#u-list'), html`<div class="panel"><table class="tbl"><thead><tr><th>User</th><th>Role</th><th>Created</th><th class="w1"></th></tr></thead>
-      <tbody>${st.users.map((u) => html`<tr><td><b>${u.name}</b>${u.id === me ? html` <span class="dim small">(you)</span>` : ''}</td>
-        <td>${u.id === me ? html`<span class="muted">${roleLabel(u.role)}</span>` : html`<select class="sm" data-change="role" data-id="${u.id}">${roleOpts(u.role)}</select>`}</td>
+      <tbody>${st.users.map((u) => html`<tr><td><b>${u.name}</b>${u.id === me ? html` <span class="dim small">(you)</span>` : ''}
+          ${u.permanent ? html` <span class="badge mute xs" title="The admin account cannot be removed or demoted">permanent</span>` : ''}
+          ${u.must_change ? html` <span class="badge upd xs" title="Signs in with a generated password that must be changed first">must change password</span>` : ''}</td>
+        <td>${u.id === me || u.permanent ? html`<span class="muted">${roleLabel(u.role)}</span>` : html`<select class="sm" data-change="role" data-id="${u.id}">${roleOpts(u.role)}</select>`}</td>
         <td class="muted">${fmtDate(u.created)}</td>
         <td class="w1"><div class="row" style="flex-wrap:nowrap">${u.id === me ? html`<a class="btn ghost sm" href="#/settings/login">Change password</a>`
-          : html`<button class="btn ghost sm" data-act="reset" data-id="${u.id}">Reset password</button><button class="btn danger sm" data-act="del" data-id="${u.id}" title="Remove">${icon('trash')}</button>`}</div></td></tr>`)}</tbody></table></div>`);
+          : html`<button class="btn ghost sm" data-act="reset" data-id="${u.id}">Reset password</button>${u.permanent ? '' : html`<button class="btn danger sm" data-act="del" data-id="${u.id}" title="Remove">${icon('trash')}</button>`}`}</div></td></tr>`)}</tbody></table></div>`);
   }
   const userBy = (id) => st.users.find((u) => u.id === id);
   return {

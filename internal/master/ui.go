@@ -453,11 +453,11 @@ func (s *Server) handleActions(w http.ResponseWriter, r *http.Request) {
 			errs = append(errs, upgradeOnlyMsg(a, s.minAgent()))
 			continue
 		}
-		if a.Status == StatusReportOnly {
+		if a.Status == StatusReportOnly && !readOnlyAction(req.Feature) {
 			errs = append(errs, a.Name+": report only — allow changes first")
 			continue
 		}
-		if a.Status != StatusActive {
+		if a.Status != StatusActive && a.Status != StatusReportOnly {
 			errs = append(errs, a.Name+": agent is "+a.Status)
 			continue
 		}

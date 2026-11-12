@@ -16,6 +16,7 @@ import (
 	"crypto/ed25519"
 
 	"coremon/internal/feature"
+	"coremon/internal/feature/apps"
 	"coremon/internal/feature/system"
 	"coremon/internal/feature/updates"
 	"coremon/internal/proto"
@@ -24,7 +25,7 @@ import (
 
 // features are the agent's built-in functions.
 func features() []feature.Feature {
-	return []feature.Feature{updates.New(), system.New()}
+	return []feature.Feature{updates.New(), system.New(), apps.New()}
 }
 
 // Options configure the agent.
@@ -382,7 +383,9 @@ func (a *Agent) execute(ctx context.Context, c proto.Command) {
 
 	switch c.Type {
 	case proto.CmdAction:
-		if a.reportOnly() {
+		// Report only refuses every action, except the application scan:
+		// it only reads.
+		if a.reportOnly() && c.Feature != "apps" {
 			err = errReportOnly
 			break
 		}

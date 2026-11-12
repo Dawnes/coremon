@@ -264,6 +264,8 @@ input[type=checkbox] { accent-color: var(--cyan); width: 16px; height: 16px; cur
 .tbl tr.picked { background: rgba(34, 211, 238, 0.06); }
 .tbl tr.click { cursor: pointer; }
 .tbl .w1 { width: 1%; white-space: nowrap; }
+.tbl tr.dimrow td { color: var(--dim); }
+
 /* About */
 .about { display: flex; justify-content: center; padding: 40px 0; }
 .about-card { text-align: center; padding: 40px 48px 32px; max-width: 460px; width: 100%; }
