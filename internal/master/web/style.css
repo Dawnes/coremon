@@ -95,6 +95,11 @@ select.sm { padding: 4px 8px; font-size: 12.5px; border-radius: 8px; }
 .page-head h1 { margin: 0; font-size: 26px; letter-spacing: -0.03em; font-weight: 700; }
 .page-head .sub { color: var(--muted); margin-top: 2px; }
 .page-head .spacer { flex: 1; }
+/* System page: the name/OS block shrinks (OS line cut with …) so the
+   buttons stay on one line; on narrow screens it may still wrap. */
+.syshead .headinfo { flex: 1 1 0; min-width: 240px; }
+.syshead .headinfo .sub { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.syshead > .btn { flex-shrink: 0; }
 
 /* ---------- panels ---------- */
 .panel {
@@ -302,8 +307,9 @@ pre.legal { white-space: pre-wrap; word-wrap: break-word; font-size: 12.5px; lin
 .tbl-wrap { overflow: auto; max-height: 62vh; border-radius: 0 0 var(--radius) var(--radius); }
 
 /* ---------- tabs ---------- */
-.tabs { display: flex; gap: 4px; border-bottom: 1px solid var(--line); margin-bottom: 18px; }
-.tabs button { background: none; border: 0; color: var(--muted); font: inherit; font-weight: 550; padding: 10px 14px; cursor: pointer; position: relative; }
+.tabs { display: flex; gap: 4px; border-bottom: 1px solid var(--line); margin-bottom: 18px; overflow-x: auto; scrollbar-width: none; }
+.tabs::-webkit-scrollbar { display: none; }
+.tabs button { background: none; border: 0; color: var(--muted); font: inherit; font-weight: 550; padding: 10px 14px; cursor: pointer; position: relative; white-space: nowrap; flex-shrink: 0; }
 .tabs button:hover { color: var(--text); }
 .tabs button.on { color: var(--text); }
 .tabs button.on::after { content: ""; position: absolute; left: 10px; right: 10px; bottom: -1px; height: 2px; border-radius: 2px; background: var(--grad); }
