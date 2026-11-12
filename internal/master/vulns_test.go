@@ -192,7 +192,7 @@ func TestVulnCheck(t *testing.T) {
 	if ol := view("a_old", true); ol.Status != "old_agent" {
 		t.Errorf("agent before 0.3.6: %+v", ol)
 	}
-	if u := s.vulnStatus(1)["unsupported"].([]string); len(u) != 1 || u[0] != "Ubuntu:26.04:LTS" {
+	if u := fmt.Sprint(s.vulnStatus(1)["unsupported"]); u != "[{Ubuntu:26.04:LTS ubuntu 26.04 false}]" {
 		t.Errorf("unsupported releases: %v", u)
 	}
 	// The system is upgraded to a release with data: the message goes at once,
@@ -200,7 +200,7 @@ func TestVulnCheck(t *testing.T) {
 	s.st.mu.Lock()
 	s.st.st.Agents["a_new"].Facts.OSID, s.st.st.Agents["a_new"].Facts.OSVersion = "debian", "12"
 	s.st.mu.Unlock()
-	if u := s.vulnStatus(1)["unsupported"].([]string); len(u) != 0 {
+	if u := fmt.Sprint(s.vulnStatus(1)["unsupported"]); u != "[]" {
 		t.Errorf("after the upgrade: %v", u)
 	}
 	if err := s.vulnTick(true); err != nil {
@@ -215,6 +215,36 @@ func TestVulnCheck(t *testing.T) {
 	s.st.mu.Lock()
 	s.st.st.Agents["a_new"].Facts.OSID, s.st.st.Agents["a_new"].Facts.OSVersion = "ubuntu", "26.04"
 	s.st.mu.Unlock()
+	if err := s.vulnTick(false); err != nil { // the release is looked at again
+		t.Fatal(err)
+	}
+
+	// The list on the Releases page: releases once each, then the lookups,
+	// what runs now first.
+	queue := func() (rel []string, items []queueItem) {
+		w := httptest.NewRecorder()
+		s.handleVulnQueue(w, httptest.NewRequest("GET", "/api/ui/vulns/queue", nil))
+		var out struct {
+			Releases []string    `json:"releases"`
+			Items    []queueItem `json:"items"`
+		}
+		json.Unmarshal(w.Body.Bytes(), &out)
+		return out.Releases, out.Items
+	}
+	s.vul.mu.Lock()
+	s.vul.nvdNow = "CVE-2025-1002"
+	s.vul.mu.Unlock()
+	rel, items := queue()
+	if strings.Join(rel, ",") != "debian 12,ubuntu 26.04" {
+		t.Errorf("releases: %v", rel)
+	}
+	if len(items) != 2 || items[0].What != "CVE-2025-1002" || items[0].Status != "now" || items[0].Where != "NVD" ||
+		items[1].What != "CVE-2025-1003" || items[1].Status != "ratelimit" || items[1].At == 0 {
+		t.Errorf("queue: %+v", items)
+	}
+	s.vul.mu.Lock()
+	s.vul.nvdNow = ""
+	s.vul.mu.Unlock()
 
 	// NVD fills in the missing score; the badge does not change (no fix).
 	if id, _ := s.nextNVD(time.Now()); id != "CVE-2025-1003" {
@@ -233,6 +263,16 @@ func TestVulnCheck(t *testing.T) {
 	s.lookupNVD("CVE-2025-1002", "") // NVD has no score: asked again in a week
 	if id, _ := s.nextNVD(time.Now()); id != "" {
 		t.Errorf("nothing left for NVD, got %q", id)
+	}
+	if _, items := queue(); len(items) != 1 || items[0].Status != "noscore" || items[0].At < time.Now().Add(6*24*time.Hour).Unix() {
+		t.Errorf("queue after NVD had no score: %+v", items)
+	}
+	// A new version waits for the next look.
+	s.st.mu.Lock()
+	s.st.st.Agents["a_deb"].State["apps"] = appsState(t, apps.App{Name: "OpenSSL", Installed: true, Package: "libssl3", Source: "openssl", SourceVersion: "3.0.16-1~deb12u1", Origin: "Debian"})
+	s.st.mu.Unlock()
+	if _, items := queue(); len(items) != 2 || items[0].What != "Debian:12 openssl 3.0.16-1~deb12u1" || items[0].Where != "OSV" || items[0].Status != "next" {
+		t.Errorf("queue with a new version: %+v", items)
 	}
 
 	// After the upgrade the new version is looked up by itself, and a full

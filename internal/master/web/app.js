@@ -1343,7 +1343,9 @@ function AgentPage([id]) {
     const vul = a.vulns;
     const head = html`<div class="row" style="margin-bottom:12px"><span class="muted small">${s?.scanned_at ? html`Scanned ${when(s.scanned_at)} · from the package manager` : 'Not scanned yet'}${vul?.checked_at ? html` · CVEs looked up ${when(vul.checked_at)}` : ''}</span><span class="spacer"></span>${btn}</div>
       ${vul?.status === 'old_agent' ? html`<div class="notice blue">The CVE check needs agent 0.3.6 or later on this system. <a href="#/settings/releases">Update the agent</a>.</div>` : ''}
-      ${vul?.status === 'unsupported' ? html`<div class="notice">OSV.dev has no vulnerability data for ${osLabel(a.facts)}, so the applications cannot be checked for CVEs.</div>` : ''}`;
+      ${vul?.status === 'unsupported' ? html`<div class="notice">${a.os_support?.status === 'expired'
+        ? `${osLabel(a.facts)} is no longer supported: no security data and no fixes are published, so it can't be checked. Upgrade to a supported release.`
+        : `OSV.dev has no vulnerability data for ${osLabel(a.facts)}, so the applications cannot be checked for CVEs.`}</div>` : ''}`;
     // Security: known vulnerabilities (CVEs) of the installed version.
     const security = (x) => {
       const v = vul?.apps?.[x.name];
@@ -1703,14 +1705,40 @@ function Releases() {
       <div class="panel"><table class="tbl"><thead><tr><th>System</th><th>Agent</th>${ifChange(html`<th>Change to</th>`)}</tr></thead>
       <tbody>${[...agents].sort(byName).map((a) => html`<tr><td>${agentDot(a)} <a href="#/system/${a.id}"><b>${a.name}</b></a></td><td>${verPill(a)}</td>
         ${ifChange(html`<td><form class="row" style="flex-wrap:nowrap" data-submit="set" data-id="${a.id}"><select name="v">${versionOptions({ core: repo.core.filter((v) => v.platforms.includes(`${a.facts.os}-${a.facts.arch}`) && !(minAgent && versionLess(v.version, minAgent))) }, a.core_version)}</select><button class="btn sm" ${a.status === 'active' ? '' : 'disabled'}>Apply</button></form></td>`)}</tr>`)}</tbody></table></div>` : '');
+    renderQueue();
+  }
+  // Detected OS releases (each once) and the vulnerability lookups that run
+  // now or wait: running first, then the soonest.
+  function renderQueue() {
+    const Q = st.queue;
+    if (!Q) return;
+    const today = (ts) => new Date(ts * 1000).toDateString() === new Date().toDateString();
+    const at = (ts) => (today(ts) ? fmtDate(ts).split(' ')[1] : fmtDate(ts));
+    const status = (i) => ({
+      now: html`<span class="row" style="gap:6px;flex-wrap:nowrap"><span class="spin"></span>looking up now</span>`,
+      ratelimit: 'waiting, NVD rate-limit reached',
+      noscore: `waiting, NVD had no score yet; next try ${fmtDate(i.at)}`,
+      nvd_error: `waiting, NVD answered with an error; retrying at ${at(i.at)}`,
+      next: `waiting, next lookup at ${at(i.at)}`,
+      failed: `waiting, the last check failed; retrying at ${at(i.at)}`,
+    })[i.status] || i.status;
+    setHTML($('#r-vulns'), html`
+      <div class="panel panel-pad"><h2>Detected OS releases</h2>
+        ${Q.releases.length ? html`<ul class="plainlist">${Q.releases.map((n) => html`<li>${n}</li>`)}</ul>` : html`<div class="muted">No systems yet.</div>`}</div>
+      <div class="panel" style="margin-top:16px"><div class="panel-pad" style="padding-bottom:8px"><h2 style="margin:0">Vulnerability lookups</h2>
+        <div class="dim small" style="margin-top:4px">CVE lookups at OSV.dev and severity lookups at NVD that run now or are waiting.</div></div>
+        ${Q.items.length ? html`<div class="tbl-wrap" data-keep-scroll="vq"><table class="tbl"><thead><tr><th>Lookup</th><th>Where</th><th>Status</th></tr></thead>
+          <tbody>${Q.items.map((i) => html`<tr><td class="mono small">${i.what}</td><td><span class="tag">${i.where}</span></td><td class="small ${i.status === 'now' ? '' : 'muted'}">${status(i)}</td></tr>`)}</tbody></table></div>
+          ${Q.more ? html`<div class="dim small panel-pad" style="padding-top:8px">…and ${Q.more} more.</div>` : ''}`
+        : html`<div class="muted panel-pad" style="padding-top:0">Nothing outstanding: all lookups are done.</div>`}</div>`);
   }
   return {
     interval: 5000,
     mount(el) {
       el.innerHTML = r(html`${settingsTabs('releases')}<div class="page-head"><div><h1>Releases</h1><div class="sub">Master and agent versions, each on their own release track</div></div></div>
-        <div class="stack"><div id="r-index"></div><div class="grid2"><div id="r-master"></div><div id="r-agents"></div></div><div id="r-rollout"></div></div>`);
+        <div class="stack"><div id="r-index"></div><div class="grid2"><div id="r-master"></div><div id="r-agents"></div></div><div id="r-rollout"></div><div id="r-vulns"></div></div>`);
     },
-    async refresh() { [st.rel, st.data] = await Promise.all([GET('releases'), GET('overview')]); render(); },
+    async refresh() { [st.rel, st.data, st.queue] = await Promise.all([GET('releases'), GET('overview'), GET('vulns/queue')]); render(); },
     acts: {
       check: async () => {
         st.checking = true; render();
@@ -1817,7 +1845,9 @@ function SettingsGeneral() {
         ${ifChange(html`<button type="button" class="btn ghost sm" data-act="vuln-check" ${st.vulnChecking ? 'disabled' : ''}>${st.vulnChecking ? html`<span class="spin"></span>` : icon('refresh')} Check now</button>`)}</div>
       ${v.error ? html`<div class="notice red small" style="margin:6px 0 0">Last check failed (${fmtDate(v.last_try)}): ${v.error}. Retrying in 6 hours; the previous results stay in use.</div>` : ''}
       ${v.nvd_error ? html`<div class="notice small" style="margin:6px 0 0">NVD: ${v.nvd_error}. Retrying in a few minutes.</div>` : ''}
-      ${v.unsupported?.length ? html`<div class="notice small" style="margin:6px 0 0">OSV.dev has no data for ${v.unsupported.join(', ')}: systems on ${v.unsupported.length === 1 ? 'that release' : 'those releases'} are not checked.</div>` : ''}
+      ${(v.unsupported || []).map((u) => html`<div class="notice small" style="margin:6px 0 0">${u.eol
+        ? `${u.name} is no longer supported: no security data and no fixes are published, so it can't be checked. Upgrade to a supported release.`
+        : `OSV.dev has no data for ${u.name}: systems on that release are not checked.`}</div>`)}
       <label class="field" style="margin-top:12px">NVD API key (optional)<div class="row">
         <input type="password" name="nvdkey" autocomplete="off" style="flex:1" placeholder="${v.nvd_key_set ? 'set — enter a new key to replace it' : 'none'}">
         ${ifChange(html`<button type="button" class="btn sm" data-act="nvd-save">Save key</button>${v.nvd_key_set ? html`<button type="button" class="btn ghost sm" data-act="nvd-remove">Remove</button>` : ''}`)}</div></label>

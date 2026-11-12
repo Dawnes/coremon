@@ -129,6 +129,12 @@ type vulnStore struct {
 	run  sync.Mutex // one check at a time
 	kick chan struct{}
 	nvd  chan struct{}
+	// What is happening now, for the list on the Releases page (guarded by mu).
+	running   map[string]bool // OSV lookups of the check that runs now
+	nextTick  time.Time       // next look for new versions
+	nvdNow    string          // CVE being looked up at NVD
+	nvdNextAt time.Time       // next NVD lookup allowed
+	nvdErr    bool            // the last NVD lookup failed
 }
 
 func newVulnData() vulnData {
@@ -287,6 +293,9 @@ func (s *Server) vulnLoop(stop <-chan struct{}) {
 	defer t.Stop()
 	for {
 		s.vulnTick(false)
+		s.vul.mu.Lock()
+		s.vul.nextTick = time.Now().Add(vulnQuickEvery)
+		s.vul.mu.Unlock()
 		select {
 		case <-stop:
 			return
@@ -352,8 +361,15 @@ func (s *Server) runVulnCheck(keys map[string]bool, full bool) (err error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 	defer cancel()
 	started := time.Now()
+	s.vul.mu.Lock()
+	s.vul.running = map[string]bool{}
+	for k := range keys {
+		s.vul.running[k] = true
+	}
+	s.vul.mu.Unlock()
 	defer func() {
 		s.vul.mu.Lock()
+		s.vul.running = nil
 		s.vul.d.LastTry = started.Unix()
 		if err != nil {
 			s.vul.d.Error = err.Error()
@@ -831,16 +847,20 @@ func (s *Server) nvdLoop(stop <-chan struct{}) {
 		if key != "" {
 			wait = nvdGapKey
 		}
-		if err := s.lookupNVD(id, key); err != nil {
-			s.vul.mu.Lock()
-			s.vul.d.NVDErr = err.Error()
-			s.vul.mu.Unlock()
+		s.vul.mu.Lock()
+		s.vul.nvdNow = id
+		s.vul.mu.Unlock()
+		err := s.lookupNVD(id, key)
+		if err != nil {
 			wait = 2 * time.Minute
-		} else {
-			s.vul.mu.Lock()
-			s.vul.d.NVDErr = ""
-			s.vul.mu.Unlock()
 		}
+		s.vul.mu.Lock()
+		s.vul.nvdNow, s.vul.nvdErr, s.vul.nvdNextAt = "", err != nil, time.Now().Add(wait)
+		s.vul.d.NVDErr = ""
+		if err != nil {
+			s.vul.d.NVDErr = err.Error()
+		}
+		s.vul.mu.Unlock()
 		select {
 		case <-stop:
 			return
@@ -1152,11 +1172,18 @@ func (s *Server) vulnStatus(days int) map[string]any {
 	s.st.mu.Lock()
 	keySet := s.st.st.NVDKey != ""
 	systems := 0
-	inUse := map[string]bool{} // releases the current systems run
+	type release struct {
+		Eco  string `json:"eco"`
+		Name string `json:"name"` // as the system reports it
+		EOL  bool   `json:"eol"`  // no longer supported
+	}
+	inUse := map[string]release{} // releases the current systems run
+	now := time.Now()
 	for _, a := range s.st.st.Agents {
 		if e := osvEcosystem(a.Facts); a.Status != StatusPending && e != "" && appsOf(a) != nil {
 			systems++
-			inUse[e] = true
+			o := s.supportFor(a.Facts.OSID, a.Facts.OSVersion, now)
+			inUse[e] = release{Eco: e, Name: releaseName(a.Facts), EOL: o != nil && o.Status == "expired"}
 		}
 	}
 	s.st.mu.Unlock()
@@ -1164,13 +1191,13 @@ func (s *Server) vulnStatus(days int) map[string]any {
 	s.vul.mu.Lock()
 	defer s.vul.mu.Unlock()
 	d := &s.vul.d
-	var unsupported []string
+	unsupported := []release{}
 	for e, ok := range d.Ecos {
-		if !ok && inUse[e] {
-			unsupported = append(unsupported, e)
+		if r, used := inUse[e]; !ok && used {
+			unsupported = append(unsupported, r)
 		}
 	}
-	sort.Strings(unsupported)
+	sort.Slice(unsupported, func(i, j int) bool { return unsupported[i].Eco < unsupported[j].Eco })
 	next := int64(0)
 	if d.LastRun > 0 {
 		next = d.LastRun + int64(days)*86400
@@ -1183,6 +1210,119 @@ func (s *Server) vulnStatus(days int) map[string]any {
 		"cves": len(d.CVEs), "systems": systems, "kev_at": d.KEVAt, "kev_count": len(d.KEV), "epss_at": d.EPSSAt,
 		"nvd_pending": pending, "nvd_key_set": keySet, "nvd_error": d.NVDErr, "unsupported": unsupported,
 	}
+}
+
+// releaseName is how a system names its OS release.
+func releaseName(f proto.Facts) string {
+	if f.OSName != "" {
+		return f.OSName
+	}
+	return strings.TrimSpace(f.OSID + " " + f.OSVersion)
+}
+
+// queueItem is one outstanding lookup on the Releases page.
+type queueItem struct {
+	What   string `json:"what"`         // CVE number, or "release package version"
+	Where  string `json:"where"`        // NVD | OSV
+	Status string `json:"status"`       // now | ratelimit | noscore | nvd_error | next | failed
+	At     int64  `json:"at,omitempty"` // when it is (expected to be) looked up
+}
+
+const maxQueueItems = 500
+
+// handleVulnQueue: the OS releases the systems run (each once) and the
+// lookups that run now or wait, running first, then the soonest.
+func (s *Server) handleVulnQueue(w http.ResponseWriter, r *http.Request) {
+	s.st.mu.Lock()
+	want := s.wantedKeysLocked()
+	key := s.st.st.NVDKey
+	names := map[string]bool{}
+	for _, a := range s.st.st.Agents {
+		if a.Status != StatusPending {
+			if n := releaseName(a.Facts); n != "" {
+				names[n] = true
+			}
+		}
+	}
+	s.st.mu.Unlock()
+	releases := make([]string, 0, len(names))
+	for n := range names {
+		releases = append(releases, n)
+	}
+	sort.Slice(releases, func(i, j int) bool { return strings.ToLower(releases[i]) < strings.ToLower(releases[j]) })
+
+	now := time.Now()
+	s.vul.mu.Lock()
+	d := &s.vul.d
+	var running, waiting []queueItem
+	failed := d.Error != "" && now.Sub(time.Unix(d.LastTry, 0)) < vulnRetry
+	next := s.vul.nextTick
+	if next.Before(now) {
+		next = now.Add(vulnQuickEvery)
+	}
+	for k := range want {
+		p := strings.SplitN(k, "|", 3)
+		label := strings.Join(p, " ")
+		known, probed := d.Ecos[p[0]]
+		switch {
+		case s.vul.running[k]:
+			running = append(running, queueItem{What: label, Where: "OSV", Status: "now"})
+		case d.Queries[k] != nil:
+		case probed && !known:
+			// OSV has no data for this release: nothing to wait for.
+		case failed:
+			waiting = append(waiting, queueItem{What: label, Where: "OSV", Status: "failed", At: d.LastTry + int64(vulnRetry/time.Second)})
+		default:
+			waiting = append(waiting, queueItem{What: label, Where: "OSV", Status: "next", At: next.Unix()})
+		}
+	}
+	gap := nvdGapNoKey
+	if key != "" {
+		gap = nvdGapKey
+	}
+	var due []string
+	for c, m := range d.CVEs {
+		switch {
+		case m.Scored:
+		case c == s.vul.nvdNow:
+			running = append(running, queueItem{What: c, Where: "NVD", Status: "now"})
+		case m.NVDAt != 0 && now.Sub(time.Unix(m.NVDAt, 0)) < nvdNoneRetry:
+			waiting = append(waiting, queueItem{What: c, Where: "NVD", Status: "noscore", At: m.NVDAt + int64(nvdNoneRetry/time.Second)})
+		default:
+			due = append(due, c)
+		}
+	}
+	sort.Sort(sort.Reverse(sort.StringSlice(due))) // the order nvdLoop takes them in: newest first
+	base := s.vul.nvdNextAt
+	if base.Before(now) {
+		base = now
+	}
+	status := "ratelimit"
+	if s.vul.nvdErr {
+		status = "nvd_error"
+	}
+	for i, c := range due {
+		waiting = append(waiting, queueItem{What: c, Where: "NVD", Status: status, At: base.Add(time.Duration(i) * gap).Unix()})
+	}
+	s.vul.mu.Unlock()
+
+	sort.Slice(running, func(i, j int) bool { return running[i].What < running[j].What })
+	sort.SliceStable(waiting, func(i, j int) bool {
+		if waiting[i].At != waiting[j].At {
+			return waiting[i].At < waiting[j].At
+		}
+		return waiting[i].What < waiting[j].What
+	})
+	items := append(running, waiting...)
+	more := 0
+	if len(items) > maxQueueItems {
+		more = len(items) - maxQueueItems
+		items = items[:maxQueueItems]
+	}
+	if items == nil {
+		items = []queueItem{}
+	}
+	writeJSON(w, map[string]any{"releases": releases, "items": items, "more": more, "server_time": now.Unix()})
 }
 
 func (s *Server) handleVulnCheck(w http.ResponseWriter, r *http.Request) {
