@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"regexp"
 	"sync"
 	"time"
 
@@ -103,6 +104,16 @@ func checkApps(raw json.RawMessage) (json.RawMessage, error) {
 		if p.Package != "" && !updates.PackageNameRe.MatchString(p.Package) {
 			p.Package = ""
 		}
+		// What the vulnerability check sends to OSV: a package name, a
+		// version and the package source's name, all checked.
+		if p.Source != "" && !updates.PackageNameRe.MatchString(p.Source) {
+			p.Source = ""
+		}
+		p.SourceVersion = cleanText(p.SourceVersion, 128)
+		if p.SourceVersion != "" && !debVersionRe.MatchString(p.SourceVersion) {
+			p.SourceVersion = ""
+		}
+		p.Origin = cleanText(p.Origin, 64)
 		if p.Running != "running" && p.Running != "stopped" {
 			p.Running = ""
 		}
@@ -120,12 +131,16 @@ func checkApps(raw json.RawMessage) (json.RawMessage, error) {
 		p.Ports = ports
 		if !p.Installed {
 			p.Version, p.Full, p.Package, p.Running, p.Boot, p.Ports = "", "", "", "", "", nil
+			p.Source, p.SourceVersion, p.Origin = "", "", ""
 		}
 	}
 	return json.Marshal(s)
 }
 
 const maxAppPorts = 32
+
+// debVersionRe: what a Debian package version may contain.
+var debVersionRe = regexp.MustCompile(`^[0-9][A-Za-z0-9.+~:-]{0,126}$`)
 
 // rateLimiter allows each agent about rate requests per second with a
 // burst; a normal agent sends a few per minute.

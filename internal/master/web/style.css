@@ -184,6 +184,9 @@ input[type=checkbox] { accent-color: var(--cyan); width: 16px; height: 16px; cur
 .btn.ghost:hover:not(:disabled) { color: var(--text); background: var(--accent); }
 .btn.sm { height: 32px; padding: 0 12px; gap: 6px; font-size: 13px; }
 .btn.sm.iconbtn, .iconbtn { padding: 0; width: 32px; }
+/* A clickable group of badges (e.g. the CVE counts of an application). */
+.linkbtn { display: inline-flex; align-items: center; gap: 4px; padding: 2px; margin: -2px; background: none; border: 0; border-radius: var(--r-sm); font: inherit; color: inherit; cursor: pointer; }
+.linkbtn:hover .badge { filter: brightness(1.25); }
 .btn:not(.sm).iconbtn { width: 36px; }
 
 /* ---------- badges ---------- */

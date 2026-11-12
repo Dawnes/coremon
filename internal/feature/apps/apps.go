@@ -26,9 +26,16 @@ type App struct {
 	Version   string `json:"version,omitempty"` // readable: "8.2.26"
 	Full      string `json:"full,omitempty"`    // package version: "8.2.26-1~deb12u1"
 	Package   string `json:"package,omitempty"` // the package it was found in
-	Running   string `json:"running,omitempty"` // running | stopped | "" (no service of its own)
-	Boot      string `json:"boot,omitempty"`    // enabled | disabled | "" (starts at boot or not)
-	Ports     []Port `json:"ports,omitempty"`   // what its service listens on
+	// The source package and its version (how Debian and Ubuntu publish
+	// security advisories), and the package source the installed version
+	// comes from: the "o=" of its apt source ("Debian", "Ubuntu", "Docker",
+	// ...); "" when no configured source has it (installed by hand). 0.3.6+.
+	Source        string `json:"source,omitempty"`
+	SourceVersion string `json:"source_version,omitempty"`
+	Origin        string `json:"origin,omitempty"`
+	Running       string `json:"running,omitempty"` // running | stopped | "" (no service of its own)
+	Boot          string `json:"boot,omitempty"`    // enabled | disabled | "" (starts at boot or not)
+	Ports         []Port `json:"ports,omitempty"`   // what its service listens on
 }
 
 // Port is one listening port of an application's service.
@@ -173,17 +180,31 @@ func Readable(v string) string {
 	return v
 }
 
-// installed reads dpkg status contents: installed package -> version.
-func installed(r io.Reader) map[string]string {
-	out := map[string]string{}
+// pkgInfo is an installed package from the dpkg status.
+type pkgInfo struct {
+	ver, src, srcVer string
+}
+
+// installed reads dpkg status contents: installed package -> version and
+// source package. "Source: name" or "Source: name (version)"; without it
+// the source is the package itself, and without a version the package's.
+func installed(r io.Reader) map[string]pkgInfo {
+	out := map[string]pkgInfo{}
 	sc := bufio.NewScanner(r)
 	sc.Buffer(make([]byte, 64<<10), 1<<20)
-	var pkg, ver, status string
+	var pkg, ver, status, src string
 	flush := func() {
 		if pkg != "" && strings.HasSuffix(status, " installed") {
-			out[pkg] = ver
+			p := pkgInfo{ver: ver, src: pkg, srcVer: ver}
+			if f := strings.Fields(src); len(f) > 0 {
+				p.src = f[0]
+				if len(f) > 1 {
+					p.srcVer = strings.Trim(f[1], "()")
+				}
+			}
+			out[pkg] = p
 		}
-		pkg, ver, status = "", "", ""
+		pkg, ver, status, src = "", "", "", ""
 	}
 	for sc.Scan() {
 		line := sc.Text()
@@ -196,6 +217,8 @@ func installed(r io.Reader) map[string]string {
 			ver = strings.TrimSpace(line[9:])
 		case strings.HasPrefix(line, "Status: "):
 			status = strings.TrimSpace(line[8:])
+		case strings.HasPrefix(line, "Source: "):
+			src = strings.TrimSpace(line[8:])
 		}
 	}
 	flush()
@@ -204,9 +227,14 @@ func installed(r io.Reader) map[string]string {
 
 // scan builds the rows from dpkg status contents: a-z, one row per version,
 // and a "not detected" row for applications that are absent. sys (may be
-// nil) adds the service state and ports.
-func scan(r io.Reader, sys *System) []App {
-	pkgs := installed(r)
+// nil) adds the service state and ports; originOf (may be nil) tells for
+// the found packages which package source they come from.
+func scan(r io.Reader, sys *System, originOf func([]string) map[string]string) []App {
+	info := installed(r)
+	pkgs := make(map[string]string, len(info))
+	for p, i := range info {
+		pkgs[p] = i.ver
+	}
 	names := make([]string, 0, len(pkgs))
 	for p := range pkgs {
 		names = append(names, p)
@@ -235,7 +263,8 @@ func scan(r io.Reader, sys *System) []App {
 			if key != "" {
 				name += " " + key
 			}
-			a := App{Name: name, Installed: true, Version: Readable(pkgs[p]), Full: pkgs[p], Package: p}
+			a := App{Name: name, Installed: true, Version: Readable(pkgs[p]), Full: pkgs[p], Package: p,
+				Source: info[p].src, SourceVersion: info[p].srcVer}
 			d.service(&a, key, sys)
 			rows[key] = a
 		}
@@ -250,7 +279,131 @@ func scan(r io.Reader, sys *System) []App {
 	sort.Slice(out, func(i, j int) bool {
 		return naturalLess(strings.ToLower(out[i].Name), strings.ToLower(out[j].Name))
 	})
+	if originOf != nil {
+		var names []string
+		for _, a := range out {
+			if a.Installed {
+				names = append(names, a.Package)
+			}
+		}
+		if len(names) > 0 {
+			orig := originOf(names)
+			for i := range out {
+				out[i].Origin = orig[out[i].Package]
+			}
+		}
+	}
 	return out
+}
+
+// parseSources reads the "Package files:" part of `apt-cache policy`: each
+// source ("<url> <suite/component> <arch>") and the origin ("o=") of its
+// release, e.g. "http://deb.debian.org/debian bookworm/main amd64" -> "Debian".
+func parseSources(out string) map[string]string {
+	m := map[string]string{}
+	last := ""
+	for _, line := range strings.Split(out, "\n") {
+		f := strings.Fields(line)
+		switch {
+		case len(f) >= 3 && isNumber(f[0]):
+			last = sourceKey(f[1:])
+		case len(f) >= 2 && f[0] == "release" && last != "":
+			for _, kv := range strings.Split(strings.Join(f[1:], " "), ",") {
+				if strings.HasPrefix(kv, "o=") {
+					m[last] = strings.TrimSpace(kv[2:])
+				}
+			}
+			last = ""
+		}
+	}
+	return m
+}
+
+// sourceKey: "<url> <suite/component> <arch> [Packages]" without the word
+// Packages, so both parts of the policy output give the same key.
+func sourceKey(f []string) string {
+	if n := len(f); n > 0 && f[n-1] == "Packages" {
+		f = f[:n-1]
+	}
+	return strings.Join(f, " ")
+}
+
+func isNumber(s string) bool {
+	if s == "" || s[0] == '-' && len(s) == 1 {
+		return false
+	}
+	for i, c := range s {
+		if (c < '0' || c > '9') && !(i == 0 && c == '-') {
+			return false
+		}
+	}
+	return true
+}
+
+// parseOrigins reads `apt-cache policy <pkg>...`: for each package the
+// origin of the installed version's sources. When the installed version
+// is no longer offered (an update is waiting), the candidate's sources
+// count; with neither (installed by hand) the origin stays "".
+func parseOrigins(out string, sources map[string]string) map[string]string {
+	res := map[string]string{}
+	type ver struct {
+		installed bool
+		origins   []string
+	}
+	var pkg, cand string
+	var vers map[string]*ver
+	var cur *ver
+	flush := func() {
+		if pkg == "" {
+			return
+		}
+		pick := func(v *ver) string {
+			for _, o := range v.origins {
+				if o != "" {
+					return o
+				}
+			}
+			return ""
+		}
+		o := ""
+		for _, v := range vers {
+			if v.installed {
+				o = pick(v)
+			}
+		}
+		if o == "" && vers[cand] != nil {
+			o = pick(vers[cand])
+		}
+		res[pkg] = o
+		pkg, cand, vers, cur = "", "", nil, nil
+	}
+	for _, line := range strings.Split(out, "\n") {
+		t := strings.TrimSpace(line)
+		switch {
+		case t == "":
+		case !strings.HasPrefix(line, " ") && strings.HasSuffix(t, ":"):
+			flush()
+			pkg, vers = strings.TrimSuffix(t, ":"), map[string]*ver{}
+		case pkg == "":
+		case strings.HasPrefix(t, "Candidate:"):
+			cand = strings.TrimSpace(strings.TrimPrefix(t, "Candidate:"))
+		case strings.HasPrefix(t, "Installed:"), strings.HasPrefix(t, "Version table:"):
+		default:
+			f := strings.Fields(t)
+			star := f[0] == "***"
+			if star {
+				f = f[1:]
+			}
+			if len(f) == 2 && isNumber(f[1]) { // "<version> <priority>"
+				cur = &ver{installed: star}
+				vers[f[0]] = cur
+			} else if len(f) >= 2 && isNumber(f[0]) && cur != nil { // "<priority> <source>"
+				cur.origins = append(cur.origins, sources[sourceKey(f[1:])])
+			}
+		}
+	}
+	flush()
+	return res
 }
 
 // naturalLess compares so that "php 7.4" < "php 8.2" < "php 10.0".
@@ -289,14 +442,20 @@ func Scan() *State {
 	f, err := os.Open(statusFile)
 	if err != nil {
 		if os.Getenv("COREMON_FAKE") == "1" { // development builds
-			st.Apps = scan(strings.NewReader(fakeStatus), fakeSystem())
+			st.Apps = scan(strings.NewReader(fakeStatus), fakeSystem(), func(p []string) map[string]string {
+				m := map[string]string{}
+				for _, n := range p {
+					m[n] = "Debian"
+				}
+				return m
+			})
 			return st
 		}
-		st.Apps = scan(strings.NewReader(""), nil)
+		st.Apps = scan(strings.NewReader(""), nil, nil)
 		return st
 	}
 	defer f.Close()
-	st.Apps = scan(f, collectSystem())
+	st.Apps = scan(f, collectSystem(), packageOrigins)
 	return st
 }
 
@@ -364,14 +523,17 @@ Version: 3.11.2-6+deb12u4
 
 Package: openssh-server
 Status: install ok installed
+Source: openssh
 Version: 1:9.2p1-2+deb12u3
 
 Package: libssl3
 Status: install ok installed
+Source: openssl
 Version: 3.0.15-1~deb12u1
 
 Package: mariadb-server
 Status: install ok installed
+Source: mariadb
 Version: 1:10.11.6-0+deb12u1
 
 Package: nginx

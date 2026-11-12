@@ -23,6 +23,7 @@ type Settings struct {
 	GitHubSeeded       bool   `json:"github_seeded"`
 	OSInfoDays         int    `json:"os_info_days"`      // how often the OS support dates are looked up: 3, 14, 30 or 90
 	MinAgentVersion    string `json:"min_agent_version"` // lowest allowed agent version; "" = the oldest stored one
+	VulnDays           int    `json:"vuln_days"`         // how often the vulnerability data is checked: 1, 7, 30 or 90
 }
 
 // osInfoChoices are the allowed lookup intervals in days.
@@ -65,6 +66,9 @@ func (s *Settings) normalize() {
 	}
 	if !validOSInfoDays(s.OSInfoDays) {
 		s.OSInfoDays = defaultOSInfoDays
+	}
+	if !validVulnDays(s.VulnDays) {
+		s.VulnDays = defaultVulnDay
 	}
 }
 
@@ -225,6 +229,9 @@ type State struct {
 	Agents       map[string]*Agent       `json:"agents"`
 	Tokens       map[string]*EnrollToken `json:"tokens"`
 	Jobs         []*Job                  `json:"jobs"` // oldest first
+	// NVDKey is the optional NVD API key (faster severity lookups). Kept out
+	// of Settings, which every signed-in user can read.
+	NVDKey string `json:"nvd_key,omitempty"`
 }
 
 const maxJobs = 2000

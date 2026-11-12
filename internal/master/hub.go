@@ -441,6 +441,9 @@ func (s *Server) resultCore(agentID string, res proto.Result, ip string) {
 				a.StateAt[feat] = now
 			}
 		}
+		if _, ok := a.StateAt["apps"]; ok && a.StateAt["apps"] == now {
+			s.kickVulns() // new versions are looked up soon (not under this lock)
+		}
 	case j.Type == proto.CmdPing:
 		s.pingAnswered(j, res)
 	case j.Type == proto.CmdCoreUpdate && !res.OK:

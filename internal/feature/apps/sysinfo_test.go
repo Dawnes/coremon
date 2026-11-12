@@ -70,7 +70,7 @@ func TestServiceColumns(t *testing.T) {
 		},
 	}
 	rows := map[string]App{}
-	for _, a := range scan(strings.NewReader(status), sys) {
+	for _, a := range scan(strings.NewReader(status), sys, nil) {
 		rows[a.Name] = a
 	}
 	n := rows["Nginx"]

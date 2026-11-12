@@ -44,6 +44,8 @@ type Config struct {
 	IndexURL string
 	// OSInfoURL overrides the base URL of the distro-info files (testing).
 	OSInfoURL string
+	// Vulnerability data sources (testing).
+	OSVURL, NVDURL, KEVURL, EPSSURL string
 }
 
 // Server is the master.
@@ -73,6 +75,7 @@ type Server struct {
 	idx           *indexSync
 	nonces        nonceCache // sealed requests already seen (replay)
 	osi           osInfo     // OS support dates (distro-info-data)
+	vul           vulnStore  // known vulnerabilities of the tracked applications
 
 	handler http.Handler
 
@@ -223,6 +226,8 @@ func New(cfg Config) (*Server, error) {
 	s.idx = newIndexSync()
 	s.osi.kick = make(chan struct{}, 1)
 	s.loadOSInfo()
+	s.vul.kick, s.vul.nvd = make(chan struct{}, 1), make(chan struct{}, 1)
+	s.loadVulns()
 	if !st.st.Settings.GitHubSeeded && cfg.GitHubRepo != "" && ghRepoRe.MatchString(cfg.GitHubRepo) {
 		st.st.Settings.GitHubRepo = cfg.GitHubRepo
 		st.st.Settings.GitHubSeeded = true
@@ -350,6 +355,8 @@ func (s *Server) routes() http.Handler {
 	change("POST /api/ui/releases/check", s.handleReleasesCheck)
 	change("POST /api/ui/master/update", s.handleMasterUpdate)
 	change("POST /api/ui/osinfo/check", s.handleOSInfoCheck)
+	change("POST /api/ui/vulns/check", s.handleVulnCheck)
+	change("POST /api/ui/vulns/nvdkey", s.handleNVDKey)
 	change("GET /api/ui/users", s.handleUsers)
 	change("POST /api/ui/users", s.handleUserCreate)
 	change("POST /api/ui/users/{id}", s.handleUserUpdate)
@@ -410,6 +417,8 @@ func (s *Server) Run(ctx context.Context) error {
 	go s.schedulerLoop(stop)
 	go s.indexLoop(stop)
 	go s.osInfoLoop(stop)
+	go s.vulnLoop(stop)
+	go s.nvdLoop(stop)
 	handler := s.routes()
 	s.handler = handler
 	s.applyUIPort(handler)

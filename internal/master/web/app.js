@@ -613,8 +613,41 @@ function updBadges(a) {
   const out = [];
   if (a.status === 'report_only') out.push(html`<span class="badge info" title="Only reports: no checks, installs or reboots">${icon('pause')} report only</span>`);
   if (u?.security) out.push(html`<span class="badge sec">${u.security} security</span>`);
+  const cve = cveBadge(a);
+  if (cve) out.push(cve);
   if (u?.reboot_required) out.push(html`<span class="badge reboot">reboot</span>`);
   return out;
+}
+
+// ---------- known vulnerabilities (CVEs) ----------
+const SEV = ['unknown', 'low', 'medium', 'high', 'critical'];
+const CVE_RED = 'fixed by an update and rated High or Critical, or actively exploited';
+function cveBadge(a) {
+  const n = a.vulns?.badge;
+  return n ? html`<span class="badge sec" title="${n} known vulnerabilit${n === 1 ? 'y' : 'ies'} ${CVE_RED}">${n} CVE</span>` : '';
+}
+function sevBadge(c) {
+  const cls = ['mute', 'mute', 'upd', 'sec', 'sec'][c.level] || 'mute';
+  const from = { osv: 'CVSS score from the OSV record', nvd: 'CVSS score from NVD', distro: "the distribution's own rating (no CVSS score yet)" }[c.src] || 'no rating yet';
+  return html`<span class="badge ${cls} xs" title="${from}">${SEV[c.level] || 'unknown'}${c.scored ? ' ' + c.score.toFixed(1) : ''}</span>`;
+}
+// The list of an application's CVEs, from the Applications tab.
+function openCves(appName, v) {
+  const pct = (x) => (x >= 0.1 ? Math.round(x * 100) + '%' : x >= 0.001 ? (x * 100).toFixed(1) + '%' : '<0.1%');
+  const sum = [v.fixable ? `${v.fixable} fixed by an update` : '', v.open ? `${v.open} without a fix yet` : '', v.minor ? `${v.minor} minor` : '']
+    .filter(Boolean).join(' · ');
+  openModal(html`<h3>${appName}: known vulnerabilities</h3>
+    <div class="muted small">${sum}${v.kev ? html` · <b class="c-red">${v.kev} actively exploited</b>` : ''}</div>
+    <div class="tbl-wrap" style="margin-top:14px;max-height:60vh"><table class="tbl">
+      <thead><tr><th>CVE</th><th>Severity</th><th>Fixed in</th><th title="EPSS: chance of exploitation in the next 30 days">Exploit chance</th></tr></thead>
+      <tbody>${v.cves.map((c) => html`<tr class="${c.minor ? 'dimrow' : ''}">
+        <td class="nowrap"><a href="${c.link}" target="_blank" rel="noopener noreferrer">${c.id}</a>${c.kev ? html` <span class="badge sec xs" title="On CISA's list of actively exploited vulnerabilities">actively exploited</span>` : ''}${c.minor ? html` <span class="badge mute xs" title="The distribution rates it ${c.word}: not worth fixing">minor</span>` : ''}</td>
+        <td>${sevBadge(c)}</td>
+        <td class="mono small">${c.fixed ? html`${c.fixed}${c.by_update ? html` <span class="badge ok xs" title="The waiting update installs this version or newer">in waiting update</span>` : ''}` : html`<span class="dim">no fix yet</span>`}</td>
+        <td class="small">${c.epss ? html`<span title="Higher than ${Math.round(c.pct * 100)}% of all CVEs">${pct(c.epss)}</span>` : html`<span class="dim">—</span>`}</td></tr>`)}</tbody></table></div>
+    <div class="dim small" style="margin-top:12px">Severity: the CVSS score from OSV or NVD, otherwise the distribution's own rating. Dimmed: the distribution considers it minor.
+      Data: OSV.dev (Debian's and Ubuntu's advisories), NVD, CISA (actively exploited), FIRST (EPSS). The CVE numbers link to OSV.dev.</div>
+    <div class="actions"><button class="btn" data-act="cancel">Close</button></div>`, { wide: true, acts: { cancel: () => closeModal() } });
 }
 function groupOptions(groups, sel) {
   return html`<option value="" ${!sel ? 'selected' : ''}>Ungrouped</option>${groups.map((g) => html`<option value="${g.id}" ${sel === g.id ? 'selected' : ''}>${g.name}</option>`)}`;
@@ -1025,6 +1058,7 @@ function SystemList() {
     ['ip', 'IP', (a) => (a.facts.ips || [])[0] || '', 'opt'],
     ['os', 'OS', (a) => osShort(a.facts), 'opt'],
     ['updates', 'Updates', (a) => a.updates?.total ?? -1, 'num'],
+    ['cve', 'CVE', (a) => a.vulns?.badge ?? -1, 'num'],
     ['reboot', 'Reboot', (a) => (a.updates?.reboot_required ? 1 : 0), ''],
     ['agent', 'Agent', (a) => a.core_version || '', 'opt'],
     ['health', 'Health', healthN, 'opt'],
@@ -1052,6 +1086,7 @@ function SystemList() {
       <td class="opt small nowrap">${(f.ips || [])[0] || ''}</td>
       <td class="opt nowrap" title="${a.below_min ? '' : osLabel(f)}">${a.below_min ? html`<span class="dim">—</span>` : clipText(osShort(f), 14)}${o?.status === 'expired' ? html` <span class="badge sec xs" title="${osSupportText(o, f.os_id)}">EOL</span>` : o?.status === 'soon' ? html` <span class="badge upd xs" title="${osSupportText(o, f.os_id)}">EOL soon</span>` : ''}</td>
       <td class="num"><b class="${u?.security ? 'c-red' : u?.total ? 'c-amber' : 'dim'}">${u ? u.total : '—'}</b></td>
+      <td class="num">${!a.vulns ? html`<span class="dim">—</span>` : a.vulns.badge ? html`<b class="c-red" title="${CVE_RED}">${a.vulns.badge}</b>` : html`<span class="dim">0</span>`}</td>
       <td>${!u ? html`<span class="dim">—</span>` : u.reboot_required ? html`<span class="badge reboot xs">required</span>` : html`<span class="badge ok xs">no</span>`}</td>
       <td class="opt mono small"><span class="${!a.core_version ? 'dim' : a.core_is_latest ? 'c-green' : 'c-amber'}" title="${a.core_is_latest ? 'latest agent' : a.core_latest ? 'latest is ' + a.core_latest : ''}">${a.core_version || '—'}</span></td>
       <td class="opt nowrap">${healthCell(a)}</td>
@@ -1261,9 +1296,14 @@ function AgentPage([id]) {
               <td><b>${p.name}</b> <span class="dim small">${p.arch}</span></td>
               <td class="mono">${p.current ? html`<span class="ver">${p.current}</span><span class="arrow">→</span>` : ''}<span class="ver new">${p.available}</span></td>
               <td class="muted small">${p.origin}</td>
-              <td class="w1">${p.security ? html`<span class="badge sec">security</span>` : ''}${p.new ? html`<span class="badge new" title="Pulled in as a dependency; installed together with its parent">new dependency</span>` : ''}</td>
+              <td class="w1"><div class="row" style="flex-wrap:nowrap;gap:6px">${p.security ? html`<span class="badge sec">security</span>` : ''}${p.new ? html`<span class="badge new" title="Pulled in as a dependency; installed together with its parent">new dependency</span>` : ''}${fixes(p.name)}</div></td>
             </tr>`)}</tbody></table></div>
       </div>` : noUpdates(a)}`;
+  }
+  // Known vulnerabilities a waiting update fixes (tracked applications only).
+  function fixes(pkg) {
+    const l = st.data?.agent?.vulns?.update_fixes?.[pkg];
+    return l?.length ? html`<span class="badge sec" title="${l.join(', ')}">fixes ${l.length} CVE</span>` : '';
   }
   // An empty list is only good news while the OS still gets updates.
   function noUpdates(a) {
@@ -1300,7 +1340,28 @@ function AgentPage([id]) {
     const busy = (st.data.jobs || []).some((j) => j.feature === 'apps' && (j.status === 'queued' || j.status === 'running'));
     const btn = ifChange(html`<button class="btn sm" data-act="apps-scan" ${a.online && !busy ? '' : 'disabled'} title="${a.online ? 'Scan the installed applications now' : 'The system is offline'}">
       ${busy ? html`<span class="spin"></span>` : icon('refresh')} Refresh now</button>`);
-    const head = html`<div class="row" style="margin-bottom:12px"><span class="muted small">${s?.scanned_at ? html`Scanned ${when(s.scanned_at)} · from the package manager` : 'Not scanned yet'}</span><span class="spacer"></span>${btn}</div>`;
+    const vul = a.vulns;
+    const head = html`<div class="row" style="margin-bottom:12px"><span class="muted small">${s?.scanned_at ? html`Scanned ${when(s.scanned_at)} · from the package manager` : 'Not scanned yet'}${vul?.checked_at ? html` · CVEs looked up ${when(vul.checked_at)}` : ''}</span><span class="spacer"></span>${btn}</div>
+      ${vul?.status === 'old_agent' ? html`<div class="notice blue">The CVE check needs agent 0.3.6 or later on this system. <a href="#/settings/releases">Update the agent</a>.</div>` : ''}
+      ${vul?.status === 'unsupported' ? html`<div class="notice">OSV.dev has no vulnerability data for ${osLabel(a.facts)}, so the applications cannot be checked for CVEs.</div>` : ''}`;
+    // Security: known vulnerabilities (CVEs) of the installed version.
+    const security = (x) => {
+      const v = vul?.apps?.[x.name];
+      if (!v || vul.status === 'unsupported') return html`<span class="dim">—</span>`;
+      const dist = a.facts.os_id === 'ubuntu' ? 'Ubuntu' : 'Debian';
+      switch (v.status) {
+        case 'old_agent': return html`<span class="dim" title="Needs agent 0.3.6 or later">—</span>`;
+        case 'manual': return html`<span class="dim" title="Not installed from a package source, so not checked">not checked</span>`;
+        case 'not_distro': return html`<span class="dim" title="From ${v.origin}, not from ${dist}: ${dist}'s security data does not cover it, so not checked">not checked</span>`;
+        case 'pending': return html`<span class="dim" title="Being looked up">…</span>`;
+        case 'ok': return html`<span class="badge ok xs" title="No known vulnerabilities for this version${v.minor ? ` (${v.minor} minor)` : ''}">ok</span>`;
+      }
+      const tip = [v.fixable ? `${v.fixable} fixed by an update` : '', v.open ? `${v.open} without a fix yet` : '', v.minor ? `${v.minor} minor` : '', v.kev ? `${v.kev} actively exploited` : ''].filter(Boolean).join(', ');
+      return html`<button type="button" class="linkbtn" data-act="cves" data-app="${x.name}" title="${tip} — click for the list">
+        ${v.fixable ? html`<span class="badge ${v.red ? 'sec' : 'upd'} xs">${v.fixable} fixable</span>` : ''}
+        ${v.open ? html`<span class="badge ${v.kev && !v.fixable ? 'sec' : 'mute'} xs">${v.open} without fix</span>` : ''}
+        ${!v.fixable && !v.open ? html`<span class="badge sec xs">${v.kev} exploited</span>` : ''}</button>`;
+    };
     if (!s?.apps?.length) {
       return html`${head}<div class="panel empty"><div>No scan yet — it runs with the next update check${a.status === 'report_only' ? ' (not on report-only systems: use Refresh now)' : ''}.</div></div>`;
     }
@@ -1312,11 +1373,11 @@ function AgentPage([id]) {
     const ports = (x) => (x.ports?.length
       ? html`<span title="${x.ports.map((p) => `${p.port}/${p.proto} on ${p.addr}`).join('\n')}">${x.ports.map((p, i) => html`${i ? ', ' : ''}${p.port}/${p.proto}${p.local ? html` <span class="dim">(local)</span>` : ''}`)}</span>`
       : html`<span class="dim">—</span>`);
-    return html`${head}<div class="panel scrollx"><table class="tbl"><thead><tr><th>Application</th><th>Installed</th><th>Version</th><th>Running</th><th>Listening on</th></tr></thead>
+    return html`${head}<div class="panel scrollx"><table class="tbl"><thead><tr><th>Application</th><th>Installed</th><th>Version</th><th title="Known vulnerabilities (CVEs) of the installed version">Security</th><th>Running</th><th>Listening on</th></tr></thead>
       <tbody>${s.apps.map((x) => x.installed
-        ? html`<tr><td><b>${x.name}</b></td><td><span class="badge ok xs">yes</span></td><td class="mono small" title="${x.full}${x.package ? ' (' + x.package + ')' : ''}">${x.version || '—'}</td>
-            <td>${running(x)}</td><td class="mono small">${ports(x)}</td></tr>`
-        : html`<tr class="dimrow"><td>${x.name}</td><td><span class="dim small">not detected</span></td><td></td><td></td><td></td></tr>`)}</tbody></table></div>`;
+        ? html`<tr><td><b>${x.name}</b></td><td><span class="badge ok xs">yes</span></td><td class="mono small" title="${x.full}${x.package ? ' (' + x.package + ')' : ''}${x.origin ? ' from ' + x.origin : ''}">${x.version || '—'}</td>
+            <td class="nowrap">${security(x)}</td><td>${running(x)}</td><td class="mono small">${ports(x)}</td></tr>`
+        : html`<tr class="dimrow"><td>${x.name}</td><td><span class="dim small">not detected</span></td><td></td><td></td><td></td><td></td></tr>`)}</tbody></table></div>`;
   }
   function systemTab(a) {
     const f = a.facts, h = f.health;
@@ -1367,6 +1428,7 @@ function AgentPage([id]) {
       },
       check: () => runAction([id], 'updates', 'check', {}),
       'apps-scan': async () => { await runAction([id], 'apps', 'scan', {}, { open: false }); refresh(); },
+      cves: (t) => { const v = st.data?.agent?.vulns?.apps?.[t.dataset.app]; if (v?.cves?.length) openCves(t.dataset.app, v); },
       install: async () => {
         const pk = [...st.sel];
         if (!pk.length) return;
@@ -1743,6 +1805,24 @@ function SettingsGeneral() {
       ${ifChange(html`<button type="button" class="btn ghost sm" data-act="osinfo-check" ${st.osChecking ? 'disabled' : ''}>${icon('refresh')} Check now</button>`)}</div>
       ${o.error ? html`<div class="notice red small" style="margin:6px 0 0">Last lookup failed (${fmtDate(o.last_try)}): ${o.error}. Retrying every 6 hours; the previous dates stay in use.</div>` : ''}`);
   }
+  // Vulnerability check: what is sent where, last check, NVD lookups, key.
+  function vulnBox(v) {
+    if (!v) return;
+    const mins = Math.ceil((v.nvd_pending * (v.nvd_key_set ? 0.8 : 6.5)) / 60);
+    setHTML($('#vuln-box'), html`<div class="dim small">The installed versions of the tracked applications are looked up at OSV.dev, which uses Debian's and Ubuntu's own security data.
+      Sent: the OS release (e.g. Debian:12) and source package names with their versions — no host names or addresses.
+      Severity comes from the OSV record, otherwise from NVD (only CVE numbers are sent there); CISA lists the actively exploited ones and FIRST (EPSS) the chance of exploitation.</div>
+      <div class="dim small" style="margin-top:6px">${v.last_run ? html`Last check ${fmtDate(v.last_run)}` : 'Not checked yet'}${v.next_at ? html` · next ${fmtDate(v.next_at)}` : ''} · ${v.cves} CVE${v.cves === 1 ? '' : 's'} known for ${v.systems} system${v.systems === 1 ? '' : 's'}${v.kev_count ? html` · CISA list: ${v.kev_count} exploited CVEs` : ''}.
+        ${v.nvd_pending ? html`${v.nvd_pending} severity lookup${v.nvd_pending === 1 ? '' : 's'} at NVD waiting (about ${mins} min).` : ''}
+        ${ifChange(html`<button type="button" class="btn ghost sm" data-act="vuln-check" ${st.vulnChecking ? 'disabled' : ''}>${st.vulnChecking ? html`<span class="spin"></span>` : icon('refresh')} Check now</button>`)}</div>
+      ${v.error ? html`<div class="notice red small" style="margin:6px 0 0">Last check failed (${fmtDate(v.last_try)}): ${v.error}. Retrying in 6 hours; the previous results stay in use.</div>` : ''}
+      ${v.nvd_error ? html`<div class="notice small" style="margin:6px 0 0">NVD: ${v.nvd_error}. Retrying in a few minutes.</div>` : ''}
+      ${v.unsupported?.length ? html`<div class="notice small" style="margin:6px 0 0">OSV.dev has no data for ${v.unsupported.join(', ')}: systems on ${v.unsupported.length === 1 ? 'that release' : 'those releases'} are not checked.</div>` : ''}
+      <label class="field" style="margin-top:12px">NVD API key (optional)<div class="row">
+        <input type="password" name="nvdkey" autocomplete="off" style="flex:1" placeholder="${v.nvd_key_set ? 'set — enter a new key to replace it' : 'none'}">
+        ${ifChange(html`<button type="button" class="btn sm" data-act="nvd-save">Save key</button>${v.nvd_key_set ? html`<button type="button" class="btn ghost sm" data-act="nvd-remove">Remove</button>` : ''}`)}</div></label>
+      <div class="dim small">${v.nvd_key_set ? html`<span class="badge ok xs">key set</span> ` : ''}Without a key NVD allows about 10 lookups a minute; a free key from nvd.nist.gov makes them about 8 times faster.</div>`);
+  }
   // Master URL: locked; administrators can Change it or go back to automatic.
   // Takes effect on Save, like the other fields.
   function urlBox() {
@@ -1783,6 +1863,9 @@ function SettingsGeneral() {
             <label class="field">Look up OS support dates<select name="osinfo">
               ${(d.os_info_choices || [3, 14, 30, 90]).map((n) => html`<option value="${n}" ${n === s.os_info_days ? 'selected' : ''}>every ${n} days${n === 14 ? ' (default)' : ''}</option>`)}</select></label>
             <div id="osinfo-box"></div>
+            <label class="field">Check applications for known vulnerabilities (CVEs)<select name="vulns">
+              ${(d.vuln_choices || [1, 7, 30, 90]).map((n) => html`<option value="${n}" ${n === s.vuln_days ? 'selected' : ''}>every ${n === 1 ? 'day' : n + ' days'}${n === 1 ? ' (default)' : ''}</option>`)}</select></label>
+            <div id="vuln-box"></div>
             <label class="field">Lowest allowed agent version<select name="minagent">
               ${[...(d.agent_versions || [])].reverse().map((v, i) => html`<option value="${v}" ${v === (s.min_agent_version || d.min_agent) ? 'selected' : ''}>${v}${i === 0 ? ' (oldest stored)' : ''}</option>`)}</select></label>
             <div class="dim small">Older agents can still connect, but only to be updated: the master stores and shows none of their data and runs nothing else on them.
@@ -1797,6 +1880,7 @@ function SettingsGeneral() {
       st.editing = false;
       urlBox();
       osInfoBox(d.os_info);
+      vulnBox(d.vulns);
       const f = $('form[data-submit=save]', el);
       const upd = () => {
         const days = +f.ret.value;
@@ -1819,12 +1903,35 @@ function SettingsGeneral() {
           toast(res.os_info.error ? 'OS support lookup failed' : 'OS support dates updated', res.os_info.error ? 'err' : 'ok');
         } finally { st.osChecking = false; osInfoBox(st.d.os_info); }
       },
+      'vuln-check': async () => {
+        st.vulnChecking = true; vulnBox(st.d.vulns);
+        try {
+          const res = await POST('vulns/check');
+          st.d.vulns = res.vulns;
+          toast(res.vulns.error ? 'Vulnerability check failed' : 'Vulnerability data updated', res.vulns.error ? 'err' : 'ok');
+        } finally { st.vulnChecking = false; vulnBox(st.d.vulns); }
+      },
+      'nvd-save': async () => {
+        const k = $('#vuln-box input[name=nvdkey]').value.trim();
+        if (!k) return toast('Enter the key first', 'err');
+        st.d.vulns = (await POST('vulns/nvdkey', { key: k })).vulns;
+        vulnBox(st.d.vulns); toast('NVD API key saved', 'ok');
+      },
+      'nvd-remove': async () => {
+        st.d.vulns = (await POST('vulns/nvdkey', { key: '' })).vulns;
+        vulnBox(st.d.vulns); toast('NVD API key removed', 'ok');
+      },
       'url-change': () => { st.editing = true; urlBox(); },
       'url-auto': () => { st.url = ''; st.editing = false; urlBox(); toast('Automatic address — press Save to apply'); },
       save: async (f) => {
         const url = st.editing ? f.url.value.trim() : st.url;
         const res = await POST('settings', { check_interval_hours: +f.interval.value, heartbeat_sec: +f.hb.value, retention_days: +f.ret.value,
-          ui_port: +f.port.value, master_url: url, github_repo: f.gh.value, os_info_days: +f.osinfo.value, min_agent_version: f.minagent?.value || '' });
+          ui_port: +f.port.value, master_url: url, github_repo: f.gh.value, os_info_days: +f.osinfo.value, min_agent_version: f.minagent?.value || '',
+          vuln_days: +f.vulns.value });
+        if (f.nvdkey?.value.trim()) { // Enter in the key field: save it too
+          st.d.vulns = (await POST('vulns/nvdkey', { key: f.nvdkey.value.trim() })).vulns;
+          vulnBox(st.d.vulns);
+        }
         st.url = res.settings.master_url || '';
         st.editing = false;
         urlBox();

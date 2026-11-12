@@ -22,7 +22,7 @@ func TestReadable(t *testing.T) {
 }
 
 func TestScan(t *testing.T) {
-	rows := scan(strings.NewReader(fakeStatus), fakeSystem())
+	rows := scan(strings.NewReader(fakeStatus), fakeSystem(), nil)
 	got := map[string]App{}
 	var order []string
 	for _, a := range rows {
@@ -60,7 +60,7 @@ func TestScan(t *testing.T) {
 	for _, a := range rows {
 		names[strings.SplitN(a.Name, " ", 2)[0]] = true
 	}
-	if len(scan(strings.NewReader(""), nil)) != 21 {
-		t.Fatalf("empty system: %d rows, want 21", len(scan(strings.NewReader(""), nil)))
+	if len(scan(strings.NewReader(""), nil, nil)) != 21 {
+		t.Fatalf("empty system: %d rows, want 21", len(scan(strings.NewReader(""), nil, nil)))
 	}
 }

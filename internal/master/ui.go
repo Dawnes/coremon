@@ -54,7 +54,8 @@ type agentView struct {
 	Facts        proto.Facts                `json:"facts"`
 	Features     []string                   `json:"features"`
 	Updates      *updatesSummary            `json:"updates,omitempty"`
-	Busy         int                        `json:"busy"` // open jobs
+	Vulns        *vulnView                  `json:"vulns,omitempty"` // known vulnerabilities of the tracked applications
+	Busy         int                        `json:"busy"`            // open jobs
 	Removing     bool                       `json:"removing"`
 	State        map[string]json.RawMessage `json:"state,omitempty"`
 	StateAt      map[string]int64           `json:"state_at,omitempty"`
@@ -96,12 +97,13 @@ func (s *Server) view(a *Agent, full bool) agentView {
 	if full {
 		v.State, v.StateAt = a.State, a.StateAt
 	}
+	v.Vulns = s.vulnsFor(a, full)
 	if s.belowMin(a) {
 		// Upgrade only: none of the stored data is shown (it stays, hidden,
 		// until the agent is updated).
 		v.BelowMin, v.MinAgent = true, s.minAgent()
 		v.Facts = proto.Facts{OS: a.Facts.OS, Arch: a.Facts.Arch}
-		v.Features, v.Updates, v.OSSupport, v.State, v.StateAt = []string{}, nil, nil, nil, nil
+		v.Features, v.Updates, v.OSSupport, v.State, v.StateAt, v.Vulns = []string{}, nil, nil, nil, nil, nil
 		v.AgentReport, v.IsMaster = false, false
 	}
 	return v
@@ -584,10 +586,12 @@ func (s *Server) handleTokenDelete(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleSettingsGet(w http.ResponseWriter, r *http.Request) {
 	url := s.indexURL()
+	vs := s.vulnStatus(s.vulnDays()) // takes s.st.mu itself
 	s.st.mu.Lock()
 	defer s.st.mu.Unlock()
-	writeJSON(w, map[string]any{"settings": s.st.st.Settings, "pin": s.currentPin(), "suggested_url": s.derivedURL(r), "index_url": url,
+	writeJSON(w, map[string]any{"settings": s.st.st.Settings, "pin": s.currentPin(), "suggested_url": s.derivedURL(r), "index_url": url, "vulns": vs,
 		"os_info": s.osInfoStatus(s.st.st.Settings.OSInfoDays), "os_info_choices": osInfoChoices,
+		"vuln_choices":   vulnChoices,
 		"agent_versions": s.repo.coreVersions(), "min_agent": s.minAgent(),
 		"next_purge": s.nextPurgeAt().Unix(), "agent_port": s.agentPort(), "ui_port_error": s.uiPortError(),
 		"limits": map[string]int{"heartbeat_min": minHeartbeat, "heartbeat_max": maxHeartbeat, "retention_min": minRetention, "retention_max": maxRetention}})
@@ -650,6 +654,14 @@ func (s *Server) handleSettingsSave(w http.ResponseWriter, r *http.Request) {
 	if req.OSInfoDays == 0 {
 		req.OSInfoDays = old.OSInfoDays // a page from before this setting
 	}
+	if req.VulnDays == 0 {
+		req.VulnDays = old.VulnDays // a page from before this setting
+	}
+	if !validVulnDays(req.VulnDays) {
+		s.st.mu.Unlock()
+		bad("vulnerability check must be every 1, 7, 30 or 90 days")
+		return
+	}
 	if req.MinAgentVersion == "" {
 		req.MinAgentVersion = old.MinAgentVersion // a page from before this setting
 	} else if !contains(s.repo.coreVersions(), req.MinAgentVersion) {
@@ -665,10 +677,13 @@ func (s *Server) handleSettingsSave(w http.ResponseWriter, r *http.Request) {
 	s.st.st.Settings = req
 	s.st.markDirty()
 	s.st.mu.Unlock()
-	s.audit.write(actor(r), clientIP(r), "settings.saved", "", fmt.Sprintf("check=%dh heartbeat=%ds retention=%dd port=%d url=%q repo=%q os-info=%dd min-agent=%s",
-		req.CheckIntervalHours, req.HeartbeatSec, req.RetentionDays, req.UIPort, req.MasterURL, req.GitHubRepo, req.OSInfoDays, req.MinAgentVersion))
+	s.audit.write(actor(r), clientIP(r), "settings.saved", "", fmt.Sprintf("check=%dh heartbeat=%ds retention=%dd port=%d url=%q repo=%q os-info=%dd min-agent=%s vulns=%dd",
+		req.CheckIntervalHours, req.HeartbeatSec, req.RetentionDays, req.UIPort, req.MasterURL, req.GitHubRepo, req.OSInfoDays, req.MinAgentVersion, req.VulnDays))
 	if old.OSInfoDays != req.OSInfoDays {
 		s.kickOSInfo()
+	}
+	if old.VulnDays != req.VulnDays {
+		s.kickVulns()
 	}
 	if old.GitHubRepo != req.GitHubRepo {
 		s.kickIndex()

@@ -22,6 +22,17 @@ func run(name string, args ...string) string {
 	return string(out)
 }
 
+// packageOrigins asks apt which package source each package comes from
+// (read-only: `apt-cache policy`). Without apt, nothing is known.
+func packageOrigins(pkgs []string) map[string]string {
+	if _, err := exec.LookPath("apt-cache"); err != nil {
+		return nil
+	}
+	sources := parseSources(run("apt-cache", "policy"))
+	args := append([]string{"policy", "--"}, pkgs...)
+	return parseOrigins(run("apt-cache", args...), sources)
+}
+
 // collectSystem gathers the services of the known applications: whether
 // they exist, run and start at boot, and what they listen on. Read-only.
 func collectSystem() *System {
