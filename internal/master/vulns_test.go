@@ -192,6 +192,29 @@ func TestVulnCheck(t *testing.T) {
 	if ol := view("a_old", true); ol.Status != "old_agent" {
 		t.Errorf("agent before 0.3.6: %+v", ol)
 	}
+	if u := s.vulnStatus(1)["unsupported"].([]string); len(u) != 1 || u[0] != "Ubuntu:26.04:LTS" {
+		t.Errorf("unsupported releases: %v", u)
+	}
+	// The system is upgraded to a release with data: the message goes at once,
+	// and the old release is forgotten at the next full check.
+	s.st.mu.Lock()
+	s.st.st.Agents["a_new"].Facts.OSID, s.st.st.Agents["a_new"].Facts.OSVersion = "debian", "12"
+	s.st.mu.Unlock()
+	if u := s.vulnStatus(1)["unsupported"].([]string); len(u) != 0 {
+		t.Errorf("after the upgrade: %v", u)
+	}
+	if err := s.vulnTick(true); err != nil {
+		t.Fatal(err)
+	}
+	s.vul.mu.Lock()
+	_, stale := s.vul.d.Ecos["Ubuntu:26.04:LTS"]
+	s.vul.mu.Unlock()
+	if stale {
+		t.Error("old release still remembered after a full check")
+	}
+	s.st.mu.Lock()
+	s.st.st.Agents["a_new"].Facts.OSID, s.st.st.Agents["a_new"].Facts.OSVersion = "ubuntu", "26.04"
+	s.st.mu.Unlock()
 
 	// NVD fills in the missing score; the badge does not change (no fix).
 	if id, _ := s.nextNVD(time.Now()); id != "CVE-2025-1003" {

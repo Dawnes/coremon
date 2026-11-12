@@ -456,6 +456,11 @@ func (s *Server) runVulnCheck(keys map[string]bool, full bool) (err error) {
 			used[id] = true
 		}
 	}
+	for e := range s.vul.d.Ecos { // releases no system runs any more (e.g. after an upgrade)
+		if !ecos[e] {
+			delete(s.vul.d.Ecos, e)
+		}
+	}
 	cves := map[string]bool{}
 	for id, r := range s.vul.d.Records {
 		if !used[id] {
@@ -1147,9 +1152,11 @@ func (s *Server) vulnStatus(days int) map[string]any {
 	s.st.mu.Lock()
 	keySet := s.st.st.NVDKey != ""
 	systems := 0
+	inUse := map[string]bool{} // releases the current systems run
 	for _, a := range s.st.st.Agents {
-		if a.Status != StatusPending && osvEcosystem(a.Facts) != "" && appsOf(a) != nil {
+		if e := osvEcosystem(a.Facts); a.Status != StatusPending && e != "" && appsOf(a) != nil {
 			systems++
+			inUse[e] = true
 		}
 	}
 	s.st.mu.Unlock()
@@ -1159,7 +1166,7 @@ func (s *Server) vulnStatus(days int) map[string]any {
 	d := &s.vul.d
 	var unsupported []string
 	for e, ok := range d.Ecos {
-		if !ok {
+		if !ok && inUse[e] {
 			unsupported = append(unsupported, e)
 		}
 	}
