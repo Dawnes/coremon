@@ -203,6 +203,7 @@ actions `Mutating`.
 | Agent logs | `journalctl -u coremon-agent -f` |
 | Upgrade master by hand | re-run the `install-master.sh` one-liner |
 | Reset a password | `coremon-reset` as root (or `coremon-reset -user <name>` for another existing user): the master restarts briefly, the new generated password is shown on screen only and must be changed at the next sign-in |
+| `coremon-reset` missing? | Masters updated from 0.3.11 or older get it at their next master update; or once, as root: `ln -sfn /usr/local/bin/coremon-master /usr/local/sbin/coremon-reset` (or re-run the installer) |
 | Look inside the stored state | `coremon-master show-state` as root (read-only; the file itself is not human-readable) |
 | Back up the master | `/var/lib/coremon-master` and `/etc/coremon-master` (the state is in `state.dat`: compressed and scrambled, not human-readable) |
 | Reverse proxy | add `-http 127.0.0.1:8080` to the master's `ExecStart` (loopback-only plain HTTP for a local proxy); agents keep using the agent port |
