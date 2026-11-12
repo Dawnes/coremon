@@ -1263,7 +1263,17 @@ function AgentPage([id]) {
               <td class="muted small">${p.origin}</td>
               <td class="w1">${p.security ? html`<span class="badge sec">security</span>` : ''}${p.new ? html`<span class="badge new" title="Pulled in as a dependency; installed together with its parent">new dependency</span>` : ''}</td>
             </tr>`)}</tbody></table></div>
-      </div>` : html`<div class="panel empty"><div class="big">✨</div>Everything is up to date.</div>`}`;
+      </div>` : noUpdates(a)}`;
+  }
+  // An empty list is only good news while the OS still gets updates.
+  function noUpdates(a) {
+    const o = a.os_support, os = osLabel(a.facts || {});
+    if (o?.status === 'expired') {
+      return html`<div class="notice red"><b>No updates, but ${os} is no longer supported</b> (support ended ${ymd(o.end)}).<br>
+        It no longer receives security updates, so an empty list doesn't mean the system is safe. Upgrade to a supported release.</div>`;
+    }
+    return html`<div class="panel empty"><div class="big">✨</div>Everything is up to date.${o?.status === 'soon'
+      ? html`<div class="c-amber small" style="margin-top:10px">Support for ${os} ends on ${ymd(o.end)}.</div>` : ''}</div>`;
   }
   function agentTab(a) {
     return html`
