@@ -14,9 +14,6 @@ import (
 // pingWait is how long a ping waits for the agent's answer.
 const pingWait = 15 * time.Second
 
-// pingAgentVersion is the first agent that answers a ping.
-const pingAgentVersion = "0.3.1"
-
 // pingResult is what the UI shows after a ping.
 type pingResult struct {
 	Answered   bool      `json:"answered"`
@@ -51,11 +48,6 @@ func (s *Server) handlePing(w http.ResponseWriter, r *http.Request) {
 	if s.belowMin(a) {
 		s.st.mu.Unlock()
 		http.Error(w, upgradeOnlyMsg(a, s.minAgent()), http.StatusConflict)
-		return
-	}
-	if a.CoreVersion == "" || versionLess(a.CoreVersion, pingAgentVersion) {
-		s.st.mu.Unlock()
-		http.Error(w, "this agent cannot be pinged: it needs agent 0.3.1 or later", http.StatusConflict)
 		return
 	}
 	if s.openJob(a.ID, proto.CmdPing, "") {

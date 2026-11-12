@@ -322,7 +322,6 @@ function showLogin() {
 
 const NAV = [
   ['dashboard', 'dash', 'Dashboard'],
-  ['releases', 'box', 'Releases'],
   ['history', 'jobs', 'History'],
   ['settings', 'cog', 'Settings'],
   ['about', 'info', 'About'],
@@ -333,7 +332,7 @@ const SUBNAV = {
   dashboard: () => [['overview', 'Overview'], ['list', 'List']],
   about: () => [['about', 'About'], ['license', 'License']],
   history: () => [['jobs', 'Jobs'], ['audit', 'Audit log']],
-  settings: () => [['general', 'General'], ['systems', 'Systems'], ...(canChange() ? [['users', 'Users']] : []), ['login', 'Login'], ['identity', 'Identity']],
+  settings: () => [['general', 'General'], ['systems', 'Systems'], ['releases', 'Releases'], ...(canChange() ? [['users', 'Users']] : []), ['login', 'Login'], ['identity', 'Identity']],
 };
 const OLD_ROUTES = { systems: ['settings', 'systems'], jobs: ['history', 'jobs'], audit: ['history', 'audit'] };
 function currentRoute() {
@@ -384,12 +383,12 @@ function route() {
   const parts = location.hash.replace(/^#\/?/, '').split('/');
   const [section, sub] = currentRoute();
   const subViews = {
-    settings: { general: SettingsGeneral, systems: Systems, users: SettingsUsers, login: SettingsLogin, identity: SettingsIdentity },
+    settings: { general: SettingsGeneral, systems: Systems, releases: Releases, users: SettingsUsers, login: SettingsLogin, identity: SettingsIdentity },
     history: { jobs: Jobs, audit: Audit },
     dashboard: { overview: Dashboard, list: SystemList },
     about: { about: AboutPage, license: LicensePage },
   };
-  const views = { system: AgentPage, releases: Releases };
+  const views = { system: AgentPage };
   // A page of its own (e.g. a system) wins over the submenu it belongs to.
   const V = views[parts[0]] || (subViews[section] && subViews[section][sub]) || Dashboard;
   renderShell();
@@ -454,8 +453,9 @@ function agentDot(a) {
   return html`<span class="dot ${a.online ? 'on' : 'off'}" title="${a.online ? 'online' : 'offline since ' + fmtDate(a.last_seen)}"></span>`;
 }
 function osLabel(f) { return f.os_name || [f.os_id, f.os_version].filter(Boolean).join(' ') || 'unknown OS'; }
-const hasUpdates = (a) => (a.features || []).includes('updates');
-const canReboot = (a) => (a.features || []).includes('system');
+// Every agent has the update function; only upgrade-only systems (below the
+// lowest allowed agent version) are left out.
+const hasUpdates = (a) => !a.below_min;
 // First IPv4 address; the others on hover.
 // ---------- health and OS support ----------
 const ymd = (s) => (s ? s.split('-').reverse().join('-') : ''); // YYYY-MM-DD -> DD-MM-YYYY
@@ -617,8 +617,6 @@ function Dashboard() {
     } else if (a.below_min) {
       mid = html`<div class="mid"><div class="big some">↑</div><div class="biglbl">agent update<br>required</div>
         <div class="badges">${ifChange(html`<button class="btn primary sm" data-act="agent-update" data-id="${a.id}" ${a.online ? '' : 'disabled'} title="${a.online ? `Update to agent ${a.core_latest}` : 'The system is offline'}">${icon('up')} Update agent</button>`)}</div></div>`;
-    } else if (!hasUpdates(a) && a.online) {
-      mid = html`<div class="mid"><div class="big dim">—</div><div class="biglbl">no update function</div><div class="badges"></div></div>`;
     } else if (!u) {
       mid = html`<div class="mid"><div class="big dim">—</div><div class="biglbl">${a.status === 'report_only' ? html`no checks<br>(report only)` : html`waiting for<br>first check`}</div><div class="badges">${updBadges(a)}</div></div>`;
     } else {
@@ -1039,7 +1037,6 @@ function LicensePage() {
 }
 
 // ---------- Ping ----------
-const canPing = (a) => !!a.core_version && !versionLess(a.core_version, '0.3.1');
 const shortKey = (p) => (p ? p.slice(0, 5) + '…' : ''); // the master already sends the short form
 function clockText(ms) {
   const s = Math.abs(ms) / 1000;
@@ -1096,29 +1093,23 @@ function AgentPage([id]) {
           <div class="sub" title="${a.below_min ? '' : `${osLabel(f)} · ${f.kernel || ''} · ${f.arch} · ${f.virt}`}">${a.below_min ? html`agent ${a.core_version} · upgrade only · ${a.online ? 'online' : raw('offline, last seen ' + r(when(a.last_seen)))}` : html`${osLabel(f)} · ${f.kernel || ''} · ${f.arch} · ${f.virt} · <span title="${lastReboot(a)}">${a.online ? 'online, up ' + dur(f.uptime_sec) : raw('offline, last seen ' + r(when(a.last_seen)))}</span>`}</div></div>
         <span class="spacer"></span>
         ${a.busy ? html`<span class="row muted"><span class="spin"></span>${a.busy} job(s) active</span>` : ''}
-        ${!a.removing && !a.below_min ? html`<button class="btn sm" data-act="ping" ${canPing(a) ? '' : 'disabled'}
-          title="${canPing(a) ? 'Check the connection and keys with the agent now; nothing is done on the system' : `Agent ${a.core_version || '?'} cannot answer a ping; update the agent first`}">${icon('pulse')} Ping</button>` : ''}
+        ${!a.removing && !a.below_min ? html`<button class="btn sm" data-act="ping" title="Check the connection and keys with the agent now; nothing is done on the system">${icon('pulse')} Ping</button>` : ''}
         ${a.status === 'active' && !a.below_min && canChange() ? html`<button class="btn sm" data-act="report-only">${icon('pause')} Report only</button>` : ''}
         ${a.status === 'report_only' && !a.below_min && canChange() ? html`<button class="btn sm" data-act="allow-changes">${icon('play')} Allow changes</button>` : ''}
-        ${a.status === 'active' && !a.below_min && canChange() ? html`<button class="btn warn sm" data-act="reboot" ${a.online && canReboot(a) ? '' : 'disabled'}
-          title="${canReboot(a) ? (a.online ? 'Reboot this system' : 'The system is offline') : `Agent ${a.core_version} cannot reboot; update the agent first`}">${icon('refresh')} Reboot</button>` : ''}
+        ${a.status === 'active' && !a.below_min && canChange() ? html`<button class="btn warn sm" data-act="reboot" ${a.online ? '' : 'disabled'}
+          title="${a.online ? 'Reboot this system' : 'The system is offline'}">${icon('refresh')} Reboot</button>` : ''}
       </div>
       ${a.below_min ? html`<div class="notice row"><span><b>Agent update required.</b> Agent ${a.core_version} is older than the lowest allowed version ${a.min_agent}:
         the master stores and shows none of this system's data and runs nothing on it until the agent is updated.</span><span class="spacer"></span>
         ${ifChange(html`<button class="btn primary sm" data-act="agent-update" ${a.online ? '' : 'disabled'}>${icon('up')} Update agent to ${a.core_latest}</button>`)}</div>` : ''}
       ${a.status === 'report_only' && !a.below_min ? html`<div class="notice blue"><b>Report only:</b> this system only reports.
-        <span class="small">${!a.mode_support ? html`Enforced by the master only — agent ${a.core_version} cannot enforce it itself; update the agent.`
-          : a.agent_report_only ? html`${icon('check')} Confirmed by the agent.`
+        <span class="small">${a.agent_report_only ? html`${icon('check')} Confirmed by the agent.`
           : html`Waiting for the agent to confirm${a.online ? '…' : ' (the system is offline)'}.`}</span></div>` : ''}
-      ${a.status === 'active' && a.mode_support && a.agent_report_only ? html`<div class="notice blue small">Changes allowed — waiting for the agent to confirm${a.online ? '…' : ' (the system is offline)'}.</div>` : ''}
+      ${a.status === 'active' && a.agent_report_only ? html`<div class="notice blue small">Changes allowed — waiting for the agent to confirm${a.online ? '…' : ' (the system is offline)'}.</div>` : ''}
       ${a.status === 'pending' ? html`<div class="notice blue row">This system enrolled ${when(a.enrolled_at)} and is waiting for approval. Until approved it receives no commands.<span class="spacer"></span>${ifChange(html`<button class="btn primary sm" data-act="approve">${icon('check')} Approve</button>`)}</div>` : ''}
       ${a.removing ? html`<div class="notice red">Uninstall requested — the agent will remove itself.</div>` : ''}`;
   }
   function updatesTab(a) {
-    if (!hasUpdates(a)) {
-      return html`<div class="panel empty"><div class="big">📦</div><div>Agent ${a.core_version || '?'} has no built-in update function.</div>
-        <div style="margin-top:14px"><a href="#/releases">Update the agent in Releases</a></div></div>`;
-    }
     const s = upd();
     const canAct = a.status === 'active' && a.online;
     // No update buttons for read-only users or report-only systems.
@@ -1175,7 +1166,7 @@ function AgentPage([id]) {
         <div class="row">${verPill(a)}${a.core_latest ? html`<span class="muted small">latest available: <span class="ver">${a.core_latest}</span></span>` : ''}</div>
         ${a.desired_core ? html`<div class="notice blue" style="margin:14px 0 0">Change to ${a.desired_core} requested${a.online ? ' — the agent downloads the signed binary and restarts.' : ' — applies as soon as the system is online.'}</div>` : ''}
         <div class="row" style="margin-top:14px"><span class="muted small">Functions:</span>${(a.features || []).map((n) => html`<span class="tag mono">${n}</span>`)}</div>
-        <div style="margin-top:14px"><a href="#/releases">${canChange() ? 'Change the agent version in Releases' : 'Agent versions in Releases'}</a></div>
+        <div style="margin-top:14px"><a href="#/settings/releases">${canChange() ? 'Change the agent version in Releases' : 'Agent versions in Releases'}</a></div>
       </div>`;
   }
   function jobsTab() {
@@ -1188,9 +1179,6 @@ function AgentPage([id]) {
   // with every update check, after installs, and on "Refresh now" (which also
   // works on report-only systems: it only reads).
   function appsTab(a) {
-    if (!(a.features || []).includes('apps')) {
-      return html`<div class="panel panel-pad"><span class="dim">— not reported by this agent</span></div>`;
-    }
     let s = null;
     try { s = a.state?.apps ? (typeof a.state.apps === 'string' ? JSON.parse(a.state.apps) : a.state.apps) : null; } catch { s = null; }
     const busy = (st.data.jobs || []).some((j) => j.feature === 'apps' && (j.status === 'queued' || j.status === 'running'));
@@ -1200,10 +1188,19 @@ function AgentPage([id]) {
     if (!s?.apps?.length) {
       return html`${head}<div class="panel empty"><div>No scan yet — it runs with the next update check${a.status === 'report_only' ? ' (not on report-only systems: use Refresh now)' : ''}.</div></div>`;
     }
-    return html`${head}<div class="panel"><table class="tbl"><thead><tr><th>Application</th><th>Installed</th><th>Version</th></tr></thead>
+    const boot = (x) => (x.boot === 'enabled' ? 'starts at boot' : x.running === 'running' ? 'started manually (does not start at boot)' : 'does not start at boot');
+    const running = (x) => (!x.running ? html`<span class="dim">—</span>`
+      : x.running === 'running' ? html`<span class="badge ok xs" title="${boot(x)}">running</span>`
+        : html`<span class="badge mute xs" title="${boot(x)}">stopped</span>`);
+    // Ports always with their protocol; "(local)": only reachable from this machine.
+    const ports = (x) => (x.ports?.length
+      ? html`<span title="${x.ports.map((p) => `${p.port}/${p.proto} on ${p.addr}`).join('\n')}">${x.ports.map((p, i) => html`${i ? ', ' : ''}${p.port}/${p.proto}${p.local ? html` <span class="dim">(local)</span>` : ''}`)}</span>`
+      : html`<span class="dim">—</span>`);
+    return html`${head}<div class="panel scrollx"><table class="tbl"><thead><tr><th>Application</th><th>Installed</th><th>Version</th><th>Running</th><th>Listening on</th></tr></thead>
       <tbody>${s.apps.map((x) => x.installed
-        ? html`<tr><td><b>${x.name}</b></td><td><span class="badge ok xs">yes</span></td><td class="mono small" title="${x.full}${x.package ? ' (' + x.package + ')' : ''}">${x.version || '—'}</td></tr>`
-        : html`<tr class="dimrow"><td>${x.name}</td><td><span class="dim small">not detected</span></td><td></td></tr>`)}</tbody></table></div>`;
+        ? html`<tr><td><b>${x.name}</b></td><td><span class="badge ok xs">yes</span></td><td class="mono small" title="${x.full}${x.package ? ' (' + x.package + ')' : ''}">${x.version || '—'}</td>
+            <td>${running(x)}</td><td class="mono small">${ports(x)}</td></tr>`
+        : html`<tr class="dimrow"><td>${x.name}</td><td><span class="dim small">not detected</span></td><td></td><td></td><td></td></tr>`)}</tbody></table></div>`;
   }
   function systemTab(a) {
     const f = a.facts, h = f.health;
@@ -1527,12 +1524,12 @@ function Releases() {
         ${outdated.length && canChange() ? html`<button class="btn sm" data-act="all-latest">${icon('up')} Update ${outdated.length} outdated agent(s) to ${repo.core_latest}</button>` : ''}</div>
       <div class="panel"><table class="tbl"><thead><tr><th>System</th><th>Agent</th>${ifChange(html`<th>Change to</th>`)}</tr></thead>
       <tbody>${[...agents].sort(byName).map((a) => html`<tr><td>${agentDot(a)} <a href="#/system/${a.id}"><b>${a.name}</b></a></td><td>${verPill(a)}</td>
-        ${ifChange(html`<td><form class="row" style="flex-wrap:nowrap" data-submit="set" data-id="${a.id}"><select name="v">${versionOptions({ core: repo.core.filter((v) => v.platforms.includes(`${a.facts.os}-${a.facts.arch}`) && !(a.sealed && versionLess(v.version, '0.3.0')) && !(minAgent && versionLess(v.version, minAgent))) }, a.core_version)}</select><button class="btn sm" ${a.status === 'active' ? '' : 'disabled'}>Apply</button></form></td>`)}</tr>`)}</tbody></table></div>` : '');
+        ${ifChange(html`<td><form class="row" style="flex-wrap:nowrap" data-submit="set" data-id="${a.id}"><select name="v">${versionOptions({ core: repo.core.filter((v) => v.platforms.includes(`${a.facts.os}-${a.facts.arch}`) && !(minAgent && versionLess(v.version, minAgent))) }, a.core_version)}</select><button class="btn sm" ${a.status === 'active' ? '' : 'disabled'}>Apply</button></form></td>`)}</tr>`)}</tbody></table></div>` : '');
   }
   return {
     interval: 5000,
     mount(el) {
-      el.innerHTML = r(html`<div class="page-head"><div><h1>Releases</h1><div class="sub">Master and agent versions, each on their own release track</div></div></div>
+      el.innerHTML = r(html`${settingsTabs('releases')}<div class="page-head"><div><h1>Releases</h1><div class="sub">Master and agent versions, each on their own release track</div></div></div>
         <div class="stack"><div id="r-index"></div><div class="grid2"><div id="r-master"></div><div id="r-agents"></div></div><div id="r-rollout"></div></div>`);
     },
     async refresh() { [st.rel, st.data] = await Promise.all([GET('releases'), GET('overview')]); render(); },
@@ -1830,7 +1827,6 @@ function SettingsIdentity() {
     return html`<span class="dim">—</span>`;
   }
   function status(a, d) {
-    if (!a.sealed) return html`<span class="badge sec" title="Agents before 0.3.0 can no longer connect">agent ${a.core_version || '?'}: old method — run a new install command</span>`;
     if (!a.reported_at) return html`<span class="dim">not reported yet</span>`;
     if (a.slots.includes('unknown')) return html`<span class="badge sec">trusts an unknown key</span>`;
     if (d.rotating) return a.has_next ? html`<span class="badge ok">ready to switch</span>` : html`<span class="badge upd">waiting for the new key</span>`;
@@ -1868,8 +1864,8 @@ function SettingsIdentity() {
     setHTML($('#id-agents'), d.agents.length ? html`<div class="panel"><table class="tbl">
       <thead><tr><th>System</th><th>Slot 1</th><th>Slot 2</th><th>Status</th><th>Reported</th></tr></thead>
       <tbody>${d.agents.map((a) => html`<tr><td>${agentDot(a)} <a href="#/system/${a.id}"><b>${a.name}</b></a></td>
-        <td>${a.sealed ? slot(a.slots[0]) : html`<span class="dim">—</span>`}</td>
-        <td>${a.sealed ? slot(a.slots[1]) : html`<span class="dim">—</span>`}</td>
+        <td>${slot(a.slots[0])}</td>
+        <td>${slot(a.slots[1])}</td>
         <td>${status(a, d)}</td>
         <td class="muted small">${a.reported_at ? when(a.reported_at) : '—'}</td></tr>`)}</tbody></table></div>`
       : html`<div class="panel empty">No systems yet.</div>`);
@@ -1913,7 +1909,7 @@ function SettingsIdentity() {
         await new Promise((resolve) => {
           openModal(html`<h3>Not all systems have the new key</h3>
             <div class="notice red" style="margin:12px 0 0">These ${missing.length} system(s) have not reported the new key and will <b>lose contact</b> after the switch:
-              <ul>${missing.map((a) => html`<li><b>${a.name}</b> — ${!a.sealed ? `agent ${a.core_version}: old method` : a.online ? 'waiting for the new key' : 'offline'}</li>`)}</ul>
+              <ul>${missing.map((a) => html`<li><b>${a.name}</b> — ${a.online ? 'waiting for the new key' : 'offline'}</li>`)}</ul>
               They can be reconnected later with a new install command.</div>
             <div class="actions"><button class="btn primary" data-act="no" autofocus>Cancel</button><button class="btn danger" data-act="yes">Switch anyway</button></div>`, {
             acts: {

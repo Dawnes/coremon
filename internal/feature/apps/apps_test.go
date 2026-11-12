@@ -22,7 +22,7 @@ func TestReadable(t *testing.T) {
 }
 
 func TestScan(t *testing.T) {
-	rows := scan(strings.NewReader(fakeStatus))
+	rows := scan(strings.NewReader(fakeStatus), fakeSystem())
 	got := map[string]App{}
 	var order []string
 	for _, a := range rows {
@@ -40,7 +40,7 @@ func TestScan(t *testing.T) {
 	if got["Nginx"].Installed || got["Docker"].Installed {
 		t.Fatalf("not installed shown as installed: %+v %+v", got["Nginx"], got["Docker"])
 	}
-	if strings.Join(order[:4], ",") != "Apache,Docker,Fail2ban,Java" {
+	if strings.Join(order[:4], ",") != "Apache,BIND9,Certbot,Docker" {
 		t.Fatalf("order: %v", order)
 	}
 	i74, i82 := -1, -1
@@ -60,7 +60,7 @@ func TestScan(t *testing.T) {
 	for _, a := range rows {
 		names[strings.SplitN(a.Name, " ", 2)[0]] = true
 	}
-	if len(scan(strings.NewReader(""))) != 16 {
-		t.Fatalf("empty system: %d rows, want 16", len(scan(strings.NewReader(""))))
+	if len(scan(strings.NewReader(""), nil)) != 21 {
+		t.Fatalf("empty system: %d rows, want 21", len(scan(strings.NewReader(""), nil)))
 	}
 }

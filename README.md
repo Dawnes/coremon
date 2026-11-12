@@ -26,7 +26,7 @@ Master and agent are released and versioned separately:
 
 | Track | Tag | Contains | Rolled out by |
 |---|---|---|---|
-| master | `master-vX.Y.Z` | server + website, installer | *Releases → Update master* (never downgrades) |
+| master | `master-vX.Y.Z` | server + website, installer | *Settings → Releases → Update master* (never downgrades) |
 | agent | `agent-vX.Y.Z` | agent binaries | per system: version dropdown (up- or downgrade) |
 
 Each release workflow builds, tests and signs the binaries, publishes a
@@ -34,7 +34,7 @@ GitHub release, and adds the release to the **version index**: one signed
 file, `versions.json`, in the fixed GitHub release `index`. It lists the
 newest master and the newest **3** agent versions.
 
-The master downloads only that file (every 6 hours, or *Releases → Check
+The master downloads only that file (every 6 hours, or *Settings → Releases → Check
 now*), verifies its signature, then downloads and verifies every listed
 binary. It keeps exactly the 3 listed agent versions and deletes older ones.
 No GitHub API is used and nothing is rolled out automatically.
@@ -105,7 +105,7 @@ release signing key, creates the unprivileged `coremon` user and systemd
 units, and prints the UI address and initial password. Open
 `https://<master>:8443`, accept the self-signed certificate, sign in, and
 change the password under **Settings**. Within a minute the master has
-downloaded the agent versions (see **Releases**).
+downloaded the agent versions (see **Settings → Releases**).
 
 Re-running the same command upgrades an existing master and keeps its data.
 The master needs outbound HTTPS to `github.com`, `salsa.debian.org` (OS support dates from Debian's distro-info-data, looked up every 3/14/30/90 days — Settings → General) and
@@ -133,9 +133,9 @@ The master needs outbound HTTPS to `github.com`, `salsa.debian.org` (OS support 
   or, without an answer within 15 s, the last contact. Pings are listed under
   Jobs, not in the audit log.
   *Updates*: select packages (or *Security only*) and *Install selected*, or
-  *Upgrade all*; output streams live. *Applications*: whether Apache, Docker, Fail2ban, Java, MariaDB/MySQL, Nginx, Node.js, OpenSSL, PHP, PostgreSQL, Postfix, Python, Redis, Samba, the SSH server and WireGuard are installed, with their versions (from the package manager; scanned with every update check and after installs; *Refresh now* also works on report-only systems). *Agent*: install any of the 3 kept agent
+  *Upgrade all*; output streams live. *Applications*: whether Apache, BIND9, Certbot, Docker, Fail2ban, Java, MariaDB/MySQL, Nginx, Node.js, OpenSSL, OpenVPN, PHP, Podman, PostgreSQL, Postfix, Python, Redis, Samba, the SSH server, sudo and WireGuard are installed, with their versions, whether their service is running (hover: starts at boot or started manually) and which ports it listens on (port/protocol, "(local)" if only reachable from the machine itself) (from the package manager; scanned with every update check and after installs; *Refresh now* also works on report-only systems). *Agent*: install any of the 3 kept agent
   versions. *System*: host facts — OS support status, failed services, automatic updates (unattended-upgrades), last upgrade (from apt's history: when, how many packages, started by whom) — and the IPv4 gateway (default route with the lowest metric) and the IPv4 DNS servers in use (the real servers when systemd-resolved is used).
-* **Releases** — version index status, master update, agent versions and a
+* **Settings → Releases** — version index status, master update, agent versions and a
   per-system version table.
 * **History** — *Jobs* (everything sent to agents, with output) and *Audit
   log* (who did what; filter by user and system; *Show output* opens the job
@@ -157,7 +157,7 @@ The master needs outbound HTTPS to `github.com`, `salsa.debian.org` (OS support 
 * The dashboard's **Oldest information** tile shows the oldest data on
   screen: last contact of offline systems, last update check of online ones
   (report-only and pending systems excluded). When every system is online and checked within the check interval, it shows *All systems current*; an offline system is never current. Agent versions are changed only
-  under **Releases**.
+  under **Settings → Releases**.
 
 Entries, jobs and job output older than the retention period (1–30 days,
 default 3) are removed by a cleanup that runs every full hour. After you

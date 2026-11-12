@@ -19,9 +19,6 @@ import (
 	"coremon/internal/seal"
 )
 
-// sealedAgentVersion is the first agent using the sealed method.
-const sealedAgentVersion = "0.3.0"
-
 // maxSealedBody bounds a sealed request (output batches and results are the
 // largest payloads).
 const maxSealedBody = 12 << 20

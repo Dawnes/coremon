@@ -165,7 +165,7 @@ func (s *Server) switchKey() (old, cur string, err error) {
 // syncPins tells an agent which payload keys to trust, until it reports
 // exactly that. Caller holds s.st.mu.
 func (s *Server) syncPins(a *Agent, actor string) *Job {
-	if a.Protocol < 5 || a.Removing {
+	if a.Removing {
 		return nil
 	}
 	want := s.desiredPins()
@@ -185,8 +185,7 @@ type agentKeys struct {
 	Online     bool      `json:"online"`
 	LastSeen   int64     `json:"last_seen"`
 	Version    string    `json:"core_version"`
-	Sealed     bool      `json:"sealed"` // uses the payload key (0.3.0+)
-	Slots      [2]string `json:"slots"`  // per slot: current | new | unknown | "" (empty); no fingerprints
+	Slots      [2]string `json:"slots"` // per slot: current | new | unknown | "" (empty); no fingerprints
 	ReportedAt int64     `json:"reported_at"`
 	HasNext    bool      `json:"has_next"`
 }
@@ -216,12 +215,10 @@ func (s *Server) identityView(full bool) map[string]any {
 	list := []agentKeys{}
 	for _, a := range s.st.st.Agents {
 		k := agentKeys{ID: a.ID, Name: a.Name, Status: a.Status, Online: s.online(a, now), LastSeen: a.LastSeen,
-			Version: a.CoreVersion, Sealed: a.Protocol >= 5}
-		if k.Sealed {
-			k.Slots = [2]string{slotStatus(a.Pins[0], cur, next), slotStatus(a.Pins[1], cur, next)}
-			k.ReportedAt = a.PinsAt
-			k.HasNext = next != "" && (a.Pins[0] == next || a.Pins[1] == next)
-		}
+			Version: a.CoreVersion}
+		k.Slots = [2]string{slotStatus(a.Pins[0], cur, next), slotStatus(a.Pins[1], cur, next)}
+		k.ReportedAt = a.PinsAt
+		k.HasNext = next != "" && (a.Pins[0] == next || a.Pins[1] == next)
 		list = append(list, k)
 	}
 	sort.Slice(list, func(i, j int) bool { return strings.ToLower(list[i].Name) < strings.ToLower(list[j].Name) })
@@ -302,7 +299,7 @@ func (s *Server) missingNextKey() []string {
 		if a.Removing {
 			continue
 		}
-		if next == "" || a.Protocol < 5 || (a.Pins[0] != next && a.Pins[1] != next) {
+		if next == "" || (a.Pins[0] != next && a.Pins[1] != next) {
 			out = append(out, a.Name)
 		}
 	}

@@ -95,7 +95,7 @@ func readOnlyAction(feature string) bool { return feature == "apps" }
 // user who switched, or "scheduler" for an automatic resync. Caller holds
 // s.st.mu.
 func (s *Server) syncMode(a *Agent, actor string) *Job {
-	if a.Protocol < 3 || a.Status == StatusPending || a.Removing {
+	if a.Status == StatusPending || a.Removing {
 		return nil
 	}
 	want := a.Status == StatusReportOnly
@@ -218,11 +218,9 @@ func (s *Server) pollCore(ctx context.Context, agentID string, req proto.PollReq
 	if a.DesiredCore != "" && a.DesiredCore == a.CoreVersion {
 		a.DesiredCore = ""
 	}
-	if a.Protocol >= 4 {
-		// Key slots also below the minimum: a key rotation must not cut it off.
-		a.Pins = [2]string{clip(req.Pins[0], 256), clip(req.Pins[1], 256)}
-		a.PinsAt = now
-	}
+	// Key slots also below the minimum: a key rotation must not cut it off.
+	a.Pins = [2]string{clip(req.Pins[0], 256), clip(req.Pins[1], 256)}
+	a.PinsAt = now
 	if s.belowMin(a) {
 		// Upgrade only: just the platform (for the right update); none of its
 		// data is stored. What was stored before stays, hidden, until updated.

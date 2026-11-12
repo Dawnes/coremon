@@ -103,12 +103,29 @@ func checkApps(raw json.RawMessage) (json.RawMessage, error) {
 		if p.Package != "" && !updates.PackageNameRe.MatchString(p.Package) {
 			p.Package = ""
 		}
+		if p.Running != "running" && p.Running != "stopped" {
+			p.Running = ""
+		}
+		if p.Boot != "enabled" && p.Boot != "disabled" {
+			p.Boot = ""
+		}
+		var ports []apps.Port
+		for _, q := range p.Ports {
+			if q.Port < 1 || q.Port > 65535 || (q.Proto != "tcp" && q.Proto != "udp") || len(ports) == maxAppPorts {
+				continue
+			}
+			q.Addr = cleanText(q.Addr, 128)
+			ports = append(ports, q)
+		}
+		p.Ports = ports
 		if !p.Installed {
-			p.Version, p.Full, p.Package = "", "", ""
+			p.Version, p.Full, p.Package, p.Running, p.Boot, p.Ports = "", "", "", "", "", nil
 		}
 	}
 	return json.Marshal(s)
 }
+
+const maxAppPorts = 32
 
 // rateLimiter allows each agent about rate requests per second with a
 // burst; a normal agent sends a few per minute.

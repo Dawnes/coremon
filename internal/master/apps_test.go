@@ -67,6 +67,16 @@ func TestApplications(t *testing.T) {
 	if _, ok := a.State["evil"]; ok {
 		t.Fatal("an unknown extra state was stored")
 	}
+	// Service fields are checked too.
+	bad := apps.State{Apps: []apps.App{{Name: "Nginx", Installed: true, Running: "<b>", Boot: "maybe",
+		Ports: []apps.Port{{Port: 80, Proto: "tcp", Addr: "0.0.0.0\x1b"}, {Port: 0, Proto: "tcp"}, {Port: 99999, Proto: "tcp"}, {Port: 53, Proto: "icmp"}}}}}
+	raw0, _ := json.Marshal(bad)
+	out, err := checkState("apps", raw0)
+	var cleaned apps.State
+	json.Unmarshal(out, &cleaned)
+	if err != nil || cleaned.Apps[0].Running != "" || cleaned.Apps[0].Boot != "" || len(cleaned.Apps[0].Ports) != 1 || cleaned.Apps[0].Ports[0].Addr != "0.0.0.0" {
+		t.Fatalf("service fields not checked: %v %+v", err, cleaned.Apps[0])
+	}
 	// Too many rows are refused.
 	many := apps.State{Apps: make([]apps.App, maxApps+1)}
 	raw, _ := json.Marshal(many)

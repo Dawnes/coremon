@@ -47,9 +47,7 @@ type agentView struct {
 	DesiredCore  string                     `json:"desired_core"`
 	Legacy       bool                       `json:"legacy"`            // agent before 0.3.0: old connection method, cannot connect
 	IsMaster     bool                       `json:"is_master"`         // the system the master itself runs on
-	ModeSupport  bool                       `json:"mode_support"`      // agent enforces report-only itself (protocol 3+)
 	AgentReport  bool                       `json:"agent_report_only"` // mode the agent itself confirmed
-	Sealed       bool                       `json:"sealed"`            // uses the payload key (0.3.0+)
 	OSSupport    *osSupport                 `json:"os_support,omitempty"`
 	BelowMin     bool                       `json:"below_min"`           // older than the lowest allowed version: upgrade only
 	MinAgent     string                     `json:"min_agent,omitempty"` // that lowest allowed version
@@ -73,8 +71,7 @@ func (s *Server) view(a *Agent, full bool) agentView {
 	v.CoreLatest = s.repo.coreLatest()
 	v.CoreIsLatest = v.CoreLatest != "" && a.CoreVersion == v.CoreLatest
 	v.Legacy = a.CoreVersion != "" && versionLess(a.CoreVersion, minAgentVersion)
-	v.ModeSupport, v.AgentReport = a.Protocol >= 3, a.ReportOnly
-	v.Sealed = a.Protocol >= 5 || a.AgentKey != ""
+	v.AgentReport = a.ReportOnly
 	v.OSSupport = s.supportFor(a.Facts.OSID, a.Facts.OSVersion, time.Now())
 	for _, f := range a.Features {
 		v.Features = append(v.Features, f.Name)
@@ -105,7 +102,7 @@ func (s *Server) view(a *Agent, full bool) agentView {
 		v.BelowMin, v.MinAgent = true, s.minAgent()
 		v.Facts = proto.Facts{OS: a.Facts.OS, Arch: a.Facts.Arch}
 		v.Features, v.Updates, v.OSSupport, v.State, v.StateAt = []string{}, nil, nil, nil, nil
-		v.ModeSupport, v.AgentReport, v.IsMaster = false, false, false
+		v.AgentReport, v.IsMaster = false, false
 	}
 	return v
 }
@@ -389,10 +386,6 @@ func (s *Server) handleCoreUpdate(w http.ResponseWriter, r *http.Request) {
 	}
 	if s.repo.find("core", req.Version, goos, arch) == nil {
 		http.Error(w, fmt.Sprintf("agent %s for %s-%s is not available on the master", req.Version, goos, arch), http.StatusBadRequest)
-		return
-	}
-	if (a.Protocol >= 5 || a.AgentKey != "") && versionLess(req.Version, sealedAgentVersion) {
-		http.Error(w, fmt.Sprintf("agent %s uses the old connection method; a system on %s or later cannot go back to it", req.Version, sealedAgentVersion), http.StatusBadRequest)
 		return
 	}
 	if req.Version == a.CoreVersion {

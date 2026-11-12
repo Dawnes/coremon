@@ -5,8 +5,10 @@ package apps
 
 import (
 	"bufio"
+	"fmt"
 	"io"
 	"os"
+	"path"
 	"regexp"
 	"sort"
 	"strings"
@@ -24,6 +26,25 @@ type App struct {
 	Version   string `json:"version,omitempty"` // readable: "8.2.26"
 	Full      string `json:"full,omitempty"`    // package version: "8.2.26-1~deb12u1"
 	Package   string `json:"package,omitempty"` // the package it was found in
+	Running   string `json:"running,omitempty"` // running | stopped | "" (no service of its own)
+	Boot      string `json:"boot,omitempty"`    // enabled | disabled | "" (starts at boot or not)
+	Ports     []Port `json:"ports,omitempty"`   // what its service listens on
+}
+
+// Port is one listening port of an application's service.
+type Port struct {
+	Port  int    `json:"port"`
+	Proto string `json:"proto"`          // tcp | udp
+	Local bool   `json:"local"`          // only reachable from the machine itself
+	Addr  string `json:"addr,omitempty"` // the addresses, e.g. "0.0.0.0, ::"
+}
+
+// System is what the scan knows about services: which units exist, which
+// are active, which start at boot and what they listen on.
+type System struct {
+	Active  map[string]bool   // unit -> active (only units that exist)
+	Enabled map[string]bool   // unit -> starts at boot
+	Ports   map[string][]Port // unit -> listening ports
 }
 
 // State is the scan result.
@@ -39,25 +60,100 @@ type def struct {
 	name  string
 	re    *regexp.Regexp
 	multi bool
+	// units are its services; "{v}" is the version of a multi row, "*" a
+	// wildcard (instances such as openvpn@site.service). None: no service
+	// of its own (Running shows "—").
+	units []string
 }
 
 var defs = []def{
-	{"Apache", regexp.MustCompile(`^apache2$`), false},
-	{"Docker", regexp.MustCompile(`^(?:docker-ce|docker\.io)$`), false},
-	{"Fail2ban", regexp.MustCompile(`^fail2ban$`), false},
-	{"Java", regexp.MustCompile(`^openjdk-(\d+)-(?:jre|jre-headless|jdk|jdk-headless)$`), true},
-	{"MariaDB/MySQL", regexp.MustCompile(`^(?:mariadb-server|mysql-server)(?:-core)?(?:-[\d.]+)?$`), false},
-	{"Nginx", regexp.MustCompile(`^nginx(?:-(?:full|light|extras|core))?$`), false},
-	{"Node.js", regexp.MustCompile(`^nodejs$`), false},
-	{"OpenSSL", regexp.MustCompile(`^libssl3t?6?4?$`), false},
-	{"PHP", regexp.MustCompile(`^(?:php(\d+\.\d+)-(?:cli|fpm|common)|libapache2-mod-php(\d+\.\d+))$`), true},
-	{"PostgreSQL", regexp.MustCompile(`^postgresql-(\d+)$`), true},
-	{"Postfix", regexp.MustCompile(`^postfix$`), false},
-	{"Python", regexp.MustCompile(`^python(3\.\d+)$`), true},
-	{"Redis", regexp.MustCompile(`^redis-server$`), false},
-	{"Samba", regexp.MustCompile(`^samba$`), false},
-	{"SSH server", regexp.MustCompile(`^openssh-server$`), false},
-	{"WireGuard", regexp.MustCompile(`^wireguard-tools$`), false},
+	{"Apache", regexp.MustCompile(`^apache2$`), false, []string{"apache2.service"}},
+	{"BIND9", regexp.MustCompile(`^bind9$`), false, []string{"named.service", "bind9.service"}},
+	{"Certbot", regexp.MustCompile(`^certbot$`), false, nil},
+	{"Docker", regexp.MustCompile(`^(?:docker-ce|docker\.io)$`), false, []string{"docker.service"}},
+	{"Fail2ban", regexp.MustCompile(`^fail2ban$`), false, []string{"fail2ban.service"}},
+	{"Java", regexp.MustCompile(`^openjdk-(\d+)-(?:jre|jre-headless|jdk|jdk-headless)$`), true, nil},
+	{"MariaDB/MySQL", regexp.MustCompile(`^(?:mariadb-server|mysql-server)(?:-core)?(?:-[\d.]+)?$`), false, []string{"mariadb.service", "mysql.service"}},
+	{"Nginx", regexp.MustCompile(`^nginx(?:-(?:full|light|extras|core))?$`), false, []string{"nginx.service"}},
+	{"Node.js", regexp.MustCompile(`^nodejs$`), false, nil},
+	{"OpenSSL", regexp.MustCompile(`^libssl3t?6?4?$`), false, nil},
+	{"OpenVPN", regexp.MustCompile(`^openvpn$`), false, []string{"openvpn@*.service", "openvpn-server@*.service", "openvpn-client@*.service"}},
+	{"PHP", regexp.MustCompile(`^(?:php(\d+\.\d+)-(?:cli|fpm|common)|libapache2-mod-php(\d+\.\d+))$`), true, []string{"php{v}-fpm.service"}},
+	{"Podman", regexp.MustCompile(`^podman$`), false, nil},
+	{"PostgreSQL", regexp.MustCompile(`^postgresql-(\d+)$`), true, []string{"postgresql@{v}-*.service"}},
+	{"Postfix", regexp.MustCompile(`^postfix$`), false, []string{"postfix@*.service", "postfix.service"}},
+	{"Python", regexp.MustCompile(`^python(3\.\d+)$`), true, nil},
+	{"Redis", regexp.MustCompile(`^redis-server$`), false, []string{"redis-server.service", "redis.service"}},
+	{"Samba", regexp.MustCompile(`^samba$`), false, []string{"smbd.service", "nmbd.service"}},
+	{"SSH server", regexp.MustCompile(`^openssh-server$`), false, []string{"ssh.service", "ssh.socket", "sshd.service"}},
+	{"sudo", regexp.MustCompile(`^sudo$`), false, nil},
+	{"WireGuard", regexp.MustCompile(`^wireguard-tools$`), false, []string{"wg-quick@*.service"}},
+}
+
+// UnitPatterns are all service patterns, for collecting their details.
+func UnitPatterns() []string {
+	var out []string
+	for _, d := range defs {
+		out = append(out, d.units...)
+	}
+	return out
+}
+
+// unitMatch reports whether unit matches pattern p ("*" = any characters;
+// "{v}" is replaced by the row's version first).
+func unitMatch(p, v, unit string) bool {
+	p = strings.ReplaceAll(p, "{v}", v)
+	ok, _ := path.Match(p, unit)
+	return ok
+}
+
+// service fills Running, Boot and Ports of a row from the units of d.
+func (d def) service(a *App, key string, sys *System) {
+	if len(d.units) == 0 || sys == nil {
+		return
+	}
+	var units []string
+	for u := range sys.Active {
+		for _, p := range d.units {
+			if unitMatch(p, key, u) {
+				units = append(units, u)
+				break
+			}
+		}
+	}
+	if len(units) == 0 {
+		return // no service of its own on this system (e.g. PHP without FPM)
+	}
+	sort.Strings(units)
+	a.Running, a.Boot = "stopped", "disabled"
+	seen := map[string]int{}
+	for _, u := range units {
+		if sys.Active[u] {
+			a.Running = "running"
+		}
+		if sys.Enabled[u] {
+			a.Boot = "enabled"
+		}
+		for _, p := range sys.Ports[u] {
+			k := fmt.Sprintf("%d/%s", p.Port, p.Proto)
+			if i, ok := seen[k]; ok {
+				q := &a.Ports[i]
+				q.Local = q.Local && p.Local
+				if !strings.Contains(q.Addr, p.Addr) {
+					q.Addr += ", " + p.Addr
+				}
+				continue
+			}
+			seen[k] = len(a.Ports)
+			a.Ports = append(a.Ports, p)
+		}
+	}
+	sort.Slice(a.Ports, func(i, j int) bool {
+		if a.Ports[i].Port != a.Ports[j].Port {
+			return a.Ports[i].Port < a.Ports[j].Port
+		}
+		return a.Ports[i].Proto < a.Ports[j].Proto
+	})
 }
 
 const statusFile = "/var/lib/dpkg/status"
@@ -107,8 +203,9 @@ func installed(r io.Reader) map[string]string {
 }
 
 // scan builds the rows from dpkg status contents: a-z, one row per version,
-// and a "not detected" row for applications that are absent.
-func scan(r io.Reader) []App {
+// and a "not detected" row for applications that are absent. sys (may be
+// nil) adds the service state and ports.
+func scan(r io.Reader, sys *System) []App {
 	pkgs := installed(r)
 	names := make([]string, 0, len(pkgs))
 	for p := range pkgs {
@@ -138,7 +235,9 @@ func scan(r io.Reader) []App {
 			if key != "" {
 				name += " " + key
 			}
-			rows[key] = App{Name: name, Installed: true, Version: Readable(pkgs[p]), Full: pkgs[p], Package: p}
+			a := App{Name: name, Installed: true, Version: Readable(pkgs[p]), Full: pkgs[p], Package: p}
+			d.service(&a, key, sys)
+			rows[key] = a
 		}
 		if len(rows) == 0 {
 			out = append(out, App{Name: d.name})
@@ -190,15 +289,28 @@ func Scan() *State {
 	f, err := os.Open(statusFile)
 	if err != nil {
 		if os.Getenv("COREMON_FAKE") == "1" { // development builds
-			st.Apps = scan(strings.NewReader(fakeStatus))
+			st.Apps = scan(strings.NewReader(fakeStatus), fakeSystem())
 			return st
 		}
-		st.Apps = scan(strings.NewReader(""))
+		st.Apps = scan(strings.NewReader(""), nil)
 		return st
 	}
 	defer f.Close()
-	st.Apps = scan(f)
+	st.Apps = scan(f, collectSystem())
 	return st
+}
+
+// fakeSystem: services for development builds (COREMON_FAKE=1).
+func fakeSystem() *System {
+	return &System{
+		Active:  map[string]bool{"apache2.service": true, "ssh.service": true, "mariadb.service": true, "php8.2-fpm.service": false},
+		Enabled: map[string]bool{"apache2.service": true, "ssh.service": true, "mariadb.service": false},
+		Ports: map[string][]Port{
+			"apache2.service": {{Port: 80, Proto: "tcp", Addr: "0.0.0.0"}, {Port: 443, Proto: "tcp", Addr: "0.0.0.0"}, {Port: 80, Proto: "tcp", Addr: "::"}},
+			"ssh.service":     {{Port: 22, Proto: "tcp", Addr: "0.0.0.0"}},
+			"mariadb.service": {{Port: 3306, Proto: "tcp", Local: true, Addr: "127.0.0.1"}},
+		},
+	}
 }
 
 // Apps implements feature.Feature: the "Refresh now" scan.

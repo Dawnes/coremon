@@ -26,7 +26,7 @@ func TestPayloadKeyRotation(t *testing.T) {
 	now := time.Now().Unix()
 	s.st.mu.Lock()
 	a := &Agent{ID: "a_1", Name: "web-01", Status: StatusActive, Protocol: 5, LastSeen: now, Pins: [2]string{old, ""}}
-	b := &Agent{ID: "a_2", Name: "old-vm", Status: StatusActive, Protocol: 4, LastSeen: now}
+	b := &Agent{ID: "a_2", Name: "old-vm", Status: StatusActive, Protocol: 5, LastSeen: now}
 	s.st.st.Agents[a.ID], s.st.st.Agents[b.ID] = a, b
 	s.st.mu.Unlock()
 	pinJob := func(id string) *Job {
@@ -57,8 +57,8 @@ func TestPayloadKeyRotation(t *testing.T) {
 	if j == nil || !strings.Contains(string(j.Params), old) || !strings.Contains(string(j.Params), next) {
 		t.Fatalf("agent not told to trust both keys: %+v", j)
 	}
-	if pinJob("a_2") != nil {
-		t.Error("an agent of the old method must not get a payload key command")
+	if pinJob("a_2") == nil {
+		t.Error("every agent must get the new key (all agents are assumed current)")
 	}
 	if code, body := c.do("POST", "/api/ui/identity/switch", `{}`); code != 409 || !strings.Contains(body, "web-01") || !strings.Contains(body, "old-vm") {
 		t.Fatalf("switch with missing systems: %d %s", code, body)
