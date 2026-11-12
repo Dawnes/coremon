@@ -109,12 +109,113 @@ const GET = (p) => api('GET', p);
 const POST = (p, b) => api('POST', p, b || {});
 
 // ---------- toasts ----------
+// Behave like Sonner: the newest toast in front with up to two peeking
+// behind it; hovering the stack spreads it out and pauses the timers;
+// swipe right or press × to close one.
+const TOAST = { gap: 14, visible: 3, max: 10, ms: { '': 4000, ok: 4000, err: 8000 } };
+const TOAST_ICON = {
+  ok: '<circle cx="10" cy="10" r="8" fill="currentColor"/><path d="m6.6 10.3 2.3 2.3 4.6-4.9" fill="none" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>',
+  err: '<circle cx="10" cy="10" r="8" fill="currentColor"/><path d="M10 6v4.6M10 13.6v.1" fill="none" stroke-width="1.9" stroke-linecap="round"/>',
+};
+const toastState = { list: [], open: false, wired: false };
+
+function layoutToasts() {
+  const box = $('#toasts');
+  const { list, open } = toastState;
+  const frontH = list[0] ? list[0].h : 0;
+  let y = 0;
+  list.forEach((t, i) => {
+    const base = open ? `translateY(${-y}px)` : `translateY(${-i * TOAST.gap}px) scale(${1 - i * 0.05})`;
+    t.base = base;
+    if (!t.el.classList.contains('swiping')) t.el.style.transform = base;
+    t.el.style.height = (open || i === 0 ? t.h : frontH) + 'px';
+    t.el.style.zIndex = String(TOAST.max - i);
+    t.el.style.opacity = i < TOAST.visible ? '' : '0';
+    t.el.style.pointerEvents = i < TOAST.visible ? '' : 'none';
+    t.el.classList.toggle('behind', !open && i > 0);
+    if (i < TOAST.visible) y += t.h + TOAST.gap;
+  });
+  box.style.height = (open ? Math.max(0, y - TOAST.gap) : frontH) + 'px';
+  box.classList.toggle('open', open);
+}
+
+function toastTimer(t, run) {
+  clearTimeout(t.timer);
+  if (run) { t.started = Date.now(); t.timer = setTimeout(() => dropToast(t), t.left); }
+  else if (t.started) { t.left = Math.max(800, t.left - (Date.now() - t.started)); t.started = 0; }
+}
+const toastsRun = (run) => toastState.list.forEach((t) => toastTimer(t, run));
+
+function dropToast(t, swiped = false) {
+  const i = toastState.list.indexOf(t);
+  if (i < 0) return;
+  toastState.list.splice(i, 1);
+  clearTimeout(t.timer);
+  if (swiped) t.el.style.transform = `${t.base} translateX(110%)`;
+  t.el.classList.add('leaving');
+  setTimeout(() => t.el.remove(), 400);
+  if (!toastState.list.length) toastState.open = false;
+  layoutToasts();
+}
+
+function wireToasts(box) {
+  toastState.wired = true;
+  box.setAttribute('aria-live', 'polite');
+  box.setAttribute('aria-label', 'Notifications');
+  const setOpen = (open) => { if (toastState.open === open) return; toastState.open = open; toastsRun(!open); layoutToasts(); };
+  box.addEventListener('mouseenter', () => setOpen(true));
+  box.addEventListener('mouseleave', () => { if (!box.contains(document.activeElement)) setOpen(false); });
+  box.addEventListener('focusout', (e) => { if (!box.contains(e.relatedTarget) && !box.matches(':hover')) setOpen(false); });
+  box.addEventListener('focusin', () => setOpen(true));
+  document.addEventListener('visibilitychange', () => { if (!toastState.open) toastsRun(!document.hidden); });
+}
+
+function swipeToast(t) {
+  let x0 = null, dx = 0, t0 = 0;
+  t.el.addEventListener('pointerdown', (e) => {
+    if (e.button !== 0 || e.target.closest('.tclose')) return;
+    x0 = e.clientX; dx = 0; t0 = Date.now();
+    t.el.setPointerCapture(e.pointerId);
+  });
+  t.el.addEventListener('pointermove', (e) => {
+    if (x0 === null) return;
+    const raw = e.clientX - x0;
+    dx = raw > 0 ? raw : raw / 6; // a little give to the left
+    t.el.classList.add('swiping');
+    t.el.style.transform = `${t.base} translateX(${dx}px)`;
+    t.el.style.opacity = String(Math.max(0.2, 1 - Math.max(0, dx) / 220));
+  });
+  const end = () => {
+    if (x0 === null) return;
+    x0 = null;
+    t.el.classList.remove('swiping');
+    if (dx > 45 || dx / Math.max(1, Date.now() - t0) > 0.11) return dropToast(t, true);
+    t.el.style.opacity = '';
+    t.el.style.transform = t.base;
+  };
+  t.el.addEventListener('pointerup', end);
+  t.el.addEventListener('pointercancel', end);
+}
+
 function toast(msg, kind = '') {
+  const box = $('#toasts');
+  if (!toastState.wired) wireToasts(box);
   const el = document.createElement('div');
-  el.className = 'toast ' + kind;
-  el.textContent = msg;
-  $('#toasts').appendChild(el);
-  setTimeout(() => el.remove(), kind === 'err' ? 7000 : 3500);
+  el.className = `toast ${kind} entering`;
+  el.setAttribute('role', kind === 'err' ? 'alert' : 'status');
+  const ic = TOAST_ICON[kind] ? `<svg class="ti" viewBox="0 0 20 20" aria-hidden="true">${TOAST_ICON[kind]}</svg>` : '';
+  el.innerHTML = `<button class="tclose" type="button" aria-label="Close"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><path d="M18 6 6 18M6 6l12 12"/></svg></button>${ic}<div class="tbody"></div>`;
+  el.querySelector('.tbody').textContent = msg;
+  box.appendChild(el);
+  const t = { el, h: el.getBoundingClientRect().height, left: TOAST.ms[kind] ?? 4000, started: 0, timer: 0, base: '' };
+  el.querySelector('.tclose').addEventListener('click', () => dropToast(t));
+  swipeToast(t);
+  toastState.list.unshift(t);
+  while (toastState.list.length > TOAST.max) dropToast(toastState.list[toastState.list.length - 1]);
+  layoutToasts();
+  el.offsetHeight; // start the slide-in from below
+  el.classList.remove('entering');
+  if (!toastState.open && !document.hidden) toastTimer(t, true);
 }
 const fail = (e) => toast(e.message || String(e), 'err');
 
