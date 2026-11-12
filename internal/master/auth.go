@@ -132,25 +132,62 @@ func (s *sessions) destroyUser(userID string) {
 	s.mu.Unlock()
 }
 
-// allowLogin rate-limits failed logins per client IP: 5 per 15 minutes.
-func (s *sessions) allowLogin(ip string) bool {
+const (
+	loginFails  = 5 // failed logins per address ...
+	loginWindow = 15 * time.Minute
+	hashAtOnce  = 4 // password checks running at once (each costs CPU on purpose)
+)
+
+// reserveLogin rate-limits failed logins per client IP: 5 per 15 minutes.
+// The attempt is counted here, before the password is checked, so parallel
+// requests cannot slip past the limit; a successful login gives it back
+// (forgiveLogin).
+func (s *sessions) reserveLogin(ip string) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	cut := time.Now().Add(-15 * time.Minute).Unix()
+	cut := time.Now().Add(-loginWindow).Unix()
 	var keep []int64
 	for _, t := range s.fail[ip] {
 		if t > cut {
 			keep = append(keep, t)
 		}
 	}
-	s.fail[ip] = keep
-	return len(keep) < 5
+	if len(keep) >= loginFails {
+		s.fail[ip] = keep
+		return false
+	}
+	s.fail[ip] = append(keep, time.Now().Unix())
+	return true
 }
 
-func (s *sessions) recordFail(ip string) {
+// forgiveLogin removes the attempt reserved for a login that succeeded.
+func (s *sessions) forgiveLogin(ip string) {
 	s.mu.Lock()
-	s.fail[ip] = append(s.fail[ip], time.Now().Unix())
-	s.mu.Unlock()
+	defer s.mu.Unlock()
+	if l := s.fail[ip]; len(l) > 1 {
+		s.fail[ip] = l[:len(l)-1]
+	} else {
+		delete(s.fail, ip)
+	}
+}
+
+// sweep forgets addresses whose failed logins have all expired, and expired
+// sessions, so neither list grows without end.
+func (s *sessions) sweep() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	now := time.Now()
+	cut := now.Add(-loginWindow).Unix()
+	for ip, l := range s.fail {
+		if len(l) == 0 || l[len(l)-1] <= cut {
+			delete(s.fail, ip)
+		}
+	}
+	for h, se := range s.m {
+		if now.Unix() > se.exp {
+			delete(s.m, h)
+		}
+	}
 }
 
 // clientIP is the address used for login rate limiting and the audit log.

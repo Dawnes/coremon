@@ -104,7 +104,8 @@ func (s *Server) setCookie(w http.ResponseWriter, tok string) {
 }
 
 func (s *Server) handleSession(w http.ResponseWriter, r *http.Request) {
-	out := map[string]any{"authenticated": false, "version": s.cfg.Version, "build_date": s.cfg.BuildDate, "min_password": minPasswordLen, "max_password": maxPasswordLen}
+	// Version and release date are only told to signed-in users.
+	out := map[string]any{"authenticated": false, "min_password": minPasswordLen, "max_password": maxPasswordLen}
 	// For the login page: is the generated first password still in use?
 	_, statErr := os.Stat(s.initialPwPath())
 	s.st.mu.Lock()
@@ -116,6 +117,7 @@ func (s *Server) handleSession(w http.ResponseWriter, r *http.Request) {
 			if u := s.st.userByID(uid); u != nil {
 				_, statErr := os.Stat(s.initialPwPath())
 				out["authenticated"] = true
+				out["version"], out["build_date"] = s.cfg.Version, s.cfg.BuildDate
 				out["user"] = viewUser(u)
 				out["can_change"] = can(u, permChange)
 				out["initial_password"] = statErr == nil && u.ID == s.st.st.InitialUser
@@ -133,15 +135,30 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	ip := clientIP(r)
-	if !s.sess.allowLogin(ip) {
-		http.Error(w, "too many failed attempts; try again later", http.StatusTooManyRequests)
-		return
-	}
 	var req struct {
 		Username string `json:"username"`
 		Password string `json:"password"`
 	}
 	if !readJSON(w, r, &req, 4096) {
+		return
+	}
+	// Counted before the password is checked (parallel requests cannot slip
+	// past the limit); given back when the login succeeds.
+	if !s.sess.reserveLogin(ip) {
+		http.Error(w, "too many failed attempts; try again later", http.StatusTooManyRequests)
+		return
+	}
+	// A password check costs CPU on purpose: only a few run at once.
+	select {
+	case s.hashSem <- struct{}{}:
+		defer func() { <-s.hashSem }()
+	case <-time.After(5 * time.Second):
+		s.sess.forgiveLogin(ip)
+		w.Header().Set("Retry-After", "5")
+		http.Error(w, "busy, try again", http.StatusServiceUnavailable)
+		return
+	case <-r.Context().Done():
+		s.sess.forgiveLogin(ip)
 		return
 	}
 	name := strings.ToLower(strings.TrimSpace(req.Username))
@@ -156,12 +173,12 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 	}
 	s.st.mu.Unlock()
 	if !checkPassword(hash, req.Password) || uid == "" {
-		s.sess.recordFail(ip)
-		s.audit.write(name, ip, "login.failed", "", "")
+		s.audit.write(cleanText(name, 32), ip, "login.failed", "", "")
 		time.Sleep(400 * time.Millisecond)
 		http.Error(w, "wrong user name or password", http.StatusUnauthorized)
 		return
 	}
+	s.sess.forgiveLogin(ip)
 	s.setCookie(w, s.sess.create(uid))
 	s.audit.write(name, ip, "login", "", "")
 	writeJSON(w, map[string]bool{"ok": true})

@@ -103,6 +103,7 @@ type Agent struct {
 	Pins        [2]string                  `json:"pins"`              // master keys the agent reports trusting, per slot (protocol 4+)
 	PinsAt      int64                      `json:"pins_at"`
 	AgentKey    string                     `json:"agent_key,omitempty"` // the agent's own ed25519 public key (0.3.0+)
+	EnrollIP    string                     `json:"enroll_ip,omitempty"` // address it registered from (one pending system per address)
 	EnrolledAt  int64                      `json:"enrolled_at"`
 	LastSeen    int64                      `json:"last_seen"`
 	CoreVersion string                     `json:"core_version"`

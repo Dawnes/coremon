@@ -165,18 +165,44 @@ func (s *Server) enrollCore(req proto.EnrollRequest, ip, agentKey string) (*prot
 	if agentKey == "" {
 		return nil, &apiError{http.StatusBadRequest, "agent key missing"}
 	}
+	now := time.Now()
+	// An address over its limit of wrong tokens gets no further look.
+	if s.enrolls.over(ip, now) {
+		s.enrolls.rejected(ip, now) // counted for the summary
+		return nil, &apiError{http.StatusTooManyRequests, "too many registration attempts; try again later"}
+	}
 	req.Facts = sanitizeFacts(req.Facts)
-	req.CoreVersion = clip(req.CoreVersion, 32)
+	req.CoreVersion = cleanText(req.CoreVersion, 32)
 	s.st.mu.Lock()
 	defer s.st.mu.Unlock()
 	h := sha256hex(strings.TrimSpace(req.Token))
 	tok := s.st.st.Tokens[h]
-	if tok == nil || time.Now().Unix() > tok.Expires {
-		s.audit.write("agent", ip, "enroll.rejected", clip(req.Facts.Hostname, 64), "invalid or expired token")
+	if tok == nil || now.Unix() > tok.Expires {
+		// Only the first attempt of an address is logged on its own; the
+		// rest is summarised (see flushEnrolls).
+		if first, _ := s.enrolls.rejected(ip, now); first {
+			s.audit.write("agent", ip, "enroll.rejected", cleanText(req.Facts.Hostname, 64), "invalid or expired token")
+		}
 		return nil, &apiError{http.StatusForbidden, "invalid or expired enrollment token"}
+	}
+	// One system per address may wait for approval. The token is kept, so
+	// the waiting agent registers by itself once the other one is approved
+	// or removed.
+	if ip != "" {
+		for _, p := range s.st.st.Agents {
+			if p.Status == StatusPending && p.EnrollIP == ip {
+				if s.enrolls.noteWaiting(ip) {
+					s.audit.write("agent", ip, "enroll.waiting", cleanText(req.Facts.Hostname, 64),
+						"refused for now: "+p.Name+" from the same address is waiting for approval (approve or remove it first)")
+				}
+				return nil, &apiError{http.StatusTooManyRequests, "another system from this address is waiting for approval"}
+			}
+		}
+		s.enrolls.clearWaiting(ip)
 	}
 	delete(s.st.st.Tokens, h)
 	a := &Agent{
+		EnrollIP:    ip,
 		ID:          "a_" + randHex(8),
 		Name:        cleanText(req.Facts.Hostname, maxSystemName),
 		Status:      StatusPending,
@@ -198,6 +224,14 @@ func (s *Server) enrollCore(req proto.EnrollRequest, ip, agentKey string) (*prot
 	s.st.markDirty()
 	s.audit.writeAgent("agent", ip, "agent.enrolled", a, fmt.Sprintf("token %s…", tok.Prefix))
 	return resp, nil
+}
+
+// flushEnrolls writes one summary line per address for the registration
+// attempts with a wrong token that followed the first (logged) one.
+func (s *Server) flushEnrolls(now time.Time) {
+	for ip, n := range s.enrolls.flush(now) {
+		s.audit.write("agent", ip, "enroll.rejected", "", fmt.Sprintf("%d more rejected registration attempt(s) from this address in %d minutes", n, int(enrollWindow/time.Minute)))
+	}
 }
 
 // pollCore records a heartbeat and waits up to one heartbeat for commands.
@@ -484,6 +518,8 @@ func (s *Server) schedulerLoop(stop <-chan struct{}) {
 	defer t.Stop()
 	for {
 		s.schedulerTick()
+		s.flushEnrolls(time.Now())
+		s.sess.sweep()
 		s.renewCertIfDue(time.Now())
 		s.renewTicketKeys(time.Now())
 		if due := s.nextPurgeAt(); !time.Now().Before(due) {

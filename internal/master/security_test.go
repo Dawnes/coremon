@@ -136,8 +136,8 @@ func TestAgentReportLimits(t *testing.T) {
 	big := `{"agent":"` + strings.Repeat("x", maxSealedBody) + `"}`
 	w := httptest.NewRecorder()
 	s.handleSealed(w, httptest.NewRequest("POST", "/api/agent/v5", strings.NewReader(big)))
-	if w.Code != 400 {
-		t.Errorf("oversized request: %d, want 400", w.Code)
+	if w.Code != 413 {
+		t.Errorf("oversized request: %d, want 413 (refused before it is read)", w.Code)
 	}
 }
 

@@ -57,6 +57,17 @@ func (c *nonceCache) fresh(nonce string) bool {
 }
 
 func (s *Server) handleSealed(w http.ResponseWriter, r *http.Request) {
+	// Admitted per address and in total, before anything is read: the sender
+	// is not known yet.
+	if r.ContentLength > maxSealedBody {
+		http.Error(w, "request too large", http.StatusRequestEntityTooLarge)
+		return
+	}
+	release := s.intake.admit(w, r)
+	if release == nil {
+		return
+	}
+	defer release()
 	var env seal.Request
 	if !readJSON(w, r, &env, maxSealedBody) {
 		return
@@ -81,7 +92,9 @@ func (s *Server) handleSealed(w http.ResponseWriter, r *http.Request) {
 		defer s.st.mu.Unlock()
 		a := s.st.st.Agents[agentID]
 		if a == nil || a.AgentKey == "" {
-			return nil, &apiError{http.StatusUnauthorized, "unknown agent"}
+			// The same answer as for a wrong signature: nobody can find
+			// out which agent IDs exist.
+			return nil, seal.ErrBadSig
 		}
 		return seal.ParseAgentKey(a.AgentKey)
 	})
@@ -137,6 +150,7 @@ func (s *Server) handleSealed(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "bad request", http.StatusBadRequest)
 			return
 		}
+		release() // a poll waits for commands; it must not hold an intake slot
 		resp, err := s.pollCore(r.Context(), env.Agent, req)
 		if err != nil {
 			if r.Context().Err() == nil {

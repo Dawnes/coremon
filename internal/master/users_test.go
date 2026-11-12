@@ -52,7 +52,7 @@ func TestUsersAndRoles(t *testing.T) {
 	pw, _ := os.ReadFile(filepath.Join(s.cfg.DataDir, "initial-password.txt"))
 
 	admin := newUIClient(t, srv.URL)
-	if _, body := admin.do("GET", "/api/ui/session", ""); !strings.Contains(body, `"initial_setup":true`) || !strings.Contains(body, `"version":"0.2.4"`) {
+	if _, body := admin.do("GET", "/api/ui/session", ""); !strings.Contains(body, `"initial_setup":true`) || strings.Contains(body, "version") {
 		t.Fatalf("login page before first password change: %s", body)
 	}
 	if code, body := admin.do("POST", "/api/ui/login", `{"username":"admin","password":"nope"}`); code != 401 || body != "wrong user name or password" {

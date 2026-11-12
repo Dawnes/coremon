@@ -41,12 +41,22 @@ func main() {
 	github := fs.String("github", os.Getenv("COREMON_GITHUB_REPO"), "GitHub repository (owner/name) publishing the version index; first start only, then editable in Settings")
 	indexURL := fs.String("index-url", "", "override the version index URL (testing)")
 	target := fs.String("target", "/usr/local/bin/coremon-master", "apply-update: binary to replace")
+	user := fs.String("user", "admin", "reset-apply: user name")
 	fs.Parse(args)
 	log.SetFlags(0)
 
 	switch cmd {
 	case "version":
 		fmt.Println(version)
+	case "reset-apply":
+		// The file part of coremon-reset, run by it as the owner of the data
+		// directory (never as root). Prints only the new password.
+		pw, err := master.ResetPassword(*data, *user)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+		fmt.Println(pw)
 	case "show-state":
 		// Read-only: prints the (obfuscated) state file readably.
 		if !isRoot() {

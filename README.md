@@ -55,6 +55,7 @@ the latest, **orange** otherwise.
 | What agents can do | Fixed actions only; package names validated (by the agent and the master); no arbitrary shell. |
 | What agents send | Checked by the master as if hostile: text cleaned (no control, invisible or shell/markup characters), update results validated (at most 5,000 packages, 2 MB), times in the future set to now, one open heartbeat per agent, about 10 requests per second per agent. |
 | Input | Names (systems 64, groups 48, notes 64 characters) may not contain control or invisible characters or ``< > " ' ` $ \ ; \| &`` — refused by the master, not only the website. Passwords: 5–40 characters when set. |
+| Exposure | Requests are limited before the sender is known: agent messages are admitted a few at a time (large ones two in total, one per address), failed logins 5 per address per 15 minutes (counted before the password is checked), registration attempts with a wrong token 5 per address per 15 minutes with one summary line in the audit log. With a valid token, one system per address may wait for approval at a time; the next one registers by itself after you approve or remove it. Strangers get no version number and no folder listings. |
 | Search engines | `X-Robots-Tag: noindex` on the website, install script and downloads, plus a robots meta tag. |
 | UI | User accounts with roles (Administrator, Read-only) checked by the master on every request; PBKDF2 passwords (5–40 characters), HttpOnly/Secure/SameSite=Strict session, anti-CSRF header, login rate limiting, strict CSP, audit log per user. Read-only users cannot see enrollment tokens. |
 
@@ -202,7 +203,7 @@ actions `Mutating`.
 | Master update logs | `journalctl -u coremon-master-update` |
 | Agent logs | `journalctl -u coremon-agent -f` |
 | Upgrade master by hand | re-run the `install-master.sh` one-liner |
-| Reset a password | `coremon-reset` as root (or `coremon-reset -user <name>` for another existing user): the master restarts briefly, the new generated password is shown on screen only and must be changed at the next sign-in |
+| Reset a password | `coremon-reset` as root (or `coremon-reset -user <name>` for another existing user): the master restarts briefly, the new generated password is shown on screen only and must be changed at the next sign-in. Root only stops and starts the service; the files are changed as the master's own user |
 | `coremon-reset` missing? | Masters updated from 0.3.11 or older get it at their next master update; or once, as root: `ln -sfn /usr/local/bin/coremon-master /usr/local/sbin/coremon-reset` (or re-run the installer) |
 | Look inside the stored state | `coremon-master show-state` as root (read-only; the file itself is not human-readable) |
 | Back up the master | `/var/lib/coremon-master` and `/etc/coremon-master` (the state is in `state.dat`: compressed and scrambled, not human-readable) |

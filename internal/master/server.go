@@ -14,6 +14,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"path"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -66,6 +67,9 @@ type Server struct {
 	pings         map[string]chan proto.Result // ping job ID -> waiting UI request; guarded by st.mu
 	polls         map[string]chan struct{}     // agent ID -> its open heartbeat (closed when replaced); guarded by st.mu
 	agentRate     rateLimiter                  // requests per agent
+	intake        intake                       // agent requests being read and processed
+	enrolls       enrollGuard                  // registration attempts per address
+	hashSem       chan struct{}                // password checks running at once
 	idx           *indexSync
 	nonces        nonceCache // sealed requests already seen (replay)
 	osi           osInfo     // OS support dates (distro-info-data)
@@ -189,7 +193,8 @@ func New(cfg Config) (*Server, error) {
 		return nil, fmt.Errorf("tls: %w", err)
 	}
 	s := &Server{cfg: cfg, st: st, sess: newSessions(), keys: keyState{cert: &cert, tlsPin: pin},
-		audit: &auditLog{path: filepath.Join(cfg.DataDir, "audit.jsonl")}, wakes: map[string]chan struct{}{}}
+		audit: &auditLog{path: filepath.Join(cfg.DataDir, "audit.jsonl")}, wakes: map[string]chan struct{}{},
+		hashSem: make(chan struct{}, hashAtOnce)}
 
 	// Release signing public key. In production it lives in a root-owned
 	// file written by the installer, so the (unprivileged) master cannot
@@ -356,6 +361,15 @@ func (s *Server) routes() http.Handler {
 	mux.HandleFunc("GET /", func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/" || r.URL.Path == "/index.html" {
 			w.Header().Set("Cache-Control", "no-cache")
+			files.ServeHTTP(w, r)
+			return
+		}
+		// Only files are served. A folder would otherwise get a generated
+		// listing of its contents from the file server.
+		name := strings.TrimPrefix(path.Clean(r.URL.Path), "/")
+		if st, err := fs.Stat(sub, name); err != nil || !st.Mode().IsRegular() || strings.HasSuffix(r.URL.Path, "/") {
+			http.NotFound(w, r)
+			return
 		}
 		files.ServeHTTP(w, r)
 	})

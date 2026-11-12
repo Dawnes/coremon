@@ -294,7 +294,6 @@ function showLogin() {
         <button class="btn primary" type="submit">Sign in</button>
       </form>
       ${session.initial_setup ? html`<div class="hint">First start? Sign in as <code>admin</code>; the initial password is in <code>/var/lib/coremon-master/initial-password.txt</code> on the master.</div>` : ''}
-      ${session.version ? html`<div class="loginver">Coremon v${session.version}</div>` : ''}
     </div></div>`);
   view = {
     acts: {
@@ -389,6 +388,12 @@ function route() {
     about: { about: AboutPage, license: LicensePage },
   };
   const views = { system: AgentPage };
+  // A system's ID from the address bar goes into request addresses: only a
+  // real ID is accepted (nothing like "../users").
+  if (parts[0] === 'system' && !/^a_[0-9a-f]{16}$/.test(parts[1] || '')) {
+    location.hash = '#/';
+    return;
+  }
   // A page of its own (e.g. a system) wins over the submenu it belongs to.
   const V = views[parts[0]] || (subViews[section] && subViews[section][sub]) || Dashboard;
   renderShell();
