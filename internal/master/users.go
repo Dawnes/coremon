@@ -86,10 +86,13 @@ type userView struct {
 	Permanent  bool   `json:"permanent"`
 	MustChange bool   `json:"must_change"`
 	Locked     bool   `json:"locked"`
+	TwoFA      bool   `json:"two_fa"`
+	TwoFASince int64  `json:"two_fa_since,omitempty"`
 }
 
 func viewUser(u *User) userView {
-	return userView{ID: u.ID, Name: u.Name, Role: u.Role, Created: u.Created, Permanent: u.Name == adminName, MustChange: u.MustChange, Locked: u.Locked}
+	return userView{ID: u.ID, Name: u.Name, Role: u.Role, Created: u.Created, Permanent: u.Name == adminName, MustChange: u.MustChange, Locked: u.Locked,
+		TwoFA: u.TOTPSecret != "", TwoFASince: u.TOTPSince}
 }
 
 func (s *Server) setCookie(w http.ResponseWriter, tok string) {
@@ -179,6 +182,13 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.sess.forgiveLogin(ip)
+	s.st.mu.Lock()
+	twoFA := u.TOTPSecret != ""
+	s.st.mu.Unlock()
+	if twoFA {
+		writeJSON(w, map[string]any{"code_required": true, "ticket": s.tfa.newTicket(uid, ip, time.Now())})
+		return
+	}
 	s.setCookie(w, s.sess.create(uid))
 	s.audit.write(name, ip, "login", "", "")
 	writeJSON(w, map[string]bool{"ok": true})
@@ -291,12 +301,17 @@ func (s *Server) handleUserUpdate(w http.ResponseWriter, r *http.Request) {
 		Role     *string `json:"role"`
 		Password *string `json:"password"`
 		Locked   *bool   `json:"locked"`
+		TwoFA    *bool   `json:"two_fa"`
 	}
 	if !readJSON(w, r, &req, 4096) {
 		return
 	}
 	if req.Locked != nil && (req.Role != nil || req.Password != nil) {
 		http.Error(w, "lock or unlock on its own", http.StatusBadRequest)
+		return
+	}
+	if req.TwoFA != nil {
+		s.adminTurnOff2FA(w, r, *req.TwoFA)
 		return
 	}
 	if req.Password != nil && passwordProblem(*req.Password) != "" {

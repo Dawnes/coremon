@@ -19,7 +19,8 @@ ports and no SSH are needed on your systems.
 * **Vulnerabilities**: known CVEs of those applications, with severity, fixes
   and actively exploited ones highlighted.
 * **Releases**: update the master and the agents from the website.
-* **Users**: administrators and read-only users; accounts can be locked.
+* **Users**: administrators and read-only users, optional two-factor sign-in
+  with an authenticator app, and accounts can be locked.
 * **History**: every job and an audit log of who did what.
 
 ## Security

@@ -177,6 +177,10 @@ type User struct {
 	MustChange bool `json:"must_change,omitempty"`
 
 	Locked bool `json:"locked,omitempty"`
+
+	TOTPSecret string `json:"totp_secret,omitempty"`
+	TOTPLast   int64  `json:"totp_last,omitempty"`
+	TOTPSince  int64  `json:"totp_since,omitempty"`
 }
 
 const adminName = "admin"

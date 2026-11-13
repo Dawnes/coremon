@@ -90,7 +90,7 @@ async function api(method, path, body) {
     body: body ? JSON.stringify(body) : undefined,
     credentials: 'same-origin',
   });
-  if (res.status === 401 && path !== 'login' && path !== 'password') {
+  if (res.status === 401 && !['login', 'login/code', 'password'].includes(path) && !path.startsWith('account/2fa/')) {
     showLogin();
     throw new Error('Session expired');
   }
@@ -383,6 +383,26 @@ function showLogin() {
       </form>
       ${session.initial_setup ? html`<div class="hint">First start? Sign in as <code>admin</code>; the initial password is in <code>/var/lib/coremon-master/initial-password.txt</code> on the master.</div>` : ''}
     </div></div>`);
+  const signedIn = async () => {
+    navOpen.reset();
+    if (location.hash && location.hash !== '#/') history.replaceState(null, '', location.pathname + location.search + '#/');
+    await boot();
+  };
+  const loginMsg = (m) => (/wrong code/i.test(m) ? 'Wrong code' : /wrong/i.test(m) ? 'Wrong user name or password'
+    : /too many wrong codes/i.test(m) ? 'Too many wrong codes for this account, try again in 15 minutes'
+      : /too many/i.test(m) ? 'Too many attempts, try again in a few minutes' : m);
+  // Second step: the code from the authenticator app.
+  const codeStep = (ticket) => {
+    setHTML($('#login-form'), html`
+      <div class="muted small">Enter the 6-digit code from your authenticator app.</div>
+      <label class="field">Code<input type="text" name="code" inputmode="numeric" autocomplete="one-time-code" pattern="[0-9 ]{6,7}" maxlength="7" required></label>
+      <input type="hidden" name="ticket" value="${ticket}">
+      <div class="loginerr" id="login-err" role="alert"></div>
+      <button class="btn primary" type="submit">Sign in</button>
+      <button class="btn ghost sm" type="button" data-act="login-back">Back</button>`);
+    $('#login-form').dataset.submit = 'code';
+    $('#login-form input[name=code]').focus();
+  };
   view = {
     acts: {
       login: async (f) => {
@@ -390,17 +410,31 @@ function showLogin() {
         err.textContent = '';
         f.password.classList.remove('bad');
         try {
-          await POST('login', { username: f.username.value, password: f.password.value });
-          navOpen.reset();
-          if (location.hash && location.hash !== '#/') history.replaceState(null, '', location.pathname + location.search + '#/');
-          await boot();
+          const res = await POST('login', { username: f.username.value, password: f.password.value });
+          if (res?.code_required) return codeStep(res.ticket);
+          await signedIn();
         } catch (e) {
-          const m = e.message || '';
-          err.textContent = /wrong/i.test(m) ? 'Wrong user name or password' : /too many/i.test(m) ? 'Too many attempts, try again in a few minutes' : m;
+          err.textContent = loginMsg(e.message || '');
           f.password.classList.add('bad');
           f.password.select();
         }
       },
+      code: async (f) => {
+        const err = $('#login-err');
+        err.textContent = '';
+        f.code.classList.remove('bad');
+        try {
+          await POST('login/code', { ticket: f.ticket.value, code: f.code.value.replace(/\s/g, '') });
+          await signedIn();
+        } catch (e) {
+          const m = e.message || '';
+          if (/expired/i.test(m)) return showLogin();
+          err.textContent = loginMsg(m);
+          f.code.classList.add('bad');
+          f.code.select();
+        }
+      },
+      'login-back': () => showLogin(),
     },
   };
   $('#login-form input[name=username]').focus();
@@ -416,7 +450,7 @@ const SUBNAV = {
   dashboard: () => [['overview', 'Overview'], ['list', 'List']],
   about: () => [['about', 'About'], ['license', 'License']],
   history: () => [['jobs', 'Jobs'], ['audit', 'Audit log']],
-  settings: () => [['general', 'General'], ['systems', 'Systems'], ['releases', 'Releases'], ...(canChange() ? [['users', 'Users']] : []), ['login', 'Login'], ['identity', 'Identity']],
+  settings: () => [['general', 'General'], ['systems', 'Systems'], ['releases', 'Releases'], ...(canChange() ? [['users', 'Users']] : []), ['account', 'My Account'], ['identity', 'Identity']],
 };
 function currentRoute() {
   const p = location.hash.replace(/^#\/?/, '').split('/');
@@ -476,7 +510,7 @@ function route() {
   const parts = location.hash.replace(/^#\/?/, '').split('/');
   const [section, sub] = currentRoute();
   const subViews = {
-    settings: { general: SettingsGeneral, systems: Systems, releases: Releases, users: SettingsUsers, login: SettingsLogin, identity: SettingsIdentity },
+    settings: { general: SettingsGeneral, systems: Systems, releases: Releases, users: SettingsUsers, account: SettingsAccount, identity: SettingsIdentity },
     history: { jobs: Jobs, audit: Audit },
     dashboard: { overview: Dashboard, list: SystemList },
     about: { about: AboutPage, license: LicensePage },
@@ -1840,7 +1874,7 @@ function Audit() {
 
 function settingsHead(sub, title, desc) {
   return html`${settingsTabs(sub)}<div class="page-head"><div><h1>${title}</h1><div class="sub">${desc}</div></div></div>
-    ${session.initial_password && sub !== 'login' ? html`<div class="notice">You are still using the generated initial password — <a href="#/settings/login">change it under Login</a>.</div>` : ''}`;
+    ${session.initial_password && sub !== 'account' ? html`<div class="notice">You are still using the generated initial password — <a href="#/settings/account">change it under My Account</a>.</div>` : ''}`;
 }
 
 function SettingsGeneral() {
@@ -2013,11 +2047,13 @@ function SettingsUsers() {
       <tbody>${st.users.map((u) => html`<tr><td><b>${u.name}</b>${u.id === me ? html` <span class="dim small">(you)</span>` : ''}
           ${u.permanent ? html` <span class="badge mute xs" title="The admin account cannot be removed or demoted">permanent</span>` : ''}
           ${u.must_change ? html` <span class="badge upd xs" title="Signs in with a generated password that must be changed first">must change password</span>` : ''}
-          ${u.locked ? html` <span class="badge sec xs" title="Cannot sign in until an administrator unlocks the account">locked</span>` : ''}</td>
+          ${u.locked ? html` <span class="badge sec xs" title="Cannot sign in until an administrator unlocks the account">locked</span>` : ''}
+          ${u.two_fa ? html` <span class="badge ok xs" title="Signs in with a code from an authenticator app${u.two_fa_since ? ' (since ' + fmtDate(u.two_fa_since) + ')' : ''}">2FA</span>` : ''}</td>
         <td>${u.id === me || u.permanent ? html`<span class="muted">${roleLabel(u.role)}</span>` : html`<select class="sm" data-change="role" data-id="${u.id}">${roleOpts(u.role)}</select>`}</td>
         <td class="muted">${fmtDate(u.created)}</td>
-        <td class="w1"><div class="row" style="flex-wrap:nowrap">${u.id === me ? html`<a class="btn ghost sm" href="#/settings/login">Change password</a>`
+        <td class="w1"><div class="row" style="flex-wrap:nowrap">${u.id === me ? html`<a class="btn ghost sm" href="#/settings/account">My Account</a>`
           : html`${u.locked ? html`<button class="btn sm" data-act="unlock" data-id="${u.id}">Unlock</button>` : html`<button class="btn warn sm" data-act="lock" data-id="${u.id}">Lock</button>`}
+            ${u.two_fa ? html`<button class="btn ghost sm" data-act="tfa-off" data-id="${u.id}">Turn off 2FA</button>` : ''}
             <button class="btn ghost sm" data-act="reset" data-id="${u.id}">Reset password</button>${u.permanent ? '' : html`<button class="btn danger sm" data-act="del" data-id="${u.id}" title="Remove">${icon('trash')}</button>`}`}</div></td></tr>`)}</tbody></table></div>`);
   }
   const userBy = (id) => st.users.find((u) => u.id === id);
@@ -2070,6 +2106,13 @@ function SettingsUsers() {
         toast(`${u.name} locked (signed out)`, 'ok');
         view.refresh();
       },
+      'tfa-off': async (t) => {
+        const u = userBy(t.dataset.id);
+        if (!(await confirmBox(`Turn off 2FA for ${u.name}?`, `${u.name} then signs in with the password only, and can turn 2FA on again in My Account. Use this when the authenticator app is lost.`, { okText: 'Turn off 2FA', danger: true }))) return;
+        await POST('users/' + u.id, { two_fa: false });
+        toast(`2FA turned off for ${u.name}`, 'ok');
+        view.refresh();
+      },
       unlock: async (t) => {
         const u = userBy(t.dataset.id);
         await POST('users/' + u.id, { locked: false });
@@ -2087,20 +2130,55 @@ function SettingsUsers() {
   };
 }
 
-function SettingsLogin() {
+// A QR code from the master (rows of '1' and '0') as SVG, with a quiet zone.
+function qrSVG(rows) {
+  const n = rows.length, q = 4;
+  let d = '';
+  rows.forEach((row, y) => { for (let x = 0; x < n; x++) if (row[x] === '1') d += `M${x + q},${y + q}h1v1h-1z`; });
+  return raw(`<svg class="qr" viewBox="0 0 ${n + 2 * q} ${n + 2 * q}" shape-rendering="crispEdges" role="img" aria-label="QR code"><rect width="100%" height="100%" fill="#fff"/><path d="${d}" fill="#000"/></svg>`);
+}
+
+function SettingsAccount() {
+  const st = { enroll: null };
+  function tfaBox() {
+    const u = session.user || {};
+    const codeField = html`<label class="field">Code from the app<input type="text" name="code" inputmode="numeric" autocomplete="one-time-code" pattern="[0-9 ]{6,7}" maxlength="7" required style="max-width:160px"></label>`;
+    let body;
+    if (u.two_fa) {
+      body = html`<div class="row"><span class="badge ok">${icon('check')} on</span><span class="muted small">${u.two_fa_since ? 'since ' + fmtDate(u.two_fa_since) : ''}</span></div>
+        <div class="muted small" style="margin-top:8px">Every sign-in asks for a code from your authenticator app.</div>
+        <form class="form" data-submit="tfa-disable">${codeField}<div><button class="btn danger">Turn off 2FA</button></div></form>`;
+    } else if (st.enroll) {
+      const key = st.enroll.secret.replace(/(.{4})/g, '$1 ').trim();
+      body = html`<div class="muted small">1. Scan this QR code with your authenticator app (Google or Microsoft Authenticator, 2FAS Auth, …).</div>
+        <div class="qrbox">${qrSVG(st.enroll.qr)}</div>
+        <div class="muted small">Can't scan? Enter this key by hand (time-based, 6 digits):</div>
+        <code class="tfakey">${key}</code>
+        <form class="form" data-submit="tfa-enable"><div class="muted small">2. Enter the code the app now shows to confirm.</div>${codeField}
+          <div class="row"><button class="btn primary">Turn on 2FA</button><button type="button" class="btn ghost" data-act="tfa-cancel">Cancel</button></div></form>`;
+    } else {
+      body = html`<div class="row"><span class="badge mute">off</span></div>
+        <div class="muted small" style="margin-top:8px">With 2FA, signing in also asks for a 6-digit code from an authenticator app on your phone.</div>
+        <div style="margin-top:12px"><button class="btn primary" data-act="tfa-start">${icon('shield')} Turn on 2FA</button></div>`;
+    }
+    setHTML($('#tfa'), html`<h2>Two-factor authentication (2FA)</h2>${body}`);
+    $('#tfa input[name=code]')?.focus();
+  }
   return {
     mount(el) {
-      const min = session.min_password || 5;
-      el.innerHTML = r(html`${settingsHead('login', 'Login', `Signed in as ${session.user?.name} (${roleLabel(session.user?.role)})`)}
+      el.innerHTML = r(html`${settingsHead('account', 'My Account', `Signed in as ${session.user?.name} (${roleLabel(session.user?.role)})`)}
         ${session.initial_password ? html`<div class="notice">You are still using the generated initial password — please change it.</div>` : ''}
-        <div class="panel panel-pad" style="max-width:480px"><h2>Change password</h2>
+        <div class="stack" style="max-width:480px">
+        <div class="panel panel-pad"><h2>Change password</h2>
           <form class="form" data-submit="pw" style="margin-top:0">
             <label class="field">Current password<input type="password" name="cur" autocomplete="current-password" required></label>
             <label class="field">New password (${pwRange()})<input type="password" name="new" autocomplete="new-password" minlength="${pwMin()}" maxlength="${pwMax()}" required></label>
             <label class="field">Repeat new password<input type="password" name="new2" autocomplete="new-password" minlength="${pwMin()}" maxlength="${pwMax()}" required></label>
             <div><button class="btn primary">Change password</button></div>
           </form>
-        </div>`);
+        </div>
+        <div class="panel panel-pad" id="tfa"></div></div>`);
+      tfaBox();
     },
     acts: {
       pw: async (f) => {
@@ -2110,6 +2188,21 @@ function SettingsLogin() {
         f.reset();
         toast('Password changed', 'ok');
         route();
+      },
+      'tfa-start': async () => { st.enroll = await POST('account/2fa/start'); tfaBox(); },
+      'tfa-cancel': () => { st.enroll = null; tfaBox(); },
+      'tfa-enable': async (f) => {
+        await POST('account/2fa/enable', { code: f.code.value.replace(/\s/g, '') });
+        st.enroll = null;
+        session.user = { ...session.user, two_fa: true, two_fa_since: Math.floor(Date.now() / 1000) };
+        toast('2FA is on (other sessions signed out)', 'ok');
+        tfaBox();
+      },
+      'tfa-disable': async (f) => {
+        await POST('account/2fa/disable', { code: f.code.value.replace(/\s/g, '') });
+        session.user = { ...session.user, two_fa: false, two_fa_since: 0 };
+        toast('2FA is off', 'ok');
+        tfaBox();
       },
     },
   };

@@ -185,6 +185,9 @@ input[type=checkbox] { accent-color: var(--cyan); width: 16px; height: 16px; cur
 .newbar { position: sticky; top: 12px; z-index: 5; display: flex; justify-content: center; height: 0; overflow: visible; }
 .newbar .btn { box-shadow: 0 8px 24px -8px rgba(0, 0, 0, 0.8); }
 .endline { display: flex; align-items: center; justify-content: center; gap: 8px; padding: 16px 0 4px; color: var(--dim); font-size: 12.5px; }
+.qrbox { margin: 12px 0; width: 220px; padding: 0; border-radius: var(--r-md); overflow: hidden; }
+.qrbox svg { display: block; width: 100%; height: auto; }
+code.tfakey { display: inline-block; margin: 6px 0 4px; padding: 6px 10px; background: var(--accent); border-radius: var(--r-sm); font-size: 14px; letter-spacing: 0.04em; user-select: all; word-break: break-all; }
 ul.plainlist { margin: 0; padding-left: 18px; line-height: 1.8; }
 
 .linkbtn { display: inline-flex; align-items: center; gap: 4px; padding: 2px; margin: -2px; background: none; border: 0; border-radius: var(--r-sm); font: inherit; color: inherit; cursor: pointer; }

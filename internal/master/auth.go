@@ -118,6 +118,17 @@ func (s *sessions) destroy(tok string) {
 	s.mu.Unlock()
 }
 
+func (s *sessions) destroyUserExcept(userID, keepTok string) {
+	keep := sha256hex(keepTok)
+	s.mu.Lock()
+	for h, se := range s.m {
+		if se.user == userID && h != keep {
+			delete(s.m, h)
+		}
+	}
+	s.mu.Unlock()
+}
+
 func (s *sessions) destroyUser(userID string) {
 	s.mu.Lock()
 	for h, se := range s.m {

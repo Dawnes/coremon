@@ -69,6 +69,7 @@ type Server struct {
 	intake        intake
 	enrolls       enrollGuard
 	hashSem       chan struct{}
+	tfa           twoFAState
 	idx           *indexSync
 	nonces        nonceCache
 	osi           osInfo
@@ -262,14 +263,18 @@ func ResetPassword(dataDir, name string) (string, error) {
 		return "", fmt.Errorf("there is no user %q; administrators: %s", name, strings.Join(admins, ", "))
 	}
 	pw := randHex(8)
-	wasLocked := u.Locked
+	wasLocked, had2FA := u.Locked, u.TOTPSecret != ""
 	u.PasswordHash, u.MustChange, u.Locked = hashPassword(pw), true, false
+	u.TOTPSecret, u.TOTPLast, u.TOTPSince = "", 0, 0
 	if err := st.writeNow(); err != nil {
 		return "", err
 	}
 	note := "new generated password via coremon-reset on the master (must be changed at the next sign-in)"
 	if wasLocked {
 		note += "; account unlocked"
+	}
+	if had2FA {
+		note += "; 2FA turned off"
 	}
 	(&auditLog{path: filepath.Join(dataDir, "audit.jsonl")}).write("root", "", "password.reset", name, note)
 	return pw, nil
@@ -300,11 +305,15 @@ func (s *Server) routes() http.Handler {
 
 	mux.HandleFunc("GET /api/ui/session", s.handleSession)
 	mux.HandleFunc("POST /api/ui/login", s.handleLogin)
+	mux.HandleFunc("POST /api/ui/login/code", s.handleLoginCode)
 	mux.HandleFunc("POST /api/ui/logout", s.handleLogout)
 
 	view := func(p string, h http.HandlerFunc) { mux.HandleFunc(p, s.requireUI(permView, h)) }
 	change := func(p string, h http.HandlerFunc) { mux.HandleFunc(p, s.requireUI(permChange, h)) }
 	view("POST /api/ui/password", s.handlePassword)
+	view("POST /api/ui/account/2fa/start", s.handle2FAStart)
+	view("POST /api/ui/account/2fa/enable", s.handle2FAEnable)
+	view("POST /api/ui/account/2fa/disable", s.handle2FADisable)
 	view("GET /api/ui/overview", s.handleOverview)
 	view("GET /api/ui/agents/{id}", s.handleAgentGet)
 	view("POST /api/ui/agents/{id}/ping", s.handlePing)
