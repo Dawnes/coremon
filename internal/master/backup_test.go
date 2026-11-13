@@ -160,7 +160,7 @@ func TestBackupDownloadAndRestore(t *testing.T) {
 		b, _ := io.ReadAll(resp.Body)
 		return resp.StatusCode, string(b)
 	}
-	if code, body := upload("wrong"); code != 400 || !strings.Contains(body, "wrong password") {
+	if code, body := upload("wrong"); code != 400 || !strings.Contains(body, "wrong encryption password") {
 		t.Fatalf("wrong password: %d %s", code, body)
 	}
 	code, body := upload("secret")

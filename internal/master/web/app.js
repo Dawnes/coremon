@@ -2141,7 +2141,7 @@ function SettingsBackups() {
     const sources = [...rows, ...(d.before ? [[0, d.before]] : [])].filter(([, b]) => b);
     setHTML($('#bk'), html`
       <div class="panel panel-pad"><h2>Backup</h2>
-        <div class="muted small">Stored in <code>${d.dir}</code>, readable only by the coremon user and root. Slot 1 always holds the newest backup.</div>
+        <div class="muted small">Stored in <code>${d.dir}</code>.</div>
         <table class="tbl" style="margin-top:12px"><tbody>
           ${rows.map(([n, b]) => html`<tr><td class="w1"><b>${slotName(n)}</b></td><td>${b ? made(b) : html`<span class="dim">empty</span>`}</td>
             <td class="w1">${b ? html`<button class="btn danger sm" data-act="del" data-slot="${n}">${icon('trash')} Delete</button>` : ''}</td></tr>`)}
@@ -2163,7 +2163,7 @@ function SettingsBackups() {
           <td class="w1"><button class="btn warn sm" data-act="check" data-slot="${n}">Restore…</button></td></tr>`)}</tbody></table>` : html`<div class="dim small" style="margin-top:10px">No local backups yet.</div>`}
         <form class="row" data-submit="check-file" style="margin-top:16px;align-items:flex-end">
           <label class="field">Restore from a downloaded file<input type="file" name="file" accept=".cmbak" required></label>
-          <label class="field">Its encryption password<input type="password" name="pw" autocomplete="off" required style="width:200px"></label>
+          <label class="field">Encryption password<input type="password" name="pw" autocomplete="off" required style="width:200px"></label>
           <button class="btn warn">Check file…</button>
         </form>
       </div>`);
@@ -2215,17 +2215,17 @@ function SettingsBackups() {
       download: () => {
         const min = st.d.min_password, max = st.d.max_password;
         openModal(html`<h3>Download backup</h3>
-          <div class="muted small" style="margin-top:6px">The file is encrypted with the password you choose here. It is needed to restore the backup and cannot be recovered. Use a long one.</div>
+          <div class="muted small" style="margin-top:6px">The file is encrypted with the encryption password you choose here. It is needed to restore the backup and cannot be recovered. Use a long one.</div>
           <form class="form" data-submit="go">
             <label class="field">Code from your authenticator app<input type="text" name="code" inputmode="numeric" autocomplete="one-time-code" pattern="[0-9 ]{6,7}" maxlength="7" required style="max-width:160px"></label>
             <label class="field">Encryption password (${min}–${max} characters)<input type="password" name="pw" autocomplete="new-password" minlength="${min}" maxlength="${max}" required></label>
-            <label class="field">Repeat the password<input type="password" name="pw2" autocomplete="new-password" minlength="${min}" maxlength="${max}" required></label>
+            <label class="field">Repeat the encryption password<input type="password" name="pw2" autocomplete="new-password" minlength="${min}" maxlength="${max}" required></label>
             <div class="actions"><button type="button" class="btn ghost" data-act="cancel">Cancel</button><button class="btn primary">${icon('download')} Create and download</button></div>
           </form>`, {
           acts: {
             cancel: () => closeModal(),
             go: async (f) => {
-              if (f.pw.value !== f.pw2.value) return toast('The passwords do not match', 'err');
+              if (f.pw.value !== f.pw2.value) return toast('The encryption passwords do not match', 'err');
               const res = await fetch('/api/ui/backups/download', { method: 'POST', headers: { 'X-Coremon': '1', 'Content-Type': 'application/json' },
                 body: JSON.stringify({ code: f.code.value.replace(/\s/g, ''), password: f.pw.value }) });
               if (!res.ok) throw new Error((await res.text()).trim() || res.statusText);

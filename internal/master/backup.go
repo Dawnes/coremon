@@ -273,7 +273,7 @@ func decryptBackup(b []byte, pw string) ([]byte, error) {
 	g, _ := cipher.NewGCM(blk)
 	plain, err := g.Open(nil, rest[16:28], rest[28:], []byte(backupEncMagic))
 	if err != nil {
-		return nil, errors.New("wrong password, or the file is damaged")
+		return nil, errors.New("wrong encryption password, or the file is damaged")
 	}
 	return plain, nil
 }
