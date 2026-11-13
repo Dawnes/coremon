@@ -846,15 +846,15 @@ function Dashboard() {
     setHTML($('#d-stats'), html`
       <div class="panel stat c-green"><div class="label">Systems online</div><div class="value">${online}<small> / ${active.length}</small></div>
         ${reportOnly ? html`<div class="statnote" title="Report-only systems only report; no checks, installs or reboots">${icon('pause')} ${reportOnly} report only</div>` : ''}</div>
-      <div class="panel stat ${oc} ${oldest ? 'click' : ''}" ${oldest ? raw(`data-act="open-agent" data-id="${esc(oldest.a.id)}"`) : ''} title="${oldest ? 'Oldest information shown on this dashboard: ' + fmtDate(oldest.ts, true) : ''}">
-        <div class="label">Oldest information</div>
-        ${oldest ? html`<div class="value datev">${fmtDate(oldest.ts)}</div><div class="statnote">${ago(oldest.ts)} · ${oldest.a.name} (${oldest.a.online ? 'last update check' : 'offline'})</div>`
-          : allCurrent ? html`<div class="value datev">All systems current</div><div class="statnote">all checked within ${hours} h</div>`
-          : html`<div class="value">—</div><div class="statnote">nothing to report</div>`}</div>
       <div class="panel stat c-amber"><div class="label">Pending updates</div><div class="value">${totUpd}</div></div>
       <div class="panel stat c-red"><div class="label">Security updates</div><div class="value">${totSec}</div></div>
       <div class="panel stat c-violet"><div class="label">Reboot required</div><div class="value">${reboot}</div></div>
-      <div class="panel stat c-cyan"><div class="label">Active jobs</div><div class="value">${d.active_jobs}</div></div>`);
+      <div class="panel stat c-cyan"><div class="label">Active jobs</div><div class="value">${d.active_jobs}</div></div>
+      <div class="panel stat ${oc} ${oldest ? 'click' : ''}" ${oldest ? raw(`data-act="open-agent" data-id="${esc(oldest.a.id)}"`) : ''} title="${oldest ? 'Oldest information shown on this dashboard: ' + fmtDate(oldest.ts, true) : ''}">
+        <div class="label">Oldest information</div>
+        ${oldest ? html`<div class="value datev">${fmtDate(oldest.ts)}</div><div class="statnote">${ago(oldest.ts)} · ${oldest.a.name} (${oldest.a.online ? 'last update check' : 'offline'})</div>`
+          : allCurrent ? html`<div class="value datev">All current</div><div class="statnote">all checked within ${hours} h</div>`
+          : html`<div class="value">—</div><div class="statnote">nothing to report</div>`}</div>`);
     setHTML($('#d-chips'), filterChips(A, st.filter, (a, f) => agentMatches(a, f, st.q, d.groups)));
     if (!A.length) {
       setHTML($('#d-cards'), html`<div class="panel empty"><div class="big">🛰️</div><div>No systems yet.</div>${ifChange(html`<div style="margin-top:14px"><a class="btn primary" href="#/settings/systems">${icon('plus')} Add your first system</a></div>`)}</div>`);
@@ -1669,6 +1669,9 @@ function Jobs() {
 }
 
 // ---------- Releases ----------
+// Systems whose agent a group button updates: active (not report-only)
+// with an older agent.
+const outdatedIn = (list) => list.filter((a) => a.status === 'active' && !a.core_is_latest);
 function Releases() {
   const st = { rel: null, data: null, checking: false };
   function render() {
@@ -1698,13 +1701,25 @@ function Releases() {
         <tbody>${repo.core.map((v, i) => html`<tr><td><span class="verpill ${i === 0 ? 'ok' : 'old'}">${v.version}</span> ${i === 0 ? html`<span class="badge ok">latest</span>` : ''}</td>
           <td class="muted">${fmtDate(published.get(v.version))}</td><td>${v.platforms.map((p) => html`<span class="tag mono">${p}</span> `)}</td><td class="muted">${onVer(v.version)}</td></tr>`)}</tbody></table>`
         : html`<div class="muted">No agent versions downloaded yet.</div>`}</div>`);
-    const outdated = agents.filter((a) => !a.core_is_latest && repo.core_latest);
+    // Per group, in the order of the groups (as on the dashboard), systems
+    // a-z, ungrouped last. Each group can update its outdated agents at once.
+    const groups = d.groups || [];
+    const known = new Set(groups.map((g) => g.id));
+    const secs = [...groups.map((g) => [g.id, g.name, agents.filter((a) => a.group_id === g.id)]), ['', 'Ungrouped', agents.filter((a) => !known.has(a.group_id))]]
+      .filter(([, , list]) => list.length);
+    const row = (a) => html`<tr><td>${agentDot(a)} <a href="#/system/${a.id}"><b>${a.name}</b></a></td><td>${verPill(a)}</td>
+        ${ifChange(html`<td><form class="row" style="flex-wrap:nowrap" data-submit="set" data-id="${a.id}"><select name="v">${versionOptions({ core: repo.core.filter((v) => v.platforms.includes(`${a.facts.os}-${a.facts.arch}`) && !(minAgent && versionLess(v.version, minAgent))) }, a.core_version)}</select><button class="btn sm" ${a.status === 'active' ? '' : 'disabled'}>Apply</button></form></td>`)}</tr>`;
+    const groupBtn = (gid, name, list) => {
+      const n = outdatedIn(list).length;
+      return n && canChange() && repo.core_latest
+        ? html`<button class="btn sm" data-act="group-latest" data-gid="${gid}">${icon('up')} Update ${n} agent${n === 1 ? '' : 's'} in ${name} to ${repo.core_latest}</button>`
+        : html`<span class="dim small">${repo.core_latest && list.every((a) => a.core_is_latest) ? 'all on the latest version' : ''}</span>`;
+    };
     setHTML($('#r-rollout'), agents.length ? html`
-      <div class="row" style="margin:6px 0 12px"><h2 style="font-size:15px;margin:0">Agents per system</h2><span class="spacer"></span>
-        ${outdated.length && canChange() ? html`<button class="btn sm" data-act="all-latest">${icon('up')} Update ${outdated.length} outdated agent(s) to ${repo.core_latest}</button>` : ''}</div>
-      <div class="panel"><table class="tbl"><thead><tr><th>System</th><th>Agent</th>${ifChange(html`<th>Change to</th>`)}</tr></thead>
-      <tbody>${[...agents].sort(byName).map((a) => html`<tr><td>${agentDot(a)} <a href="#/system/${a.id}"><b>${a.name}</b></a></td><td>${verPill(a)}</td>
-        ${ifChange(html`<td><form class="row" style="flex-wrap:nowrap" data-submit="set" data-id="${a.id}"><select name="v">${versionOptions({ core: repo.core.filter((v) => v.platforms.includes(`${a.facts.os}-${a.facts.arch}`) && !(minAgent && versionLess(v.version, minAgent))) }, a.core_version)}</select><button class="btn sm" ${a.status === 'active' ? '' : 'disabled'}>Apply</button></form></td>`)}</tr>`)}</tbody></table></div>` : '');
+      <h2 style="font-size:15px;margin:6px 0 12px">Agents per system</h2>
+      <div class="panel"><table class="tbl syslist"><thead><tr><th>System</th><th>Agent</th>${ifChange(html`<th>Change to</th>`)}</tr></thead>
+      ${secs.map(([gid, name, list]) => html`<tbody><tr class="grow"><td colspan="${canChange() ? 3 : 2}"><div class="row" style="flex-wrap:nowrap">${name} <span class="dim small">${list.length}</span><span class="spacer"></span>${groupBtn(gid, name, list)}</div></td></tr>
+        ${[...list].sort(byName).map(row)}</tbody>`)}</table></div>` : '');
     renderQueue();
   }
   // Detected OS releases (each once) and the vulnerability lookups that run
@@ -1759,12 +1774,18 @@ function Releases() {
         if (!(await confirmBox(`${down ? 'Downgrade' : 'Upgrade'} the agent on ${a.name}?`, `${cur} → ${v}. The agent downloads the signed binary, verifies it and restarts.`, { okText: down ? 'Downgrade' : 'Upgrade' }))) return;
         await setAgentVersion(a, v);
       },
-      'all-latest': async () => {
-        const l = st.rel.repo.core_latest;
-        const list = st.data.agents.filter((a) => a.status === 'active' && !a.core_is_latest);
-        if (!(await confirmBox(`Update ${list.length} agent(s) to ${l}?`, list.map((a) => `${a.name} (${a.core_version})`).join(', '), { okText: 'Update agents' }))) return;
+      'group-latest': async (t) => {
+        const l = st.rel.repo.core_latest, gid = t.dataset.gid;
+        const groups = st.data.groups || [];
+        const known = new Set(groups.map((g) => g.id));
+        const name = groups.find((g) => g.id === gid)?.name || 'Ungrouped';
+        const list = outdatedIn(st.data.agents.filter((a) => !a.legacy && (gid ? a.group_id === gid : !known.has(a.group_id)))).sort(byName);
+        if (!list.length) return;
+        if (!(await confirmBox(`Update ${list.length} agent${list.length === 1 ? '' : 's'} in ${name} to ${l}?`,
+          html`${list.map((a) => html`<div>${a.name} <span class="dim">(${a.core_version}${a.online ? '' : ', offline: updates when it is online'})</span></div>`)}`,
+          { okText: 'Update agents' }))) return;
         for (const a of list) await POST(`agents/${a.id}/core`, { version: l });
-        toast('Requested', 'ok'); view.refresh();
+        toast(`Update to ${l} requested for ${list.length} system${list.length === 1 ? '' : 's'}`, 'ok'); view.refresh();
       },
     },
   };
