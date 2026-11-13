@@ -352,6 +352,7 @@ func (s *Server) handleRemove(w http.ResponseWriter, r *http.Request) {
 	delete(s.st.st.Agents, a.ID)
 	delete(s.wakes, a.ID)
 	s.st.markDirty()
+	s.kickVulns() // its lookups are cleaned up
 	s.audit.writeAgent(actor(r), clientIP(r), "agent.removed", a, "")
 	writeJSON(w, map[string]any{"removed": true})
 }

@@ -291,8 +291,12 @@ func (s *Server) wantedKeysLocked() map[string]bool {
 func (s *Server) vulnLoop(stop <-chan struct{}) {
 	t := time.NewTicker(vulnQuickEvery)
 	defer t.Stop()
+	kicked := false
 	for {
 		s.vulnTick(false)
+		if kicked { // a new scan arrived or a system was removed (or a setting changed)
+			s.pruneVulns()
+		}
 		s.vul.mu.Lock()
 		s.vul.nextTick = time.Now().Add(vulnQuickEvery)
 		s.vul.mu.Unlock()
@@ -300,7 +304,9 @@ func (s *Server) vulnLoop(stop <-chan struct{}) {
 		case <-stop:
 			return
 		case <-t.C:
+			kicked = false
 		case <-s.vul.kick:
+			kicked = true
 		}
 	}
 }
@@ -461,41 +467,12 @@ func (s *Server) runVulnCheck(keys map[string]bool, full bool) (err error) {
 		return nil
 	}
 	// 4. Forget what no system needs any more.
+	s.st.mu.Lock()
+	inUse := s.ecosInUseLocked()
+	s.st.mu.Unlock()
 	s.vul.mu.Lock()
-	used := map[string]bool{}
-	for k, q := range s.vul.d.Queries {
-		if !keys[k] {
-			delete(s.vul.d.Queries, k)
-			continue
-		}
-		for _, id := range q.IDs {
-			used[id] = true
-		}
-	}
-	for e := range s.vul.d.Ecos { // releases no system runs any more (e.g. after an upgrade)
-		if !ecos[e] {
-			delete(s.vul.d.Ecos, e)
-		}
-	}
-	cves := map[string]bool{}
-	for id, r := range s.vul.d.Records {
-		if !used[id] {
-			delete(s.vul.d.Records, id)
-			continue
-		}
-		cves[r.CVE] = true
-	}
-	for c := range s.vul.d.CVEs {
-		if !cves[c] {
-			delete(s.vul.d.CVEs, c)
-		}
-	}
-	list := make([]string, 0, len(cves))
-	for c := range cves {
-		list = append(list, c)
-	}
+	list := s.pruneLocked(keys, inUse)
 	s.vul.mu.Unlock()
-	sort.Strings(list)
 
 	// 5. Exploited (KEV) and chance of exploitation (EPSS). Failures here do
 	// not spoil the check: the previous lists stay.
@@ -506,6 +483,77 @@ func (s *Server) runVulnCheck(keys map[string]bool, full bool) (err error) {
 		log.Printf("vulnerability check: EPSS: %v", err)
 	}
 	return nil
+}
+
+// ---- cleanup ----
+
+// The cleanup runs when a system is removed, when a new application scan
+// arrives, on Check now and with every full check. It only compares what
+// the systems run with what is stored: no network traffic.
+
+// ecosInUseLocked: the releases the current systems run. Caller holds s.st.mu.
+func (s *Server) ecosInUseLocked() map[string]bool {
+	out := map[string]bool{}
+	for _, a := range s.st.st.Agents {
+		if e := osvEcosystem(a.Facts); e != "" && a.Status != StatusPending && !s.belowMin(a) {
+			out[e] = true
+		}
+	}
+	return out
+}
+
+// pruneLocked forgets lookups, records, CVEs (with their NVD and EPSS data,
+// so NVD only looks up what a system still needs) and releases that no
+// current system needs. Returns the CVEs kept. Caller holds s.vul.mu.
+func (s *Server) pruneLocked(keys, ecos map[string]bool) []string {
+	d := &s.vul.d
+	used := map[string]bool{}
+	for k, q := range d.Queries {
+		if !keys[k] {
+			delete(d.Queries, k)
+			continue
+		}
+		for _, id := range q.IDs {
+			used[id] = true
+		}
+	}
+	for e := range d.Ecos {
+		if !ecos[e] {
+			delete(d.Ecos, e)
+		}
+	}
+	cves := map[string]bool{}
+	for id, r := range d.Records {
+		if !used[id] {
+			delete(d.Records, id)
+			continue
+		}
+		cves[r.CVE] = true
+	}
+	for c := range d.CVEs {
+		if !cves[c] {
+			delete(d.CVEs, c)
+		}
+	}
+	list := make([]string, 0, len(cves))
+	for c := range cves {
+		list = append(list, c)
+	}
+	sort.Strings(list)
+	return list
+}
+
+// pruneVulns runs the cleanup on its own.
+func (s *Server) pruneVulns() {
+	s.st.mu.Lock()
+	keys, ecos := s.wantedKeysLocked(), s.ecosInUseLocked()
+	s.st.mu.Unlock()
+	s.vul.run.Lock() // not while a check is busy
+	defer s.vul.run.Unlock()
+	s.vul.mu.Lock()
+	s.pruneLocked(keys, ecos)
+	s.saveVulnsLocked()
+	s.vul.mu.Unlock()
 }
 
 // ---- OSV ----

@@ -1735,7 +1735,7 @@ function Releases() {
   return {
     interval: 5000,
     mount(el) {
-      el.innerHTML = r(html`${settingsTabs('releases')}<div class="page-head"><div><h1>Releases</h1><div class="sub">Master and agent versions, each on their own release track</div></div></div>
+      el.innerHTML = r(html`${settingsTabs('releases')}<div class="page-head"><div><h1>Releases</h1><div class="sub">Versions and releases</div></div></div>
         <div class="stack"><div id="r-index"></div><div class="grid2"><div id="r-master"></div><div id="r-agents"></div></div><div id="r-rollout"></div><div id="r-vulns"></div></div>`);
     },
     async refresh() { [st.rel, st.data, st.queue] = await Promise.all([GET('releases'), GET('overview'), GET('vulns/queue')]); render(); },
@@ -1982,11 +1982,13 @@ function SettingsUsers() {
     setHTML($('#u-list'), html`<div class="panel"><table class="tbl"><thead><tr><th>User</th><th>Role</th><th>Created</th><th class="w1"></th></tr></thead>
       <tbody>${st.users.map((u) => html`<tr><td><b>${u.name}</b>${u.id === me ? html` <span class="dim small">(you)</span>` : ''}
           ${u.permanent ? html` <span class="badge mute xs" title="The admin account cannot be removed or demoted">permanent</span>` : ''}
-          ${u.must_change ? html` <span class="badge upd xs" title="Signs in with a generated password that must be changed first">must change password</span>` : ''}</td>
+          ${u.must_change ? html` <span class="badge upd xs" title="Signs in with a generated password that must be changed first">must change password</span>` : ''}
+          ${u.locked ? html` <span class="badge sec xs" title="Cannot sign in until an administrator unlocks the account">locked</span>` : ''}</td>
         <td>${u.id === me || u.permanent ? html`<span class="muted">${roleLabel(u.role)}</span>` : html`<select class="sm" data-change="role" data-id="${u.id}">${roleOpts(u.role)}</select>`}</td>
         <td class="muted">${fmtDate(u.created)}</td>
         <td class="w1"><div class="row" style="flex-wrap:nowrap">${u.id === me ? html`<a class="btn ghost sm" href="#/settings/login">Change password</a>`
-          : html`<button class="btn ghost sm" data-act="reset" data-id="${u.id}">Reset password</button>${u.permanent ? '' : html`<button class="btn danger sm" data-act="del" data-id="${u.id}" title="Remove">${icon('trash')}</button>`}`}</div></td></tr>`)}</tbody></table></div>`);
+          : html`${u.locked ? html`<button class="btn sm" data-act="unlock" data-id="${u.id}">Unlock</button>` : html`<button class="btn warn sm" data-act="lock" data-id="${u.id}">Lock</button>`}
+            <button class="btn ghost sm" data-act="reset" data-id="${u.id}">Reset password</button>${u.permanent ? '' : html`<button class="btn danger sm" data-act="del" data-id="${u.id}" title="Remove">${icon('trash')}</button>`}`}</div></td></tr>`)}</tbody></table></div>`);
   }
   const userBy = (id) => st.users.find((u) => u.id === id);
   return {
@@ -2030,6 +2032,19 @@ function SettingsUsers() {
           <div class="actions"><button type="button" class="btn ghost" data-act="cancel">Cancel</button><button class="btn primary">Set password</button></div></form>`, {
           acts: { cancel: () => closeModal(), save: async (f) => { await POST('users/' + u.id, { password: f.pw.value }); closeModal(); toast(`Password of ${u.name} changed`, 'ok'); } },
         });
+      },
+      lock: async (t) => {
+        const u = userBy(t.dataset.id);
+        if (!(await confirmBox(`Lock ${u.name}?`, `${u.name} is signed out at once and cannot sign in until an administrator unlocks the account. Nothing else changes.`, { okText: 'Lock account', danger: true }))) return;
+        await POST('users/' + u.id, { locked: true });
+        toast(`${u.name} locked (signed out)`, 'ok');
+        view.refresh();
+      },
+      unlock: async (t) => {
+        const u = userBy(t.dataset.id);
+        await POST('users/' + u.id, { locked: false });
+        toast(`${u.name} unlocked`, 'ok');
+        view.refresh();
       },
       del: async (t) => {
         const u = userBy(t.dataset.id);

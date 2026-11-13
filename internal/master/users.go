@@ -69,7 +69,7 @@ func (s *Server) requireUI(p perm, h http.HandlerFunc) http.HandlerFunc {
 			uc = *u
 		}
 		s.st.mu.Unlock()
-		if u == nil {
+		if u == nil || uc.Locked { // locking also ends the sessions; this is the safety net
 			http.Error(w, "not logged in", http.StatusUnauthorized)
 			return
 		}
@@ -93,10 +93,11 @@ type userView struct {
 	Created    int64  `json:"created"`
 	Permanent  bool   `json:"permanent"`   // the admin account
 	MustChange bool   `json:"must_change"` // still on a generated password
+	Locked     bool   `json:"locked"`      // cannot sign in until an administrator unlocks it
 }
 
 func viewUser(u *User) userView {
-	return userView{ID: u.ID, Name: u.Name, Role: u.Role, Created: u.Created, Permanent: u.Name == adminName, MustChange: u.MustChange}
+	return userView{ID: u.ID, Name: u.Name, Role: u.Role, Created: u.Created, Permanent: u.Name == adminName, MustChange: u.MustChange, Locked: u.Locked}
 }
 
 func (s *Server) setCookie(w http.ResponseWriter, tok string) {
@@ -167,15 +168,23 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 	}
 	s.st.mu.Lock()
 	u := s.st.userByName(name)
-	hash, uid := dummyHash, ""
+	hash, uid, locked := dummyHash, "", false
 	if u != nil {
-		hash, uid, name = u.PasswordHash, u.ID, u.Name
+		hash, uid, name, locked = u.PasswordHash, u.ID, u.Name, u.Locked
 	}
 	s.st.mu.Unlock()
 	if !checkPassword(hash, req.Password) || uid == "" {
 		s.audit.write(cleanText(name, 32), ip, "login.failed", "", "")
 		time.Sleep(400 * time.Millisecond)
 		http.Error(w, "wrong user name or password", http.StatusUnauthorized)
+		return
+	}
+	// Only told with the right password, so it gives away nothing about
+	// which accounts exist. Counts as a failed attempt.
+	if locked {
+		s.audit.write(name, ip, "login.locked", "", "account is locked")
+		time.Sleep(400 * time.Millisecond)
+		http.Error(w, "Your account is locked", http.StatusForbidden)
 		return
 	}
 	s.sess.forgiveLogin(ip)
@@ -291,13 +300,19 @@ func (s *Server) handleUserCreate(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, viewUser(u))
 }
 
-// handleUserUpdate changes a user's role and/or sets a new password.
+// handleUserUpdate changes a user's role, sets a new password, and/or
+// locks or unlocks the account.
 func (s *Server) handleUserUpdate(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Role     *string `json:"role"`
 		Password *string `json:"password"`
+		Locked   *bool   `json:"locked"`
 	}
 	if !readJSON(w, r, &req, 4096) {
+		return
+	}
+	if req.Locked != nil && (req.Role != nil || req.Password != nil) {
+		http.Error(w, "lock or unlock on its own", http.StatusBadRequest) // so a refused part never leaves half a change
 		return
 	}
 	if req.Password != nil && passwordProblem(*req.Password) != "" {
@@ -316,6 +331,23 @@ func (s *Server) handleUserUpdate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	signOut := false
+	if req.Locked != nil && *req.Locked != u.Locked {
+		if u.ID == userFrom(r).ID {
+			http.Error(w, "you cannot lock your own account", http.StatusConflict)
+			return
+		}
+		if *req.Locked && s.st.lastActiveAdmin(u) {
+			http.Error(w, "this is the last administrator who can sign in; it cannot be locked", http.StatusConflict)
+			return
+		}
+		u.Locked = *req.Locked
+		if u.Locked {
+			s.audit.write(actor(r), clientIP(r), "user.locked", u.Name, "")
+			signOut = true
+		} else {
+			s.audit.write(actor(r), clientIP(r), "user.unlocked", u.Name, "")
+		}
+	}
 	if req.Role != nil && *req.Role != u.Role {
 		if !validRole(*req.Role) {
 			http.Error(w, "invalid role", http.StatusBadRequest)
@@ -325,8 +357,8 @@ func (s *Server) handleUserUpdate(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "the admin account is permanent and stays administrator", http.StatusConflict)
 			return
 		}
-		if u.Role == RoleAdmin && s.st.admins() == 1 {
-			http.Error(w, "this is the last administrator; make someone else administrator first", http.StatusConflict)
+		if s.st.lastActiveAdmin(u) {
+			http.Error(w, "this is the last administrator who can sign in; make someone else administrator (or unlock one) first", http.StatusConflict)
 			return
 		}
 		s.audit.write(actor(r), clientIP(r), "user.role", u.Name, u.Role+" → "+*req.Role)
@@ -363,8 +395,8 @@ func (s *Server) handleUserDelete(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "the admin account is permanent and cannot be removed", http.StatusConflict)
 		return
 	}
-	if u.Role == RoleAdmin && s.st.admins() == 1 {
-		http.Error(w, "this is the last administrator", http.StatusConflict)
+	if s.st.lastActiveAdmin(u) {
+		http.Error(w, "this is the last administrator who can sign in", http.StatusConflict)
 		return
 	}
 	keep := s.st.st.Users[:0]

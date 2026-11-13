@@ -275,6 +275,39 @@ func TestVulnCheck(t *testing.T) {
 		t.Errorf("queue with a new version: %+v", items)
 	}
 
+	// The cleanup on its own (after a scan or a removed system): the second
+	// system's release and lookups go once it is removed.
+	if err := s.vulnTick(false); err != nil { // the new OpenSSL version is looked up first
+		t.Fatal(err)
+	}
+	s.st.mu.Lock()
+	s.st.st.Agents["a_tmp"] = &Agent{ID: "a_tmp", Name: "tmp", Status: StatusActive, CoreVersion: "0.3.6",
+		Facts: proto.Facts{OSID: "debian", OSVersion: "13"},
+		State: map[string]json.RawMessage{"apps": appsState(t,
+			apps.App{Name: "sudo", Installed: true, Package: "sudo", Source: "sudo", SourceVersion: "1.9.16p2-3", Origin: "Debian"})},
+		StateAt: map[string]int64{}}
+	s.st.mu.Unlock()
+	s.vul.mu.Lock()
+	s.vul.d.Queries[vulnKey("Debian:13", "sudo", "1.9.16p2-3")] = &vulnQuery{At: 1, IDs: []string{"DEBIAN-CVE-2025-9999"}}
+	s.vul.d.Records["DEBIAN-CVE-2025-9999"] = &vulnRec{CVE: "CVE-2025-9999"}
+	s.vul.d.CVEs["CVE-2025-9999"] = &cveMeta{}
+	s.vul.d.Ecos["Debian:13"] = true
+	s.vul.mu.Unlock()
+	s.st.mu.Lock()
+	delete(s.st.st.Agents, "a_tmp")
+	s.st.mu.Unlock()
+	s.pruneVulns()
+	s.vul.mu.Lock()
+	_, q := s.vul.d.Queries[vulnKey("Debian:13", "sudo", "1.9.16p2-3")]
+	_, rc := s.vul.d.Records["DEBIAN-CVE-2025-9999"]
+	_, cv := s.vul.d.CVEs["CVE-2025-9999"]
+	_, ec := s.vul.d.Ecos["Debian:13"]
+	_, kept := s.vul.d.CVEs["CVE-2025-1003"]
+	s.vul.mu.Unlock()
+	if q || rc || cv || ec || !kept {
+		t.Errorf("after removing a system: query %v record %v cve %v release %v; still needed kept %v", q, rc, cv, ec, kept)
+	}
+
 	// After the upgrade the new version is looked up by itself, and a full
 	// check drops what nobody uses any more.
 	s.st.mu.Lock()
@@ -292,7 +325,7 @@ func TestVulnCheck(t *testing.T) {
 	}
 	s.vul.mu.Lock()
 	nq, nr := len(s.vul.d.Queries), len(s.vul.d.Records)
-	_, kept := s.vul.d.CVEs["CVE-2025-1003"]
+	_, kept = s.vul.d.CVEs["CVE-2025-1003"]
 	s.vul.mu.Unlock()
 	if nq != 1 || nr != 2 || !kept {
 		t.Errorf("after pruning: %d queries, %d records", nq, nr)

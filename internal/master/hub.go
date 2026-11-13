@@ -453,6 +453,7 @@ func (s *Server) resultCore(agentID string, res proto.Result, ip string) {
 		s.audit.writeAgent("agent", ip, "agent.uninstalled", a, "")
 		delete(s.st.st.Agents, a.ID)
 		delete(s.wakes, a.ID)
+		s.kickVulns() // its lookups are cleaned up
 	}
 	s.st.markDirty()
 }

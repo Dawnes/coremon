@@ -185,6 +185,9 @@ type User struct {
 	// MustChange: a generated password (install, coremon-reset, restored
 	// admin); the user can only change it before doing anything else.
 	MustChange bool `json:"must_change,omitempty"`
+	// Locked: an administrator locked the account; it cannot sign in until
+	// an administrator (or coremon-reset) unlocks it.
+	Locked bool `json:"locked,omitempty"`
 }
 
 // adminName is the permanent administrator account: it cannot be deleted
@@ -217,6 +220,20 @@ func (s *store) admins() int {
 		}
 	}
 	return n
+}
+
+// lastActiveAdmin: u is the only administrator who can still sign in, so
+// it must not be locked, demoted or removed.
+func (s *store) lastActiveAdmin(u *User) bool {
+	if u.Role != RoleAdmin || u.Locked {
+		return false
+	}
+	for _, x := range s.st.Users {
+		if x != u && x.Role == RoleAdmin && !x.Locked {
+			return false
+		}
+	}
+	return true
 }
 
 // State is everything the master persists (besides logs and audit).

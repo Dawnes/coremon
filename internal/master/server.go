@@ -287,11 +287,16 @@ func ResetPassword(dataDir, name string) (string, error) {
 		return "", fmt.Errorf("there is no user %q; administrators: %s", name, strings.Join(admins, ", "))
 	}
 	pw := randHex(8)
-	u.PasswordHash, u.MustChange = hashPassword(pw), true
+	wasLocked := u.Locked
+	u.PasswordHash, u.MustChange, u.Locked = hashPassword(pw), true, false // the last way back in
 	if err := st.writeNow(); err != nil {
 		return "", err
 	}
-	(&auditLog{path: filepath.Join(dataDir, "audit.jsonl")}).write("root", "", "password.reset", name, "new generated password via coremon-reset on the master (must be changed at the next sign-in)")
+	note := "new generated password via coremon-reset on the master (must be changed at the next sign-in)"
+	if wasLocked {
+		note += "; account unlocked"
+	}
+	(&auditLog{path: filepath.Join(dataDir, "audit.jsonl")}).write("root", "", "password.reset", name, note)
 	return pw, nil
 }
 
