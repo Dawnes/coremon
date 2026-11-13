@@ -676,6 +676,7 @@ func (s *Server) handleSettingsSave(w http.ResponseWriter, r *http.Request) {
 		bad("OS support lookup must be every 3, 14, 30 or 90 days")
 		return
 	}
+	req.BackupSchedule = old.BackupSchedule // set on the Backups page
 	s.st.st.Settings = req
 	s.st.markDirty()
 	s.st.mu.Unlock()

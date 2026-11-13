@@ -182,3 +182,9 @@ func (a *auditLog) purge(cutoff int64) (int, error) {
 	}
 	return removed, os.Rename(tmp, a.path)
 }
+
+func (a *auditLog) raw() ([]byte, error) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return os.ReadFile(a.path)
+}

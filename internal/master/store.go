@@ -25,6 +25,7 @@ type Settings struct {
 	OSInfoDays         int    `json:"os_info_days"`
 	MinAgentVersion    string `json:"min_agent_version"`
 	VulnDays           int    `json:"vuln_days"`
+	BackupSchedule     string `json:"backup_schedule"`
 }
 
 var osInfoChoices = []int{3, 14, 30, 90}
@@ -69,6 +70,9 @@ func (s *Settings) normalize() {
 	}
 	if !validVulnDays(s.VulnDays) {
 		s.VulnDays = defaultVulnDay
+	}
+	if !validSchedule(s.BackupSchedule) {
+		s.BackupSchedule = defaultSchedule
 	}
 }
 
@@ -245,6 +249,8 @@ type store struct {
 	dir   string
 	st    State
 	dirty bool
+	// frozen: a restore wrote the state file; nothing may overwrite it.
+	frozen bool
 }
 
 func openStore(dir string) (*store, error) {
@@ -310,6 +316,9 @@ func (s *store) nextOrder(groupID string) int {
 func (s *store) markDirty() { s.dirty = true }
 
 func (s *store) writeNow() error {
+	if s.frozen {
+		return nil
+	}
 	js, err := json.Marshal(&s.st)
 	if err != nil {
 		return err

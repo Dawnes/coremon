@@ -6,6 +6,7 @@ import (
 	"crypto/tls"
 	"embed"
 	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -70,6 +71,8 @@ type Server struct {
 	enrolls       enrollGuard
 	hashSem       chan struct{}
 	tfa           twoFAState
+	bk            backupState
+	exit          func(int) // os.Exit; tests replace it
 	idx           *indexSync
 	nonces        nonceCache
 	osi           osInfo
@@ -183,7 +186,7 @@ func New(cfg Config) (*Server, error) {
 	if err != nil {
 		return nil, fmt.Errorf("tls: %w", err)
 	}
-	s := &Server{cfg: cfg, st: st, sess: newSessions(), keys: keyState{cert: &cert, tlsPin: pin},
+	s := &Server{cfg: cfg, st: st, sess: newSessions(), keys: keyState{cert: &cert, tlsPin: pin}, exit: os.Exit,
 		audit: &auditLog{path: filepath.Join(cfg.DataDir, "audit.jsonl")}, wakes: map[string]chan struct{}{},
 		hashSem: make(chan struct{}, hashAtOnce)}
 
@@ -245,6 +248,38 @@ func New(cfg Config) (*Server, error) {
 		}
 	}
 	return s, nil
+}
+
+// AccountInfo describes an account for coremon-reset, read-only.
+type AccountInfo struct {
+	Exists     bool     `json:"exists"`
+	Name       string   `json:"name"`
+	Role       string   `json:"role"`
+	Locked     bool     `json:"locked"`
+	TwoFA      bool     `json:"two_fa"`
+	MustChange bool     `json:"must_change"`
+	Admins     []string `json:"admins"`
+}
+
+func ReadAccountInfo(dataDir, name string) (AccountInfo, error) {
+	var info AccountInfo
+	js, err := readStateJSON(dataDir)
+	if err != nil {
+		return info, err
+	}
+	var st State
+	if err := json.Unmarshal(js, &st); err != nil {
+		return info, err
+	}
+	for _, u := range st.Users {
+		if u.Role == RoleAdmin {
+			info.Admins = append(info.Admins, u.Name)
+		}
+		if strings.EqualFold(u.Name, name) {
+			info.Exists, info.Name, info.Role, info.Locked, info.TwoFA, info.MustChange = true, u.Name, u.Role, u.Locked, u.TOTPSecret != "", u.MustChange
+		}
+	}
+	return info, nil
 }
 
 func ResetPassword(dataDir, name string) (string, error) {
@@ -343,6 +378,14 @@ func (s *Server) routes() http.Handler {
 	change("POST /api/ui/master/update", s.handleMasterUpdate)
 	change("POST /api/ui/osinfo/check", s.handleOSInfoCheck)
 	change("POST /api/ui/vulns/check", s.handleVulnCheck)
+	change("GET /api/ui/backups", s.handleBackups)
+	change("POST /api/ui/backups/run", s.handleBackupRun)
+	change("POST /api/ui/backups/delete", s.handleBackupDelete)
+	change("POST /api/ui/backups/schedule", s.handleBackupSchedule)
+	change("POST /api/ui/backups/download", s.handleBackupDownload)
+	change("POST /api/ui/backups/check", s.handleRestoreCheck)
+	change("POST /api/ui/backups/check-file", s.handleRestoreCheckFile)
+	change("POST /api/ui/backups/restore", s.handleRestore)
 	change("POST /api/ui/vulns/nvdkey", s.handleNVDKey)
 	change("GET /api/ui/users", s.handleUsers)
 	change("POST /api/ui/users", s.handleUserCreate)
@@ -398,6 +441,7 @@ func (s *Server) Run(ctx context.Context) error {
 	go s.osInfoLoop(stop)
 	go s.vulnLoop(stop)
 	go s.nvdLoop(stop)
+	go s.backupLoop(stop)
 	handler := s.routes()
 	s.handler = handler
 	s.applyUIPort(handler)

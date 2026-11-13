@@ -3,6 +3,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"log"
@@ -46,6 +47,13 @@ func main() {
 	switch cmd {
 	case "version":
 		fmt.Println(version)
+	case "reset-info":
+		info, err := master.ReadAccountInfo(*data, *user)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+		json.NewEncoder(os.Stdout).Encode(info)
 	case "reset-apply":
 		pw, err := master.ResetPassword(*data, *user)
 		if err != nil {

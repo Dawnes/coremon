@@ -450,7 +450,7 @@ const SUBNAV = {
   dashboard: () => [['overview', 'Overview'], ['list', 'List']],
   about: () => [['about', 'About'], ['license', 'License']],
   history: () => [['jobs', 'Jobs'], ['audit', 'Audit log']],
-  settings: () => [['general', 'General'], ['systems', 'Systems'], ['releases', 'Releases'], ...(canChange() ? [['users', 'Users']] : []), ['account', 'My Account'], ['identity', 'Identity']],
+  settings: () => [['general', 'General'], ['systems', 'Systems'], ['releases', 'Releases'], ...(canChange() ? [['users', 'Users'], ['backups', 'Backups']] : []), ['account', 'My Account'], ['identity', 'Identity']],
 };
 function currentRoute() {
   const p = location.hash.replace(/^#\/?/, '').split('/');
@@ -510,7 +510,7 @@ function route() {
   const parts = location.hash.replace(/^#\/?/, '').split('/');
   const [section, sub] = currentRoute();
   const subViews = {
-    settings: { general: SettingsGeneral, systems: Systems, releases: Releases, users: SettingsUsers, account: SettingsAccount, identity: SettingsIdentity },
+    settings: { general: SettingsGeneral, systems: Systems, releases: Releases, users: SettingsUsers, backups: SettingsBackups, account: SettingsAccount, identity: SettingsIdentity },
     history: { jobs: Jobs, audit: Audit },
     dashboard: { overview: Dashboard, list: SystemList },
     about: { about: AboutPage, license: LicensePage },
@@ -2130,6 +2130,132 @@ function SettingsUsers() {
   };
 }
 
+function SettingsBackups() {
+  const st = { d: null };
+  const slotName = (n) => (n ? `Slot ${n}` : 'Before restore');
+  const made = (b) => html`${fmtDate(b.created)} <span class="dim small">· master ${b.version} · ${bytes(b.size)}</span>`;
+  function render() {
+    const d = st.d;
+    if (!d) return;
+    const rows = d.slots.map((b, i) => [i + 1, b]);
+    const sources = [...rows, ...(d.before ? [[0, d.before]] : [])].filter(([, b]) => b);
+    setHTML($('#bk'), html`
+      <div class="panel panel-pad"><h2>Backup</h2>
+        <div class="muted small">Stored in <code>${d.dir}</code>, readable only by the coremon user and root. Slot 1 always holds the newest backup.</div>
+        <table class="tbl" style="margin-top:12px"><tbody>
+          ${rows.map(([n, b]) => html`<tr><td class="w1"><b>${slotName(n)}</b></td><td>${b ? made(b) : html`<span class="dim">empty</span>`}</td>
+            <td class="w1">${b ? html`<button class="btn danger sm" data-act="del" data-slot="${n}">${icon('trash')} Delete</button>` : ''}</td></tr>`)}
+          ${d.before ? html`<tr><td class="w1"><b>Before restore</b></td><td>${made(d.before)} <span class="dim small">· made automatically before the last restore</span></td>
+            <td class="w1"><button class="btn danger sm" data-act="del" data-slot="0">${icon('trash')} Delete</button></td></tr>` : ''}
+        </tbody></table>
+        <div class="row" style="margin-top:14px">
+          <button class="btn primary" data-act="run" ${st.busy ? 'disabled' : ''}>${st.busy ? html`<span class="spin"></span>` : icon('download')} Backup now</button>
+          <button class="btn" data-act="download" ${d.has_2fa ? '' : 'disabled'} title="${d.has_2fa ? 'Create an encrypted backup and download it' : 'Turn on 2FA in My Account first'}">${icon('download')} Download backup now</button>
+          ${d.has_2fa ? '' : html`<span class="dim small">Downloading needs 2FA: <a href="#/settings/account">turn it on in My Account</a>.</span>`}
+        </div>
+        <label class="field" style="margin-top:16px;max-width:260px">Automatic backup<select data-change="schedule">
+          ${d.schedules.map((x) => html`<option value="${x}" ${x === d.schedule ? 'selected' : ''}>${{ off: 'Off', daily: 'Daily', weekly: 'Weekly (default)', monthly: 'Monthly' }[x]}</option>`)}</select></label>
+        <div class="notice blue small" style="margin:14px 0 0">For safety, keep backup files secured: store copies in a safe place and protect the encryption password.</div>
+      </div>
+      <div class="panel panel-pad"><h2>Restore</h2>
+        <div class="muted small">Replaces all Coremon data with a backup. The backup is checked first; nothing changes until you confirm. The current data is kept as the before-restore backup.</div>
+        ${sources.length ? html`<table class="tbl" style="margin-top:12px"><tbody>${sources.map(([n, b]) => html`<tr><td class="w1"><b>${slotName(n)}</b></td><td>${made(b)}</td>
+          <td class="w1"><button class="btn warn sm" data-act="check" data-slot="${n}">Restore…</button></td></tr>`)}</tbody></table>` : html`<div class="dim small" style="margin-top:10px">No local backups yet.</div>`}
+        <form class="row" data-submit="check-file" style="margin-top:16px;align-items:flex-end">
+          <label class="field">Restore from a downloaded file<input type="file" name="file" accept=".cmbak" required></label>
+          <label class="field">Its encryption password<input type="password" name="pw" autocomplete="off" required style="width:200px"></label>
+          <button class="btn warn">Check file…</button>
+        </form>
+      </div>`);
+  }
+  async function confirmRestore(info) {
+    const warn = [];
+    if (info.newer_key) warn.push(`${info.newer_key} system${info.newer_key === 1 ? '' : 's'} already trust${info.newer_key === 1 ? 's' : ''} a newer master key and will need a new install command.`);
+    if (info.added_since) warn.push(`${info.added_since} system${info.added_since === 1 ? ' was' : 's were'} added after this backup and will no longer be known; ${info.added_since === 1 ? 'it needs' : 'they need'} a new install command.`);
+    const body = html`<div>The backup checked out fine:</div>
+      <div class="facts" style="margin:10px 0"><div><div class="k">From</div><div class="v">${info.source}</div></div><div><div class="k">Made</div><div class="v">${fmtDate(info.created)}</div></div>
+        <div><div class="k">Master version</div><div class="v">${info.version}</div></div><div><div class="k">Users / systems</div><div class="v">${info.users} / ${info.systems}</div></div></div>
+      ${warn.map((w) => html`<div class="notice small" style="margin:6px 0">${w}</div>`)}
+      <div class="notice red small" style="margin:10px 0 0"><b>Are you really sure?</b> All current Coremon data is replaced by this backup. Everyone is signed out, the master restarts
+        (the website is away for a few seconds), and you then sign in with the users and passwords <b>from the backup</b>.</div>`;
+    if (!(await confirmBox('Restore this backup?', body, { okText: 'Restore', danger: true }))) return;
+    await POST('backups/restore', { token: info.token });
+    openModal(html`<h3>Restoring…</h3><div class="row muted" style="margin-top:12px"><span class="spin"></span>The master is restarting with the restored data. This page signs you out when it is back.</div>`);
+    const t0 = Date.now();
+    await new Promise((res) => setTimeout(res, 3000));
+    while (Date.now() - t0 < 120000) {
+      try { const r = await fetch('/api/ui/session', { headers: { 'X-Coremon': '1' } }); if (r.ok) break; } catch {}
+      await new Promise((res) => setTimeout(res, 1500));
+    }
+    closeModal();
+    location.hash = '#/';
+    await boot().catch(() => showLogin());
+  }
+  return {
+    async mount(el) {
+      el.innerHTML = r(html`${settingsHead('backups', 'Backups', 'Backups of the Coremon data, to import into a fresh install or to go back to if something goes wrong')}<div class="stack" style="max-width:860px" id="bk"></div>`);
+    },
+    async refresh() { st.d = await GET('backups'); render(); },
+    interval: 15000,
+    acts: {
+      run: async () => {
+        st.busy = true; render();
+        try { st.d = await POST('backups/run'); toast('Backup created in slot 1', 'ok'); } finally { st.busy = false; render(); }
+      },
+      del: async (t) => {
+        const n = +t.dataset.slot;
+        if (!(await confirmBox(`Delete ${slotName(n).toLowerCase()}?`, 'This backup file is removed for good.', { okText: 'Delete', danger: true }))) return;
+        st.d = await POST('backups/delete', { slot: n });
+        toast('Backup deleted', 'ok'); render();
+      },
+      schedule: async (t) => {
+        st.d = await POST('backups/schedule', { schedule: t.value });
+        toast(t.value === 'off' ? 'Automatic backup off' : `Automatic backup: ${t.value}`, 'ok'); render();
+      },
+      download: () => {
+        const min = st.d.min_password, max = st.d.max_password;
+        openModal(html`<h3>Download backup</h3>
+          <div class="muted small" style="margin-top:6px">The file is encrypted with the password you choose here. It is needed to restore the backup and cannot be recovered. Use a long one.</div>
+          <form class="form" data-submit="go">
+            <label class="field">Code from your authenticator app<input type="text" name="code" inputmode="numeric" autocomplete="one-time-code" pattern="[0-9 ]{6,7}" maxlength="7" required style="max-width:160px"></label>
+            <label class="field">Encryption password (${min}–${max} characters)<input type="password" name="pw" autocomplete="new-password" minlength="${min}" maxlength="${max}" required></label>
+            <label class="field">Repeat the password<input type="password" name="pw2" autocomplete="new-password" minlength="${min}" maxlength="${max}" required></label>
+            <div class="actions"><button type="button" class="btn ghost" data-act="cancel">Cancel</button><button class="btn primary">${icon('download')} Create and download</button></div>
+          </form>`, {
+          acts: {
+            cancel: () => closeModal(),
+            go: async (f) => {
+              if (f.pw.value !== f.pw2.value) return toast('The passwords do not match', 'err');
+              const res = await fetch('/api/ui/backups/download', { method: 'POST', headers: { 'X-Coremon': '1', 'Content-Type': 'application/json' },
+                body: JSON.stringify({ code: f.code.value.replace(/\s/g, ''), password: f.pw.value }) });
+              if (!res.ok) throw new Error((await res.text()).trim() || res.statusText);
+              const blob = await res.blob();
+              const name = (res.headers.get('Content-Disposition') || '').match(/filename="([^"]+)"/)?.[1] || 'coremon-backup.cmbak';
+              const a = document.createElement('a');
+              a.href = URL.createObjectURL(blob);
+              a.download = name;
+              document.body.appendChild(a); a.click(); a.remove();
+              setTimeout(() => URL.revokeObjectURL(a.href), 10000);
+              closeModal();
+              toast(`Downloaded ${name}`, 'ok');
+            },
+          },
+        });
+        $('.modal input[name=code]')?.focus();
+      },
+      check: async (t) => confirmRestore(await POST('backups/check', { slot: +t.dataset.slot })),
+      'check-file': async (f) => {
+        const fd = new FormData();
+        fd.append('file', f.file.files[0]);
+        fd.append('password', f.pw.value);
+        const res = await fetch('/api/ui/backups/check-file', { method: 'POST', headers: { 'X-Coremon': '1' }, body: fd });
+        if (!res.ok) throw new Error((await res.text()).trim() || res.statusText);
+        await confirmRestore(await res.json());
+      },
+    },
+  };
+}
+
 // A QR code from the master (rows of '1' and '0') as SVG, with a quiet zone.
 function qrSVG(rows) {
   const n = rows.length, q = 4;
@@ -2147,7 +2273,7 @@ function SettingsAccount() {
     if (u.two_fa) {
       body = html`<div class="row"><span class="badge ok">${icon('check')} on</span><span class="muted small">${u.two_fa_since ? 'since ' + fmtDate(u.two_fa_since) : ''}</span></div>
         <div class="muted small" style="margin-top:8px">Every sign-in asks for a code from your authenticator app.</div>
-        <form class="form" data-submit="tfa-disable">${codeField}<div><button class="btn danger">Turn off 2FA</button></div></form>`;
+        <form class="form" data-submit="tfa-disable">${codeField}<div style="margin-top:8px"><button class="btn danger">Turn off 2FA</button></div></form>`;
     } else if (st.enroll) {
       const key = st.enroll.secret.replace(/(.{4})/g, '$1 ').trim();
       body = html`<div class="muted small">1. Scan this QR code with your authenticator app (Google or Microsoft Authenticator, 2FAS Auth, …).</div>
@@ -2155,7 +2281,7 @@ function SettingsAccount() {
         <div class="muted small">Can't scan? Enter this key by hand (time-based, 6 digits):</div>
         <code class="tfakey">${key}</code>
         <form class="form" data-submit="tfa-enable"><div class="muted small">2. Enter the code the app now shows to confirm.</div>${codeField}
-          <div class="row"><button class="btn primary">Turn on 2FA</button><button type="button" class="btn ghost" data-act="tfa-cancel">Cancel</button></div></form>`;
+          <div class="row" style="margin-top:8px"><button class="btn primary">Turn on 2FA</button><button type="button" class="btn ghost" data-act="tfa-cancel">Cancel</button></div></form>`;
     } else {
       body = html`<div class="row"><span class="badge mute">off</span></div>
         <div class="muted small" style="margin-top:8px">With 2FA, signing in also asks for a 6-digit code from an authenticator app on your phone.</div>
@@ -2174,7 +2300,7 @@ function SettingsAccount() {
             <label class="field">Current password<input type="password" name="cur" autocomplete="current-password" required></label>
             <label class="field">New password (${pwRange()})<input type="password" name="new" autocomplete="new-password" minlength="${pwMin()}" maxlength="${pwMax()}" required></label>
             <label class="field">Repeat new password<input type="password" name="new2" autocomplete="new-password" minlength="${pwMin()}" maxlength="${pwMax()}" required></label>
-            <div><button class="btn primary">Change password</button></div>
+            <div style="margin-top:8px"><button class="btn primary">Change password</button></div>
           </form>
         </div>
         <div class="panel panel-pad" id="tfa"></div></div>`);
