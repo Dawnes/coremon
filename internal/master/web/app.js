@@ -336,7 +336,19 @@ function openJob(id) {
 let view = null;
 const globalActs = {
   'open-job': (t) => openJob(t.dataset.id),
-  logout: async () => { await POST('logout').catch(() => {}); await boot().catch(() => showLogin()); },
+  logout: async () => { await POST('logout').catch(() => {}); navOpen.reset(); await boot().catch(() => showLogin()); },
+  // A main menu item only folds or unfolds its section. On narrow screens
+  // (icons only, the submenu as tabs on the page) it opens the section.
+  'nav-fold': (t) => {
+    const sec = t.dataset.sec;
+    if (matchMedia('(max-width: 860px)').matches || !SUBNAV[sec]) { location.hash = '#/' + sec; return; }
+    const open = navOpen.get();
+    if (open.has(sec)) open.delete(sec); else open.add(sec);
+    navOpen.set(open);
+    t.classList.toggle('shut', !open.has(sec));
+    t.setAttribute('aria-expanded', String(open.has(sec)));
+    document.querySelector(`.subnav[data-sec="${sec}"]`)?.classList.toggle('folded', !open.has(sec));
+  },
 };
 document.addEventListener('click', (e) => {
   const t = e.target.closest('[data-act]');
@@ -404,6 +416,7 @@ function showLogin() {
         f.password.classList.remove('bad');
         try {
           await POST('login', { username: f.username.value, password: f.password.value });
+          navOpen.reset(); // every sign-in starts with only Dashboard open
           // After signing in always start at the dashboard, whatever
           // address was opened. (Reloading a page while signed in keeps it.)
           if (location.hash && location.hash !== '#/') history.replaceState(null, '', location.pathname + location.search + '#/');
@@ -454,14 +467,29 @@ const subTabs = (section, cur) => html`<div class="settabs">${SUBNAV[section]().
 const settingsTabs = (cur) => subTabs('settings', cur);
 const roleLabel = (r) => (r === 'admin' ? 'Administrator' : r === 'viewer' ? 'Read-only' : r);
 
+// Folding menu: which sections are open. At every sign-in only Dashboard;
+// the choices stay in this browser until signing out. Opening a page in a
+// folded section opens that section.
+const NAV_KEY = 'coremon.nav';
+let navMem = null; // when the browser keeps no storage
+const navOpen = {
+  get() {
+    try { const v = JSON.parse(localStorage.getItem(NAV_KEY)); if (Array.isArray(v)) return new Set(v); } catch { /* none */ }
+    return new Set(navMem || ['dashboard']);
+  },
+  set(s) { navMem = [...s]; try { localStorage.setItem(NAV_KEY, JSON.stringify(navMem)); } catch { /* memory only */ } },
+  reset() { this.set(new Set(['dashboard'])); },
+};
 function renderShell() {
   const [active, sub] = currentRoute();
+  const open = navOpen.get();
+  if (active && SUBNAV[active] && !open.has(active)) { open.add(active); navOpen.set(open); }
   setHTML($('#app'), html`
     <div class="shell">
       <aside class="side">
         <div class="brand"><img src="favicon.svg" alt=""><span>Coremon</span></div>
-        <nav class="nav">${NAV.map(([h, ic, lbl]) => html`<a href="#/${h}" class="${active === h ? 'active' : ''}">${icon(ic)}<span class="lbl">${lbl}</span></a>
-          ${SUBNAV[h] ? html`<div class="subnav">${SUBNAV[h]().map(([k, l]) => html`<a href="#/${h}/${k}" class="${active === h && sub === k ? 'active' : ''}">${l}${k === 'systems' ? html`<span id="nav-pending"></span>` : ''}</a>`)}</div>` : ''}`)}</nav>
+        <nav class="nav">${NAV.map(([h, ic, lbl]) => html`<a href="#/${h}" class="${active === h ? 'active' : ''} ${open.has(h) ? '' : 'shut'}" data-act="nav-fold" data-sec="${h}" aria-expanded="${open.has(h)}">${icon(ic)}<span class="lbl">${lbl}</span>${h === 'settings' ? html`<span id="nav-pending-main"></span>` : ''}${SUBNAV[h] ? html`<span class="chev">${icon('down')}</span>` : ''}</a>
+          ${SUBNAV[h] ? html`<div class="subnav ${open.has(h) ? '' : 'folded'}" data-sec="${h}">${SUBNAV[h]().map(([k, l]) => html`<a href="#/${h}/${k}" class="${active === h && sub === k ? 'active' : ''}">${l}${k === 'systems' ? html`<span id="nav-pending"></span>` : ''}</a>`)}</div>` : ''}`)}</nav>
         <div class="foot"><div class="verinfo"><span class="who">Signed in as <b>${session.user?.name}</b>${canChange() ? '' : html` <span class="badge info">read-only</span>`}</span>
           <span title="Website and master version">Coremon v${session.version}</span>${releasedLabel() ? html`<span class="dim">${releasedLabel()}</span>` : ''}</div>
           <button class="btn ghost sm iconbtn" data-act="logout" title="Sign out">${icon('logout')}</button></div>
@@ -472,8 +500,11 @@ function renderShell() {
 }
 function setPending(n) {
   pendingCount = n;
-  const el = $('#nav-pending');
-  if (el) { el.className = n ? 'count' : ''; el.textContent = n ? String(n) : ''; }
+  // On Systems, and on Settings itself while that section is folded.
+  for (const [id, cls] of [['#nav-pending', 'count'], ['#nav-pending-main', 'count count-main']]) {
+    const el = $(id);
+    if (el) { el.className = n ? cls : ''; el.textContent = n ? String(n) : ''; el.title = n ? `${n} system${n === 1 ? '' : 's'} waiting for approval` : ''; }
+  }
 }
 
 function route() {
@@ -1632,38 +1663,118 @@ function Systems() {
   };
 }
 
+// ---------- endless lists (Jobs, Audit log) ----------
+// Loads `size` entries at a time as the end of the list comes near. The
+// automatic refresh only reloads the newest page: known rows are updated,
+// new ones go to the top - or, while scrolled down, wait behind a
+// "N new — back to top" button so the list does not jump.
+function endlessList({ load, keyOf, size = 50 }) {
+  const p = { items: [], pending: [], more: true, busy: false, gap: false, data: null, obs: null };
+  const atTop = () => window.scrollY < 150;
+  p.reset = () => { p.items = []; p.pending = []; p.more = true; p.gap = false; };
+  p.next = async () => {
+    if (p.busy || !p.more) return false;
+    p.busy = true;
+    try {
+      const d = await load(p.items[p.items.length - 1], p.items, size);
+      const seen = new Set(p.items.map(keyOf));
+      p.items.push(...d.items.filter((x) => !seen.has(keyOf(x))));
+      p.more = d.more;
+      p.data = d;
+    } finally { p.busy = false; }
+    return true;
+  };
+  p.refresh = async () => {
+    if (!p.items.length) { p.more = true; await p.next(); return; }
+    const d = await load(null, [], size);
+    p.data = d;
+    const known = new Map([...p.pending, ...p.items].map((x) => [keyOf(x), x]));
+    const fresh = [];
+    for (const x of d.items) {
+      const k = keyOf(x);
+      if (known.has(k)) Object.assign(known.get(k), x); else fresh.push(x);
+    }
+    const full = fresh.length >= size; // a whole page new: there may be more in between
+    if (atTop()) {
+      if (full || p.gap) { p.reset(); p.items = d.items; p.more = d.more; } else p.items.unshift(...fresh, ...p.pending.splice(0));
+      p.pending = [];
+    } else if (fresh.length) {
+      p.pending.unshift(...fresh);
+      p.gap ||= full;
+    }
+  };
+  p.toTop = async () => {
+    if (p.gap) { p.reset(); await p.next(); } else { p.items.unshift(...p.pending); p.pending = []; }
+    window.scrollTo({ top: 0 });
+  };
+  // Watches the element below the list; rerender draws the list again.
+  p.watch = (el, rerender) => {
+    p.obs?.disconnect();
+    p.check = async () => {
+      if (p.more && !p.busy && el.getBoundingClientRect().top < innerHeight + 400 && (await p.next())) { rerender(); p.check(); }
+    };
+    p.obs = new IntersectionObserver((es) => { if (es.some((e) => e.isIntersecting)) p.check(); }, { rootMargin: '400px' });
+    p.obs.observe(el);
+  };
+  p.stop = () => p.obs?.disconnect();
+  p.banner = () => (p.pending.length ? html`<div class="newbar"><button class="btn sm primary" data-act="to-top">${icon('up')} ${p.gap ? size + '+' : p.pending.length} new — back to top</button></div>` : '');
+  p.footer = (days) => (p.busy ? html`<div class="endline"><span class="spin"></span> Loading…</div>`
+    : !p.more && p.items.length ? html`<div class="endline"><span>End of history: older entries are removed after ${days} day${days === 1 ? '' : 's'} (<a href="#/settings/general">Settings → General</a>).</span></div>` : '');
+  return p;
+}
+
 // ---------- Jobs ----------
 function Jobs() {
-  const st = { active: false, agent: '', user: '', data: null };
+  const st = { active: false, agent: '', user: '' };
+  const list = endlessList({
+    keyOf: (j) => j.id,
+    load: async (last, _, size) => {
+      const q = new URLSearchParams({ limit: String(size) });
+      if (st.active) q.set('active', '1');
+      if (st.user) q.set('user', st.user);
+      if (st.agent) q.set('agent', st.agent);
+      if (last) { q.set('before', last.id); q.set('before_t', String(last.created)); }
+      const d = await GET('jobs?' + q);
+      return { ...d, items: d.jobs };
+    },
+  });
+  function render() {
+    const d = list.data;
+    if (!d) return;
+    const names = d.names || {};
+    const actors = [...(d.users || []), 'scheduler'];
+    setHTML($('#j-user'), html`<option value="">All users</option>${actors.map((n) => html`<option value="${n}" ${st.user === n ? 'selected' : ''}>${n === 'scheduler' ? 'scheduler (automatic)' : n}</option>`)}`);
+    const sysOpts = Object.entries(names).sort((a, b) => a[1].localeCompare(b[1]));
+    setHTML($('#j-sys'), html`<option value="">All systems</option>${sysOpts.map(([id, n]) => html`<option value="${id}" ${st.agent === id ? 'selected' : ''}>${n}</option>`)}`);
+    setHTML($('#j-list'), list.items.length ? html`${list.banner()}<div class="panel"><table class="tbl"><thead><tr><th>Job</th><th>System</th><th>Status</th><th>By</th><th>Created</th><th>Duration</th></tr></thead>
+      <tbody>${list.items.map((j) => html`<tr class="click" data-act="open-job" data-id="${j.id}"><td><b>${jobTitle(j)}</b><div class="dim small">${jobParams(j)}${j.error ? html` <span style="color:var(--red)">${j.error}</span>` : ''}</div></td>
+        <td>${names[j.agent_id] ? html`<a href="#/system/${j.agent_id}">${names[j.agent_id]}</a>` : html`<span class="dim">${j.agent_id}</span>`}</td>
+        <td>${statusBadge(j.status)}</td><td class="muted">${j.actor}</td><td class="muted">${when(j.created)}</td>
+        <td class="muted">${j.finished ? dur(j.finished - (j.started || j.created)) : '—'}</td></tr>`)}</tbody></table></div>${list.footer(d.retention_days)}`
+      : html`<div class="panel empty">${st.agent || st.user || st.active ? 'No jobs for this filter.' : 'No jobs.'}</div>`);
+  }
+  const restart = () => { list.reset(); window.scrollTo({ top: 0 }); view.refresh(); };
   return {
     interval: 3000,
     mount(el) {
       el.innerHTML = r(html`${subTabs('history', 'jobs')}<div class="page-head"><div><h1>Jobs</h1><div class="sub">Everything sent to agents</div></div><span class="spacer"></span>
         <div class="chips"><button class="chip on" data-act="f" data-v="0">All</button><button class="chip" data-act="f" data-v="1">Active</button></div>
         <label class="row small muted">User <select id="j-user"><option value="">All users</option></select></label>
-        <label class="row small muted">System <select id="j-sys"><option value="">All systems</option></select></label></div><div id="j-list"></div>`);
-      $('#j-user').addEventListener('change', (e) => { st.user = e.target.value; view.refresh(); });
-      $('#j-sys').addEventListener('change', (e) => { st.agent = e.target.value; view.refresh(); });
+        <label class="row small muted">System <select id="j-sys"><option value="">All systems</option></select></label></div><div id="j-list"></div><div id="j-end"></div>`);
+      $('#j-user').addEventListener('change', (e) => { st.user = e.target.value; restart(); });
+      $('#j-sys').addEventListener('change', (e) => { st.agent = e.target.value; restart(); });
+      list.watch($('#j-end'), render);
     },
+    unmount() { list.stop(); },
     async refresh() {
-      const q = new URLSearchParams({ limit: '200' });
-      if (st.active) q.set('active', '1');
-      if (st.user) q.set('user', st.user);
-      if (st.agent) q.set('agent', st.agent);
-      st.data = await GET('jobs?' + q);
-      const { jobs, names } = st.data;
-      const actors = [...(st.data.users || []), 'scheduler'];
-      setHTML($('#j-user'), html`<option value="">All users</option>${actors.map((n) => html`<option value="${n}" ${st.user === n ? 'selected' : ''}>${n === 'scheduler' ? 'scheduler (automatic)' : n}</option>`)}`);
-      const sysOpts = Object.entries(names).sort((a, b) => a[1].localeCompare(b[1]));
-      setHTML($('#j-sys'), html`<option value="">All systems</option>${sysOpts.map(([id, n]) => html`<option value="${id}" ${st.agent === id ? 'selected' : ''}>${n}</option>`)}`);
-      setHTML($('#j-list'), jobs.length ? html`<div class="panel"><table class="tbl"><thead><tr><th>Job</th><th>System</th><th>Status</th><th>By</th><th>Created</th><th>Duration</th></tr></thead>
-        <tbody>${jobs.map((j) => html`<tr class="click" data-act="open-job" data-id="${j.id}"><td><b>${jobTitle(j)}</b><div class="dim small">${jobParams(j)}${j.error ? html` <span style="color:var(--red)">${j.error}</span>` : ''}</div></td>
-          <td>${names[j.agent_id] ? html`<a href="#/system/${j.agent_id}">${names[j.agent_id]}</a>` : html`<span class="dim">${j.agent_id}</span>`}</td>
-          <td>${statusBadge(j.status)}</td><td class="muted">${j.actor}</td><td class="muted">${when(j.created)}</td>
-          <td class="muted">${j.finished ? dur(j.finished - (j.started || j.created)) : '—'}</td></tr>`)}</tbody></table></div>` : html`<div class="panel empty">${st.agent || st.user || st.active ? 'No jobs for this filter.' : 'No jobs.'}</div>`);
+      if (st.active) list.reset(); // finished jobs leave this list: always the current page
+      await list.refresh();
+      render();
+      list.check();
     },
     acts: {
-      f: (t) => { st.active = t.dataset.v === '1'; document.querySelectorAll('.chips .chip').forEach((c) => c.classList.toggle('on', c === t)); view.refresh(); },
+      f: (t) => { st.active = t.dataset.v === '1'; document.querySelectorAll('.chips .chip').forEach((c) => c.classList.toggle('on', c === t)); restart(); },
+      'to-top': async () => { await list.toTop(); render(); },
     },
   };
 }
@@ -1793,33 +1904,49 @@ function Releases() {
 
 // ---------- Audit ----------
 function Audit() {
-  const st = { agent: '', user: '', names: {}, agents: [] };
+  const st = { agent: '', user: '' };
+  // Entries have no ID: the whole entry is its key. The cursor is the time of
+  // the last entry shown and how many shown entries share that time.
+  const keyOf = (e) => [e.time, e.actor, e.action, e.agent, e.target, e.detail, e.job, e.ip].join('|');
+  const list = endlessList({
+    keyOf,
+    load: async (last, items, size) => {
+      const q = new URLSearchParams({ limit: String(size) });
+      if (st.agent) q.set('agent', st.agent);
+      if (st.user) q.set('user', st.user);
+      if (last) { q.set('before', String(last.time)); q.set('skip', String(items.filter((e) => e.time === last.time).length)); }
+      const d = await GET('audit?' + q);
+      return { ...d, items: d.entries };
+    },
+  });
+  function render() {
+    const d = list.data;
+    if (!d) return;
+    const names = d.names || {};
+    const opts = Object.entries(names).sort((a, b) => a[1].localeCompare(b[1]));
+    setHTML($('#au-sys'), html`<option value="">All systems</option>${opts.map(([id, n]) => html`<option value="${id}" ${st.agent === id ? 'selected' : ''}>${n}</option>`)}`);
+    const actors = [...(d.users || []), 'agent', 'scheduler'];
+    setHTML($('#au-user'), html`<option value="">All users</option>${actors.map((n) => html`<option value="${n}" ${st.user === n ? 'selected' : ''}>${n === 'agent' || n === 'scheduler' ? n + ' (automatic)' : n}</option>`)}`);
+    const sys = (e) => e.agent ? (names[e.agent] || e.target || e.agent) : (names[e.target] || '');
+    setHTML($('#au'), list.items.length ? html`${list.banner()}<div class="panel"><table class="tbl"><thead><tr><th>Time</th><th>Actor</th><th>Action</th><th>System</th><th>Target</th><th>Detail</th><th>IP</th></tr></thead>
+      <tbody>${list.items.map((e) => html`<tr><td class="muted mono small" style="white-space:nowrap">${fmtDate(e.time, true)}</td><td>${e.actor}</td><td><span class="tag mono">${e.action}</span></td>
+        <td>${sys(e)}</td><td class="mono small">${e.agent ? '' : (names[e.target] ? '' : e.target || '')}</td><td class="muted small">${e.detail || ''}${e.job ? html` <button class="btn ghost sm" data-act="open-job" data-id="${e.job}" title="Show the output of the job this action started">${icon('jobs')} Show output</button>` : ''}</td><td class="dim small">${e.ip || ''}</td></tr>`)}</tbody></table></div>${list.footer(d.retention_days)}`
+      : html`<div class="panel empty">${st.agent || st.user ? 'No entries for this filter.' : 'No entries yet.'}</div>`);
+  }
+  const restart = () => { list.reset(); window.scrollTo({ top: 0 }); view.refresh(); };
   return {
     interval: 10000,
     mount(el) {
       el.innerHTML = r(html`${subTabs('history', 'audit')}<div class="page-head"><div><h1>Audit log</h1><div class="sub">Who did what, and when</div></div><span class="spacer"></span>
         <label class="row small muted">User <select id="au-user"><option value="">All users</option></select></label>
-        <label class="row small muted">System <select id="au-sys"><option value="">All systems</option></select></label></div><div id="au"></div>`);
-      $('#au-sys').addEventListener('change', (e) => { st.agent = e.target.value; view.refresh(); });
-      $('#au-user').addEventListener('change', (e) => { st.user = e.target.value; view.refresh(); });
+        <label class="row small muted">System <select id="au-sys"><option value="">All systems</option></select></label></div><div id="au"></div><div id="au-end"></div>`);
+      $('#au-sys').addEventListener('change', (e) => { st.agent = e.target.value; restart(); });
+      $('#au-user').addEventListener('change', (e) => { st.user = e.target.value; restart(); });
+      list.watch($('#au-end'), render);
     },
-    async refresh() {
-      const q = new URLSearchParams();
-      if (st.agent) q.set('agent', st.agent);
-      if (st.user) q.set('user', st.user);
-      const d = await GET('audit' + (q.toString() ? '?' + q : ''));
-      st.names = d.names;
-      const opts = Object.entries(d.names).sort((a, b) => a[1].localeCompare(b[1]));
-      setHTML($('#au-sys'), html`<option value="">All systems</option>${opts.map(([id, n]) => html`<option value="${id}" ${st.agent === id ? 'selected' : ''}>${n}</option>`)}`);
-      const actors = [...(d.users || []), 'agent', 'scheduler'];
-      setHTML($('#au-user'), html`<option value="">All users</option>${actors.map((n) => html`<option value="${n}" ${st.user === n ? 'selected' : ''}>${n === 'agent' || n === 'scheduler' ? n + ' (automatic)' : n}</option>`)}`);
-      const rows = d.entries;
-      const sys = (e) => e.agent ? (d.names[e.agent] || e.target || e.agent) : (d.names[e.target] || '');
-      setHTML($('#au'), rows.length ? html`<div class="panel"><table class="tbl"><thead><tr><th>Time</th><th>Actor</th><th>Action</th><th>System</th><th>Target</th><th>Detail</th><th>IP</th></tr></thead>
-        <tbody>${rows.map((e) => html`<tr><td class="muted mono small" style="white-space:nowrap">${fmtDate(e.time, true)}</td><td>${e.actor}</td><td><span class="tag mono">${e.action}</span></td>
-          <td>${sys(e)}</td><td class="mono small">${e.agent ? '' : (d.names[e.target] ? '' : e.target || '')}</td><td class="muted small">${e.detail || ''}${e.job ? html` <button class="btn ghost sm" data-act="open-job" data-id="${e.job}" title="Show the output of the job this action started">${icon('jobs')} Show output</button>` : ''}</td><td class="dim small">${e.ip || ''}</td></tr>`)}</tbody></table></div>`
-        : html`<div class="panel empty">${st.agent || st.user ? 'No entries for this filter.' : 'No entries yet.'}</div>`);
-    },
+    unmount() { list.stop(); },
+    async refresh() { await list.refresh(); render(); list.check(); },
+    acts: { 'to-top': async () => { await list.toTop(); render(); } },
   };
 }
 

@@ -79,6 +79,10 @@ var defs = []def{
 	{"Certbot", regexp.MustCompile(`^certbot$`), false, nil},
 	{"Docker", regexp.MustCompile(`^(?:docker-ce|docker\.io)$`), false, []string{"docker.service"}},
 	{"Fail2ban", regexp.MustCompile(`^fail2ban$`), false, []string{"fail2ban.service"}},
+	{"ISC DHCP server", regexp.MustCompile(`^isc-dhcp-server$`), false, []string{"isc-dhcp-server.service", "isc-dhcp-server6.service"}},
+	// Kea: Debian/Ubuntu packages, or ISC's own repository (isc-kea-...).
+	{"Kea DHCP", regexp.MustCompile(`^(?:isc-)?kea-dhcp[46](?:-server)?$`), false, []string{
+		"kea-dhcp4-server.service", "kea-dhcp6-server.service", "isc-kea-dhcp4-server.service", "isc-kea-dhcp6-server.service", "kea-dhcp4.service", "kea-dhcp6.service"}},
 	{"Java", regexp.MustCompile(`^openjdk-(\d+)-(?:jre|jre-headless|jdk|jdk-headless)$`), true, nil},
 	{"MariaDB/MySQL", regexp.MustCompile(`^(?:mariadb-server|mysql-server)(?:-core)?(?:-[\d.]+)?$`), false, []string{"mariadb.service", "mysql.service"}},
 	{"Nginx", regexp.MustCompile(`^nginx(?:-(?:full|light|extras|core))?$`), false, []string{"nginx.service"}},

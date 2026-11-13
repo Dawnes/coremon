@@ -476,15 +476,19 @@ func (s *Server) handleActions(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, map[string]any{"jobs": jobs, "errors": errs})
 }
 
+// handleJobs lists jobs newest first, a page at a time: ?before=<job ID>
+// (with before_t, its creation time, in case that job was cleaned up)
+// continues after the last job shown.
 func (s *Server) handleJobs(w http.ResponseWriter, r *http.Request) {
 	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
 	if limit <= 0 || limit > 500 {
 		limit = 100
 	}
 	q := r.URL.Query()
+	beforeT, _ := strconv.ParseInt(q.Get("before_t"), 10, 64)
 	s.st.mu.Lock()
 	defer s.st.mu.Unlock()
-	jobs := s.jobsFiltered(q.Get("agent"), q.Get("user"), limit, q.Get("active") == "1")
+	jobs, more := s.jobsPage(q.Get("agent"), q.Get("user"), q.Get("active") == "1", q.Get("before"), beforeT, limit)
 	names := map[string]string{}
 	for _, a := range s.st.st.Agents {
 		names[a.ID] = a.Name
@@ -494,7 +498,41 @@ func (s *Server) handleJobs(w http.ResponseWriter, r *http.Request) {
 		users = append(users, u.Name)
 	}
 	sort.Strings(users)
-	writeJSON(w, map[string]any{"jobs": jobs, "names": names, "users": users})
+	writeJSON(w, map[string]any{"jobs": jobs, "names": names, "users": users, "more": more, "retention_days": s.st.st.Settings.RetentionDays})
+}
+
+// jobsPage: up to limit jobs older than the job beforeID (or, if that one is
+// gone, created before beforeT), newest first. Caller holds s.st.mu.
+func (s *Server) jobsPage(agentID, actor string, activeOnly bool, beforeID string, beforeT int64, limit int) ([]*Job, bool) {
+	out := []*Job{}
+	start := len(s.st.st.Jobs) - 1
+	if beforeID != "" {
+		start = -1
+		for i, j := range s.st.st.Jobs {
+			if j.ID == beforeID {
+				start = i - 1
+				break
+			}
+		}
+		if start == -1 && beforeT > 0 { // cleaned up meanwhile: go by time
+			for i := len(s.st.st.Jobs) - 1; i >= 0; i-- {
+				if s.st.st.Jobs[i].Created < beforeT {
+					start = i
+					break
+				}
+			}
+		}
+	}
+	for i := start; i >= 0; i-- {
+		j := s.st.st.Jobs[i]
+		if (agentID == "" || j.AgentID == agentID) && (actor == "" || strings.EqualFold(j.Actor, actor)) && (!activeOnly || !j.done()) {
+			if len(out) == limit {
+				return out, true
+			}
+			out = append(out, j)
+		}
+	}
+	return out, false
 }
 
 func (s *Server) handleJob(w http.ResponseWriter, r *http.Request) {
@@ -700,8 +738,15 @@ func (s *Server) handleSettingsSave(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleAudit(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
-	rows := s.audit.list(q.Get("agent"), q.Get("user"), 1000)
+	limit, _ := strconv.Atoi(q.Get("limit"))
+	if limit <= 0 || limit > 1000 {
+		limit = 1000
+	}
+	before, _ := strconv.ParseInt(q.Get("before"), 10, 64)
+	skip, _ := strconv.Atoi(q.Get("skip"))
+	rows, more := s.audit.page(q.Get("agent"), q.Get("user"), before, max(skip, 0), limit)
 	s.st.mu.Lock()
+	retention := s.st.st.Settings.RetentionDays
 	names := map[string]string{}
 	for _, a := range s.st.st.Agents {
 		names[a.ID] = a.Name
@@ -712,7 +757,7 @@ func (s *Server) handleAudit(w http.ResponseWriter, r *http.Request) {
 	}
 	s.st.mu.Unlock()
 	sort.Strings(users)
-	writeJSON(w, map[string]any{"entries": rows, "names": names, "users": users})
+	writeJSON(w, map[string]any{"entries": rows, "names": names, "users": users, "more": more, "retention_days": retention})
 }
 
 // ---- groups and ordering ----

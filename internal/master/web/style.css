@@ -68,6 +68,13 @@ a:focus-visible, button:focus-visible, .chip:focus-visible { box-shadow: 0 0 0 3
 .nav a:hover { color: var(--text); background: var(--accent); }
 .nav a.active { color: var(--text); background: var(--accent); }
 .nav svg { width: 16px; height: 16px; flex: none; }
+/* Folding sections: the arrow points down when open, right when folded. */
+.nav .chev { margin-left: auto; display: inline-flex; color: var(--dim); transition: transform .15s; }
+.nav .chev svg { width: 14px; height: 14px; }
+.nav a.shut .chev { transform: rotate(-90deg); }
+.subnav.folded { display: none; }
+.nav a:not(.shut) .count-main { display: none; }
+.nav .count-main + .chev { margin-left: 6px; }
 .subnav { display: flex; flex-direction: column; gap: 1px; margin: 2px 0 6px 17px; padding-left: 10px; border-left: 1px solid var(--line); }
 .nav .subnav a { height: 30px; padding: 0 9px; font-size: 13px; }
 .nav .subnav a.active { background: var(--accent); }
@@ -184,6 +191,10 @@ input[type=checkbox] { accent-color: var(--cyan); width: 16px; height: 16px; cur
 .btn.ghost:hover:not(:disabled) { color: var(--text); background: var(--accent); }
 .btn.sm { height: 32px; padding: 0 12px; gap: 6px; font-size: 13px; }
 .btn.sm.iconbtn, .iconbtn { padding: 0; width: 32px; }
+/* Endless lists: the "N new" button stays in view at the top; the end line. */
+.newbar { position: sticky; top: 12px; z-index: 5; display: flex; justify-content: center; height: 0; overflow: visible; }
+.newbar .btn { box-shadow: 0 8px 24px -8px rgba(0, 0, 0, 0.8); }
+.endline { display: flex; align-items: center; justify-content: center; gap: 8px; padding: 16px 0 4px; color: var(--dim); font-size: 12.5px; }
 ul.plainlist { margin: 0; padding-left: 18px; line-height: 1.8; }
 /* A clickable group of badges (e.g. the CVE counts of an application). */
 .linkbtn { display: inline-flex; align-items: center; gap: 4px; padding: 2px; margin: -2px; background: none; border: 0; border-radius: var(--r-sm); font: inherit; color: inherit; cursor: pointer; }
@@ -413,7 +424,7 @@ pre.legal { white-space: pre-wrap; word-wrap: break-word; font-size: 12.5px; lin
   .brand { padding: 4px 8px; width: 100%; }
   .side .foot { display: none; }
   .nav a { padding: 0 10px; }
-  .nav a .lbl { display: none; }
+  .nav a .lbl, .nav .chev, .nav .count-main { display: none; }
   .nav { display: flex; flex-wrap: wrap; }
   .subnav { display: none; }
   .settabs { display: flex; }
