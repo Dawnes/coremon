@@ -112,15 +112,3 @@ func TestReportOnly(t *testing.T) {
 		t.Errorf("audit: %+v", e)
 	}
 }
-
-func TestPausedBecomesReportOnly(t *testing.T) {
-	dir := t.TempDir()
-	os.WriteFile(filepath.Join(dir, "state.json"), []byte(`{"agents":{"a_1":{"id":"a_1","status":"paused"}}}`), 0o600)
-	st, err := openStore(dir)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if st.st.Agents["a_1"].Status != StatusReportOnly {
-		t.Fatalf("paused system became %q", st.st.Agents["a_1"].Status)
-	}
-}

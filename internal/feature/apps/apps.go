@@ -1,6 +1,4 @@
-// Package apps reports which common applications are installed and their
-// versions, from the package manager's own records (/var/lib/dpkg/status).
-// Nothing is started or changed: the scan only reads.
+// Package apps reports which common applications are installed (read-only).
 package apps
 
 import (
@@ -18,58 +16,44 @@ import (
 	"coremon/internal/proto"
 )
 
-// App is one row of the Applications tab: an application, or one version
-// of it when several are installed side by side.
 type App struct {
-	Name      string `json:"name"`              // "PHP", "PHP 8.2"
-	Installed bool   `json:"installed"`         //
-	Version   string `json:"version,omitempty"` // readable: "8.2.26"
-	Full      string `json:"full,omitempty"`    // package version: "8.2.26-1~deb12u1"
-	Package   string `json:"package,omitempty"` // the package it was found in
-	// The source package and its version (how Debian and Ubuntu publish
-	// security advisories), and the package source the installed version
-	// comes from: the "o=" of its apt source ("Debian", "Ubuntu", "Docker",
-	// ...); "" when no configured source has it (installed by hand). 0.3.6+.
+	Name      string `json:"name"`
+	Installed bool   `json:"installed"`
+	Version   string `json:"version,omitempty"`
+	Full      string `json:"full,omitempty"`
+	Package   string `json:"package,omitempty"`
+
 	Source        string `json:"source,omitempty"`
 	SourceVersion string `json:"source_version,omitempty"`
 	Origin        string `json:"origin,omitempty"`
-	Running       string `json:"running,omitempty"` // running | stopped | "" (no service of its own)
-	Boot          string `json:"boot,omitempty"`    // enabled | disabled | "" (starts at boot or not)
-	Ports         []Port `json:"ports,omitempty"`   // what its service listens on
+	Running       string `json:"running,omitempty"`
+	Boot          string `json:"boot,omitempty"`
+	Ports         []Port `json:"ports,omitempty"`
 }
 
-// Port is one listening port of an application's service.
 type Port struct {
 	Port  int    `json:"port"`
-	Proto string `json:"proto"`          // tcp | udp
-	Local bool   `json:"local"`          // only reachable from the machine itself
-	Addr  string `json:"addr,omitempty"` // the addresses, e.g. "0.0.0.0, ::"
+	Proto string `json:"proto"`
+	Local bool   `json:"local"`
+	Addr  string `json:"addr,omitempty"`
 }
 
-// System is what the scan knows about services: which units exist, which
-// are active, which start at boot and what they listen on.
 type System struct {
-	Active  map[string]bool   // unit -> active (only units that exist)
-	Enabled map[string]bool   // unit -> starts at boot
-	Ports   map[string][]Port // unit -> listening ports
+	Active  map[string]bool
+	Enabled map[string]bool
+	Ports   map[string][]Port
 }
 
-// State is the scan result.
 type State struct {
 	ScannedAt int64 `json:"scanned_at"`
 	Apps      []App `json:"apps"`
 }
 
-// def describes how an application is found. With multi, every captured
-// version (e.g. PHP 7.4 and 8.2) is its own row; the regexp's first group
-// is that version.
 type def struct {
 	name  string
 	re    *regexp.Regexp
 	multi bool
-	// units are its services; "{v}" is the version of a multi row, "*" a
-	// wildcard (instances such as openvpn@site.service). None: no service
-	// of its own (Running shows "—").
+
 	units []string
 }
 
@@ -80,7 +64,7 @@ var defs = []def{
 	{"Docker", regexp.MustCompile(`^(?:docker-ce|docker\.io)$`), false, []string{"docker.service"}},
 	{"Fail2ban", regexp.MustCompile(`^fail2ban$`), false, []string{"fail2ban.service"}},
 	{"ISC DHCP server", regexp.MustCompile(`^isc-dhcp-server$`), false, []string{"isc-dhcp-server.service", "isc-dhcp-server6.service"}},
-	// Kea: Debian/Ubuntu packages, or ISC's own repository (isc-kea-...).
+
 	{"Kea DHCP", regexp.MustCompile(`^(?:isc-)?kea-dhcp[46](?:-server)?$`), false, []string{
 		"kea-dhcp4-server.service", "kea-dhcp6-server.service", "isc-kea-dhcp4-server.service", "isc-kea-dhcp6-server.service", "kea-dhcp4.service", "kea-dhcp6.service"}},
 	{"Java", regexp.MustCompile(`^openjdk-(\d+)-(?:jre|jre-headless|jdk|jdk-headless)$`), true, nil},
@@ -101,7 +85,6 @@ var defs = []def{
 	{"WireGuard", regexp.MustCompile(`^wireguard-tools$`), false, []string{"wg-quick@*.service"}},
 }
 
-// UnitPatterns are all service patterns, for collecting their details.
 func UnitPatterns() []string {
 	var out []string
 	for _, d := range defs {
@@ -110,15 +93,12 @@ func UnitPatterns() []string {
 	return out
 }
 
-// unitMatch reports whether unit matches pattern p ("*" = any characters;
-// "{v}" is replaced by the row's version first).
 func unitMatch(p, v, unit string) bool {
 	p = strings.ReplaceAll(p, "{v}", v)
 	ok, _ := path.Match(p, unit)
 	return ok
 }
 
-// service fills Running, Boot and Ports of a row from the units of d.
 func (d def) service(a *App, key string, sys *System) {
 	if len(d.units) == 0 || sys == nil {
 		return
@@ -133,7 +113,7 @@ func (d def) service(a *App, key string, sys *System) {
 		}
 	}
 	if len(units) == 0 {
-		return // no service of its own on this system (e.g. PHP without FPM)
+		return
 	}
 	sort.Strings(units)
 	a.Running, a.Boot = "stopped", "disabled"
@@ -169,29 +149,23 @@ func (d def) service(a *App, key string, sys *System) {
 
 const statusFile = "/var/lib/dpkg/status"
 
-// Readable turns a Debian package version into what people call the version:
-// "1:10.11.6-0+deb12u1" -> "10.11.6", "8.2.26-1~deb12u1" -> "8.2.26".
 func Readable(v string) string {
 	if i := strings.Index(v, ":"); i >= 0 {
-		v = v[i+1:] // epoch
+		v = v[i+1:]
 	}
 	if i := strings.LastIndex(v, "-"); i > 0 {
-		v = v[:i] // Debian revision
+		v = v[:i]
 	}
 	if i := strings.IndexAny(v, "+~"); i > 0 {
-		v = v[:i] // +dfsg, ~rc, ...
+		v = v[:i]
 	}
 	return v
 }
 
-// pkgInfo is an installed package from the dpkg status.
 type pkgInfo struct {
 	ver, src, srcVer string
 }
 
-// installed reads dpkg status contents: installed package -> version and
-// source package. "Source: name" or "Source: name (version)"; without it
-// the source is the package itself, and without a version the package's.
 func installed(r io.Reader) map[string]pkgInfo {
 	out := map[string]pkgInfo{}
 	sc := bufio.NewScanner(r)
@@ -229,10 +203,6 @@ func installed(r io.Reader) map[string]pkgInfo {
 	return out
 }
 
-// scan builds the rows from dpkg status contents: a-z, one row per version,
-// and a "not detected" row for applications that are absent. sys (may be
-// nil) adds the service state and ports; originOf (may be nil) tells for
-// the found packages which package source they come from.
 func scan(r io.Reader, sys *System, originOf func([]string) map[string]string) []App {
 	info := installed(r)
 	pkgs := make(map[string]string, len(info))
@@ -246,7 +216,7 @@ func scan(r io.Reader, sys *System, originOf func([]string) map[string]string) [
 	sort.Strings(names)
 	var out []App
 	for _, d := range defs {
-		rows := map[string]App{} // version key -> row
+		rows := map[string]App{}
 		for _, p := range names {
 			m := d.re.FindStringSubmatch(p)
 			if m == nil {
@@ -300,9 +270,6 @@ func scan(r io.Reader, sys *System, originOf func([]string) map[string]string) [
 	return out
 }
 
-// parseSources reads the "Package files:" part of `apt-cache policy`: each
-// source ("<url> <suite/component> <arch>") and the origin ("o=") of its
-// release, e.g. "http://deb.debian.org/debian bookworm/main amd64" -> "Debian".
 func parseSources(out string) map[string]string {
 	m := map[string]string{}
 	last := ""
@@ -323,8 +290,6 @@ func parseSources(out string) map[string]string {
 	return m
 }
 
-// sourceKey: "<url> <suite/component> <arch> [Packages]" without the word
-// Packages, so both parts of the policy output give the same key.
 func sourceKey(f []string) string {
 	if n := len(f); n > 0 && f[n-1] == "Packages" {
 		f = f[:n-1]
@@ -344,10 +309,6 @@ func isNumber(s string) bool {
 	return true
 }
 
-// parseOrigins reads `apt-cache policy <pkg>...`: for each package the
-// origin of the installed version's sources. When the installed version
-// is no longer offered (an update is waiting), the candidate's sources
-// count; with neither (installed by hand) the origin stays "".
 func parseOrigins(out string, sources map[string]string) map[string]string {
 	res := map[string]string{}
 	type ver struct {
@@ -398,10 +359,10 @@ func parseOrigins(out string, sources map[string]string) map[string]string {
 			if star {
 				f = f[1:]
 			}
-			if len(f) == 2 && isNumber(f[1]) { // "<version> <priority>"
+			if len(f) == 2 && isNumber(f[1]) {
 				cur = &ver{installed: star}
 				vers[f[0]] = cur
-			} else if len(f) >= 2 && isNumber(f[0]) && cur != nil { // "<priority> <source>"
+			} else if len(f) >= 2 && isNumber(f[0]) && cur != nil {
 				cur.origins = append(cur.origins, sources[sourceKey(f[1:])])
 			}
 		}
@@ -410,7 +371,6 @@ func parseOrigins(out string, sources map[string]string) map[string]string {
 	return res
 }
 
-// naturalLess compares so that "php 7.4" < "php 8.2" < "php 10.0".
 func naturalLess(a, b string) bool {
 	for a != "" && b != "" {
 		da, db := digits(a), digits(b)
@@ -440,12 +400,11 @@ func digits(s string) string {
 	return s[:i]
 }
 
-// Scan reads the package manager's records now.
 func Scan() *State {
 	st := &State{ScannedAt: time.Now().Unix()}
 	f, err := os.Open(statusFile)
 	if err != nil {
-		if os.Getenv("COREMON_FAKE") == "1" { // development builds
+		if os.Getenv("COREMON_FAKE") == "1" {
 			st.Apps = scan(strings.NewReader(fakeStatus), fakeSystem(), func(p []string) map[string]string {
 				m := map[string]string{}
 				for _, n := range p {
@@ -463,7 +422,6 @@ func Scan() *State {
 	return st
 }
 
-// fakeSystem: services for development builds (COREMON_FAKE=1).
 func fakeSystem() *System {
 	return &System{
 		Active:  map[string]bool{"apache2.service": true, "ssh.service": true, "mariadb.service": true, "php8.2-fpm.service": false},
@@ -476,20 +434,15 @@ func fakeSystem() *System {
 	}
 }
 
-// Apps implements feature.Feature: the "Refresh now" scan.
 type Apps struct{}
 
-// New returns the applications feature.
 func New() *Apps { return &Apps{} }
 
-// Info describes the feature. The scan only reads, so the master allows it
-// on report-only systems too.
 func (*Apps) Info() proto.FeatureInfo {
 	return proto.FeatureInfo{Name: "apps", Title: "Applications",
 		Actions: []proto.ActionSpec{{Name: "scan", Title: "Scan applications", Timeout: 120}}}
 }
 
-// Call runs the scan.
 func (*Apps) Call(c *feature.Ctx, action string) (any, error) {
 	if action != "scan" {
 		return nil, errUnknown(action)

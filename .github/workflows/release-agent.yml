@@ -1,12 +1,5 @@
-# Builds, signs and publishes an agent release when an agent tag is pushed:
-#
-#   git tag agent-v0.2.1 && git push origin agent-v0.2.1
-#
-# Then adds it to the signed version index (release "index", file
-# versions.json), which keeps the newest 3 agent versions. Masters pick it
-# up on their next check. The signing key lives only in the "release"
-# environment's secret COREMON_SIGNING_KEY; add a required reviewer to that
-# environment to approve every release by hand.
+# Builds, signs and publishes an agent release when an agent-v* tag is pushed.
+
 name: release-agent
 
 on:

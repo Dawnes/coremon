@@ -1,12 +1,6 @@
 #!/bin/sh
-# Coremon master installer / upgrader for Debian/Ubuntu (e.g. a dedicated LXC).
-#
-# From GitHub (latest release):
-#   curl -fsSL https://github.com/@REPO@/releases/latest/download/install-master.sh | sh
-# From an extracted release tarball:
-#   sh install-master.sh
-#
-# Options:  --force-key   accept a different release signing key (key rotation)
+# Coremon master installer for Debian/Ubuntu: sh install-master.sh [--force-key]
+
 set -eu
 
 REPO="@REPO@"
@@ -30,7 +24,6 @@ case "$(uname -m)" in
   *) die "unsupported architecture: $(uname -m)" ;;
 esac
 
-# Locate the release files: next to this script, or download from GitHub.
 HERE="$(cd "$(dirname "$0")" 2>/dev/null && pwd || true)"
 if [ -z "$HERE" ] || [ ! -d "$HERE/release" ]; then
   case "$REPO" in ""|@*) die "run this script from an extracted release directory" ;; esac
@@ -51,7 +44,6 @@ BIN="$HERE/release/master/$VERSION/linux-$ARCH/coremon-master"
 [ -f "$BIN" ] || die "no master binary for linux-$ARCH in this release"
 [ -f "$HERE/release/signing.pub" ] || die "release has no signing.pub"
 
-# Release signing key: root-owned; never silently replaced.
 mkdir -p /etc/coremon-master
 chmod 755 /etc/coremon-master
 if [ -f /etc/coremon-master/signing.pub ] && ! cmp -s /etc/coremon-master/signing.pub "$HERE/release/signing.pub"; then
@@ -73,12 +65,8 @@ if [ -x /usr/local/bin/coremon-master ]; then
   echo "coremon: replacing master ${OLD:-?} with $VERSION"
 fi
 install -m 0755 "$BIN" /usr/local/bin/coremon-master
-# coremon-reset (password reset by root) is the same program under another name.
 ln -sfn /usr/local/bin/coremon-master /usr/local/sbin/coremon-reset
 mkdir -p "$DATA/release" "$DATA/update"
-# Agent versions are downloaded by the master itself from the version index.
-# Masters before 0.2 also stored separate modules; those are not used anymore.
-rm -rf "$DATA/release/modules"
 chown -R coremon:coremon "$DATA"
 chmod 700 "$DATA"
 

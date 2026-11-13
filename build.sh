@@ -1,15 +1,6 @@
 #!/bin/sh
-# Builds, signs and packages one Coremon release track. Used by the GitHub
-# Actions release workflows and for local builds on Linux/macOS.
-#
-#   ./build.sh agent 0.2.0              # agent binaries
-#   ./build.sh master 0.2.0             # master package + installer
-#   ARCHES=amd64 ./build.sh agent 0.2.0 # subset of architectures
-#
-# Output in dist/: assets/ (files to attach to the GitHub release),
-# release/ (signed layout, input for `coremon-sign index`) and coremon-sign.
-# Signing key: $COREMON_SIGNING_KEY (CI secret) or keys/signing.key.
-# COREMON_REPO=owner/name bakes the GitHub repository into install-master.sh.
+# Builds, signs and packages one release track: ./build.sh agent|master <version>
+
 set -eu
 cd "$(dirname "$0")"
 
@@ -48,8 +39,6 @@ if [ -z "${COREMON_SIGNING_KEY:-}" ] && [ ! -f keys/signing.key ]; then
 fi
 dist/coremon-sign release -key keys/signing.key -dir dist/release
 
-# Raw binaries + signatures as release assets (downloaded by the master
-# via the version index).
 for A in $ARCHES; do
   cp "dist/release/$KIND/$VERSION/linux-$A/$BIN" "dist/assets/$BIN-$VERSION-linux-$A"
   cp "dist/release/$KIND/$VERSION/linux-$A/$BIN.sig" "dist/assets/$BIN-$VERSION-linux-$A.sig"

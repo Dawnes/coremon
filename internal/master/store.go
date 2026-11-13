@@ -1,5 +1,7 @@
 package master
 
+// Persistent state: settings, users, systems and jobs.
+
 import (
 	"encoding/json"
 	"log"
@@ -12,21 +14,19 @@ import (
 	"coremon/internal/proto"
 )
 
-// Settings are editable in the UI.
 type Settings struct {
 	CheckIntervalHours int    `json:"check_interval_hours"`
-	HeartbeatSec       int    `json:"heartbeat_sec"`  // longest gap between agent contacts
-	RetentionDays      int    `json:"retention_days"` // audit log and job history
-	UIPort             int    `json:"ui_port"`        // website port: 8443 (agents' port) or 443 (extra listener)
-	MasterURL          string `json:"master_url"`     // used in install commands; empty = derive from browser
-	GitHubRepo         string `json:"github_repo"`    // owner/name publishing the version index
+	HeartbeatSec       int    `json:"heartbeat_sec"`
+	RetentionDays      int    `json:"retention_days"`
+	UIPort             int    `json:"ui_port"`
+	MasterURL          string `json:"master_url"`
+	GitHubRepo         string `json:"github_repo"`
 	GitHubSeeded       bool   `json:"github_seeded"`
-	OSInfoDays         int    `json:"os_info_days"`      // how often the OS support dates are looked up: 3, 14, 30 or 90
-	MinAgentVersion    string `json:"min_agent_version"` // lowest allowed agent version; "" = the oldest stored one
-	VulnDays           int    `json:"vuln_days"`         // how often the vulnerability data is checked: 1, 7, 30 or 90
+	OSInfoDays         int    `json:"os_info_days"`
+	MinAgentVersion    string `json:"min_agent_version"`
+	VulnDays           int    `json:"vuln_days"`
 }
 
-// osInfoChoices are the allowed lookup intervals in days.
 var osInfoChoices = []int{3, 14, 30, 90}
 
 const defaultOSInfoDays = 14
@@ -82,40 +82,36 @@ func clamp(v, lo, hi int) int {
 	return v
 }
 
-// Group is an admin-defined group of systems. The order of State.Groups is
-// the display order.
 type Group struct {
 	ID   string `json:"id"`
 	Name string `json:"name"`
 }
 
-// Agent statuses.
 const (
 	StatusPending    = "pending"
 	StatusActive     = "active"
-	StatusReportOnly = "report_only" // pure reporting: no checks, installs or reboots
+	StatusReportOnly = "report_only"
 )
 
-// Agent is a registered system.
 type Agent struct {
 	ID          string                     `json:"id"`
 	Name        string                     `json:"name"`
-	GroupID     string                     `json:"group_id"`          // "" = ungrouped
-	Order       int                        `json:"order"`             // position within its group
-	Status      string                     `json:"status"`            // pending | active | report_only
-	ReportOnly  bool                       `json:"agent_report_only"` // mode the agent itself confirmed (protocol 3+)
-	Pins        [2]string                  `json:"pins"`              // master keys the agent reports trusting, per slot (protocol 4+)
+	GroupID     string                     `json:"group_id"`
+	Order       int                        `json:"order"`
+	Status      string                     `json:"status"`
+	ReportOnly  bool                       `json:"agent_report_only"`
+	Pins        [2]string                  `json:"pins"`
 	PinsAt      int64                      `json:"pins_at"`
-	AgentKey    string                     `json:"agent_key,omitempty"` // the agent's own ed25519 public key (0.3.0+)
-	EnrollIP    string                     `json:"enroll_ip,omitempty"` // address it registered from (one pending system per address)
+	AgentKey    string                     `json:"agent_key,omitempty"`
+	EnrollIP    string                     `json:"enroll_ip,omitempty"`
 	EnrolledAt  int64                      `json:"enrolled_at"`
 	LastSeen    int64                      `json:"last_seen"`
 	CoreVersion string                     `json:"core_version"`
 	Protocol    int                        `json:"protocol"`
 	Facts       proto.Facts                `json:"facts"`
 	Features    []proto.FeatureInfo        `json:"features"`
-	DesiredCore string                     `json:"desired_core"` // requested agent version, cleared once reached
-	State       map[string]json.RawMessage `json:"state"`        // feature name -> state
+	DesiredCore string                     `json:"desired_core"`
+	State       map[string]json.RawMessage `json:"state"`
 	StateAt     map[string]int64           `json:"state_at"`
 	Removing    bool                       `json:"removing"`
 }
@@ -129,7 +125,6 @@ func (a *Agent) feature(name string) *proto.FeatureInfo {
 	return nil
 }
 
-// EnrollToken is a single-use enrollment token (only its hash is stored).
 type EnrollToken struct {
 	Hash    string `json:"hash"`
 	Prefix  string `json:"prefix"`
@@ -138,7 +133,6 @@ type EnrollToken struct {
 	Expires int64  `json:"expires"`
 }
 
-// Job statuses.
 const (
 	JobQueued    = "queued"
 	JobRunning   = "running"
@@ -148,7 +142,6 @@ const (
 	JobCancelled = "cancelled"
 )
 
-// Job is one command sent (or to be sent) to one agent.
 type Job struct {
 	ID       string          `json:"id"`
 	AgentID  string          `json:"agent_id"`
@@ -169,29 +162,23 @@ type Job struct {
 
 func (j *Job) done() bool { return j.Status != JobQueued && j.Status != JobRunning }
 
-// Roles. Permissions are per role; see can().
 const (
 	RoleAdmin  = "admin"
-	RoleViewer = "viewer" // read-only
+	RoleViewer = "viewer"
 )
 
-// User is a login of the website.
 type User struct {
 	ID           string `json:"id"`
 	Name         string `json:"name"`
 	Role         string `json:"role"`
 	PasswordHash string `json:"password_hash"`
 	Created      int64  `json:"created"`
-	// MustChange: a generated password (install, coremon-reset, restored
-	// admin); the user can only change it before doing anything else.
+
 	MustChange bool `json:"must_change,omitempty"`
-	// Locked: an administrator locked the account; it cannot sign in until
-	// an administrator (or coremon-reset) unlocks it.
+
 	Locked bool `json:"locked,omitempty"`
 }
 
-// adminName is the permanent administrator account: it cannot be deleted
-// or demoted, and is restored at start-up if missing.
 const adminName = "admin"
 
 func (s *store) userByName(name string) *User {
@@ -222,8 +209,6 @@ func (s *store) admins() int {
 	return n
 }
 
-// lastActiveAdmin: u is the only administrator who can still sign in, so
-// it must not be locked, demoted or removed.
 func (s *store) lastActiveAdmin(u *User) bool {
 	if u.Role != RoleAdmin || u.Locked {
 		return false
@@ -236,25 +221,20 @@ func (s *store) lastActiveAdmin(u *User) bool {
 	return true
 }
 
-// State is everything the master persists (besides logs and audit).
 type State struct {
-	PasswordHash string                  `json:"password_hash,omitempty"` // before 0.2.4: the single admin password
-	Users        []*User                 `json:"users"`
-	InitialUser  string                  `json:"initial_user,omitempty"` // user whose generated password is in initial-password.txt
-	Settings     Settings                `json:"settings"`
-	Groups       []*Group                `json:"groups"`
-	Agents       map[string]*Agent       `json:"agents"`
-	Tokens       map[string]*EnrollToken `json:"tokens"`
-	Jobs         []*Job                  `json:"jobs"` // oldest first
-	// NVDKey is the optional NVD API key (faster severity lookups). Kept out
-	// of Settings, which every signed-in user can read.
+	Users       []*User                 `json:"users"`
+	InitialUser string                  `json:"initial_user,omitempty"`
+	Settings    Settings                `json:"settings"`
+	Groups      []*Group                `json:"groups"`
+	Agents      map[string]*Agent       `json:"agents"`
+	Tokens      map[string]*EnrollToken `json:"tokens"`
+	Jobs        []*Job                  `json:"jobs"`
+
 	NVDKey string `json:"nvd_key,omitempty"`
 }
 
 const maxJobs = 2000
 
-// store persists State as a single JSON file, written atomically and
-// debounced. The master has little data, so this keeps dependencies at zero.
 type store struct {
 	mu    sync.Mutex
 	path  string
@@ -282,13 +262,7 @@ func openStore(dir string) (*store, error) {
 	if s.st.Groups == nil {
 		s.st.Groups = []*Group{}
 	}
-	// Before 0.2.4 there was one admin password: it becomes user "admin".
-	if len(s.st.Users) == 0 && s.st.PasswordHash != "" {
-		u := &User{ID: "u_" + randHex(6), Name: "admin", Role: RoleAdmin, PasswordHash: s.st.PasswordHash, Created: time.Now().Unix()}
-		s.st.Users = []*User{u}
-		s.st.InitialUser = u.ID
-		s.st.PasswordHash = ""
-	}
+
 	s.st.Settings.normalize()
 	for _, a := range s.st.Agents {
 		if a.State == nil {
@@ -300,11 +274,8 @@ func openStore(dir string) (*store, error) {
 		if a.GroupID != "" && s.group(a.GroupID) == nil {
 			a.GroupID = ""
 		}
-		if a.Status == "paused" { // before 0.2.8 "pause"; now "report only"
-			a.Status = StatusReportOnly
-		}
 	}
-	// Jobs in flight when the master stopped will never get a result.
+
 	for _, j := range s.st.Jobs {
 		if !j.done() {
 			j.Status, j.Error, j.Finished = JobFailed, "master restarted", time.Now().Unix()
@@ -322,7 +293,6 @@ func (s *store) group(id string) *Group {
 	return nil
 }
 
-// nextOrder returns the position after the last system of a group.
 func (s *store) nextOrder(groupID string) int {
 	n := 0
 	for _, a := range s.st.Agents {
@@ -348,12 +318,7 @@ func (s *store) writeNow() error {
 	if err := os.WriteFile(tmp, b, 0o600); err != nil {
 		return err
 	}
-	if err := os.Rename(tmp, s.path); err != nil {
-		return err
-	}
-	// Converted from an older version: the plain file is no longer needed.
-	os.Remove(filepath.Join(s.dir, oldStateFile))
-	return nil
+	return os.Rename(tmp, s.path)
 }
 
 func (s *store) flushLoop(stop <-chan struct{}) {
@@ -404,8 +369,6 @@ func (s *store) addJob(j *Job) {
 	s.markDirty()
 }
 
-// purgeJobs removes finished jobs (and their output) older than cutoff,
-// plus output files of jobs that no longer exist. Caller holds s.mu.
 func (s *store) purgeJobs(cutoff int64) int {
 	keep := s.st.Jobs[:0]
 	removed := 0

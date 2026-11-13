@@ -1,12 +1,5 @@
-# Builds, signs and publishes a master release (server + website) when a
-# master tag is pushed:
-#
-#   git tag master-v0.2.1 && git push origin master-v0.2.1
-#
-# The release becomes GitHub's "latest" release, so the one-line installer
-# (releases/latest/download/install-master.sh) always installs the newest
-# master. It is also added to the signed version index, where running
-# masters find it and offer "Update master".
+# Builds, signs and publishes a master release when a master-v* tag is pushed.
+
 name: release-master
 
 on:

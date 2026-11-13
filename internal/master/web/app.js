@@ -1,6 +1,4 @@
-// coremon web UI - plain ES modules, no build step, no third-party code.
-
-// ---------- tiny templating ----------
+// Coremon website: plain JavaScript, no build step, no third-party code.
 class Raw { constructor(s) { this.s = s; } }
 const raw = (s) => new Raw(s);
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -10,8 +8,6 @@ function html(strings, ...vals) {
   strings.forEach((s, i) => { out += s; if (i < vals.length) out += r(vals[i]); });
   return raw(out);
 }
-// setHTML only touches the DOM when content changed, and keeps scroll
-// positions of [data-keep-scroll] containers.
 function setHTML(el, content) {
   if (!el) return;
   const s = r(content);
@@ -26,7 +22,6 @@ function setHTML(el, content) {
 }
 const $ = (sel, root = document) => root.querySelector(sel);
 
-// ---------- icons ----------
 const ICONS = {
   dash: '<rect x="3" y="3" width="7" height="9" rx="2"/><rect x="14" y="3" width="7" height="5" rx="2"/><rect x="14" y="12" width="7" height="9" rx="2"/><rect x="3" y="16" width="7" height="5" rx="2"/>',
   server: '<rect x="3" y="4" width="18" height="7" rx="2"/><rect x="3" y="13" width="18" height="7" rx="2"/><path d="M7 7.5h.01M7 16.5h.01"/>',
@@ -57,7 +52,6 @@ const ICONS = {
 };
 const icon = (n) => raw(`<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">${ICONS[n] || ''}</svg>`);
 
-// ---------- formatting: 24-hour clock, dd-mm-yyyy dates everywhere ----------
 const now = () => Date.now() / 1000;
 const p2 = (n) => String(n).padStart(2, '0');
 function fmtDate(ts, seconds = false) {
@@ -75,7 +69,6 @@ function ago(ts) {
   if (d < 86400) return `${Math.round(d / 3600)}h ago`;
   return `${Math.round(d / 86400)}d ago`;
 }
-// Relative time with the full date and time on hover.
 const when = (ts, prefix = '') => (ts ? html`<span class="when" title="${fmtDate(ts, true)}">${prefix}${ago(ts)}</span>` : html`<span>${prefix}never</span>`);
 function dur(s) {
   s = Math.floor(s || 0);
@@ -90,7 +83,6 @@ function bytes(n) {
   return `${n.toFixed(n < 10 && i ? 1 : 0)} ${u[i]}`;
 }
 
-// ---------- api ----------
 async function api(method, path, body) {
   const res = await fetch('/api/ui/' + path, {
     method,
@@ -108,10 +100,6 @@ async function api(method, path, body) {
 const GET = (p) => api('GET', p);
 const POST = (p, b) => api('POST', p, b || {});
 
-// ---------- toasts ----------
-// Behave like Sonner: the newest toast in front with up to two peeking
-// behind it; hovering the stack spreads it out and pauses the timers;
-// swipe right or press × to close one.
 const TOAST = { gap: 14, visible: 3, max: 10, ms: { '': 4000, ok: 4000, err: 8000 } };
 const TOAST_ICON = {
   ok: '<circle cx="10" cy="10" r="8" fill="currentColor"/><path d="m6.6 10.3 2.3 2.3 4.6-4.9" fill="none" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>',
@@ -180,7 +168,7 @@ function swipeToast(t) {
   t.el.addEventListener('pointermove', (e) => {
     if (x0 === null) return;
     const raw = e.clientX - x0;
-    dx = raw > 0 ? raw : raw / 6; // a little give to the left
+    dx = raw > 0 ? raw : raw / 6;
     t.el.classList.add('swiping');
     t.el.style.transform = `${t.base} translateX(${dx}px)`;
     t.el.style.opacity = String(Math.max(0.2, 1 - Math.max(0, dx) / 220));
@@ -213,15 +201,12 @@ function toast(msg, kind = '') {
   toastState.list.unshift(t);
   while (toastState.list.length > TOAST.max) dropToast(toastState.list[toastState.list.length - 1]);
   layoutToasts();
-  el.offsetHeight; // start the slide-in from below
+  el.offsetHeight;
   el.classList.remove('entering');
   if (!toastState.open && !document.hidden) toastTimer(t, true);
 }
 const fail = (e) => toast(e.message || String(e), 'err');
 
-// ---------- modals ----------
-// Windows stack: one opened from another window (over: true) lies on top of
-// it, and closing it returns to the one below. `modal` is the top window.
 const modals = [];
 let modal = null;
 function openModal(content, { wide = false, acts = {}, onClose, over = false } = {}) {
@@ -238,7 +223,6 @@ function openModal(content, { wide = false, acts = {}, onClose, over = false } =
   if (f) f.focus();
   return m;
 }
-// closeModal closes the top window only.
 function closeModal() {
   const m = modals.pop();
   modal = modals[modals.length - 1] || null;
@@ -263,7 +247,6 @@ function confirmBox(title, body, { okText = 'Confirm', danger = false } = {}) {
 }
 document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeModal(); });
 
-// ---------- job log modal ----------
 function statusBadge(st) {
   const m = { queued: ['mute', 'queued'], running: ['info', 'running'], success: ['ok', 'success'], failed: ['sec', 'failed'], timeout: ['sec', 'timeout'], cancelled: ['mute', 'cancelled'] };
   const [c, t] = m[st] || ['mute', st];
@@ -332,13 +315,10 @@ function openJob(id) {
   tick();
 }
 
-// ---------- event delegation ----------
 let view = null;
 const globalActs = {
   'open-job': (t) => openJob(t.dataset.id),
   logout: async () => { await POST('logout').catch(() => {}); navOpen.reset(); await boot().catch(() => showLogin()); },
-  // A main menu item only folds or unfolds its section. On narrow screens
-  // (icons only, the submenu as tabs on the page) it opens the section.
   'nav-fold': (t) => {
     const sec = t.dataset.sec;
     if (matchMedia('(max-width: 860px)').matches || !SUBNAV[sec]) { location.hash = '#/' + sec; return; }
@@ -361,7 +341,6 @@ document.addEventListener('click', (e) => {
   e.stopPropagation();
   Promise.resolve(h(t, e)).catch(fail);
 });
-// <select data-change="name"> calls view.acts[name](select) when changed.
 document.addEventListener('change', (e) => {
   const t = e.target.closest('[data-change]');
   if (!t) return;
@@ -380,13 +359,9 @@ document.addEventListener('submit', (e) => {
   if (h) Promise.resolve(h(f, e)).catch(fail);
 });
 
-// ---------- shell & routing ----------
 let session = { version: '', min_password: 5, max_password: 40 };
-// Password length when setting one (sign-in is not limited).
 const pwMin = () => session.min_password || 5, pwMax = () => session.max_password || 40;
 const pwRange = () => `${pwMin()}–${pwMax()} characters`;
-// Read-only users see everything but get no controls that change things.
-// (The master refuses such requests anyway.)
 const canChange = () => !!session.can_change;
 const ifChange = (x) => (canChange() ? x : '');
 let refreshTimer = null;
@@ -416,9 +391,7 @@ function showLogin() {
         f.password.classList.remove('bad');
         try {
           await POST('login', { username: f.username.value, password: f.password.value });
-          navOpen.reset(); // every sign-in starts with only Dashboard open
-          // After signing in always start at the dashboard, whatever
-          // address was opened. (Reloading a page while signed in keeps it.)
+          navOpen.reset();
           if (location.hash && location.hash !== '#/') history.replaceState(null, '', location.pathname + location.search + '#/');
           await boot();
         } catch (e) {
@@ -439,45 +412,35 @@ const NAV = [
   ['settings', 'cog', 'Settings'],
   ['about', 'info', 'About'],
 ];
-// Submenus, always shown below their menu item. The first entry opens when
-// the menu item itself is clicked.
 const SUBNAV = {
   dashboard: () => [['overview', 'Overview'], ['list', 'List']],
   about: () => [['about', 'About'], ['license', 'License']],
   history: () => [['jobs', 'Jobs'], ['audit', 'Audit log']],
   settings: () => [['general', 'General'], ['systems', 'Systems'], ['releases', 'Releases'], ...(canChange() ? [['users', 'Users']] : []), ['login', 'Login'], ['identity', 'Identity']],
 };
-const OLD_ROUTES = { systems: ['settings', 'systems'], jobs: ['history', 'jobs'], audit: ['history', 'audit'] };
 function currentRoute() {
   const p = location.hash.replace(/^#\/?/, '').split('/');
-  if (OLD_ROUTES[p[0]]) return OLD_ROUTES[p[0]];
   if (SUBNAV[p[0]]) {
     const items = SUBNAV[p[0]]();
     return [p[0], items.some(([k]) => k === p[1]) ? p[1] : items[0][0]];
   }
-  // The start page is Overview; a system page belongs to the submenu it was
-  // opened from.
   if (p[0] === '') return ['dashboard', 'overview'];
   if (p[0] === 'system') return ['dashboard', lastDashSub];
   return [p[0], ''];
 }
 const releasedLabel = () => (session.build_date ? 'Released: ' + session.build_date.split('-').reverse().join('-') : '');
-// On narrow screens the submenu is shown as tabs at the top of the page.
 const subTabs = (section, cur) => html`<div class="settabs">${SUBNAV[section]().map(([k, l]) => html`<a href="#/${section}/${k}" class="${cur === k ? 'on' : ''}">${l}</a>`)}</div>`;
 const settingsTabs = (cur) => subTabs('settings', cur);
 const roleLabel = (r) => (r === 'admin' ? 'Administrator' : r === 'viewer' ? 'Read-only' : r);
 
-// Folding menu: which sections are open. At every sign-in only Dashboard;
-// the choices stay in this browser until signing out. Opening a page in a
-// folded section opens that section.
 const NAV_KEY = 'coremon.nav';
-let navMem = null; // when the browser keeps no storage
+let navMem = null;
 const navOpen = {
   get() {
-    try { const v = JSON.parse(localStorage.getItem(NAV_KEY)); if (Array.isArray(v)) return new Set(v); } catch { /* none */ }
+    try { const v = JSON.parse(localStorage.getItem(NAV_KEY)); if (Array.isArray(v)) return new Set(v); } catch {}
     return new Set(navMem || ['dashboard']);
   },
-  set(s) { navMem = [...s]; try { localStorage.setItem(NAV_KEY, JSON.stringify(navMem)); } catch { /* memory only */ } },
+  set(s) { navMem = [...s]; try { localStorage.setItem(NAV_KEY, JSON.stringify(navMem)); } catch {} },
   reset() { this.set(new Set(['dashboard'])); },
 };
 function renderShell() {
@@ -500,7 +463,6 @@ function renderShell() {
 }
 function setPending(n) {
   pendingCount = n;
-  // On Systems, and on Settings itself while that section is folded.
   for (const [id, cls] of [['#nav-pending', 'count'], ['#nav-pending-main', 'count count-main']]) {
     const el = $(id);
     if (el) { el.className = n ? cls : ''; el.textContent = n ? String(n) : ''; el.title = n ? `${n} system${n === 1 ? '' : 's'} waiting for approval` : ''; }
@@ -520,13 +482,10 @@ function route() {
     about: { about: AboutPage, license: LicensePage },
   };
   const views = { system: AgentPage };
-  // A system's ID from the address bar goes into request addresses: only a
-  // real ID is accepted (nothing like "../users").
   if (parts[0] === 'system' && !/^a_[0-9a-f]{16}$/.test(parts[1] || '')) {
     location.hash = '#/';
     return;
   }
-  // A page of its own (e.g. a system) wins over the submenu it belongs to.
   const V = views[parts[0]] || (subViews[section] && subViews[section][sub]) || Dashboard;
   renderShell();
   view = V(parts.slice(1));
@@ -546,8 +505,6 @@ async function boot() {
   route();
 }
 
-// A generated password (installation, coremon-reset, restored admin) must be
-// changed before anything else; the master refuses everything else too.
 function showMustChange() {
   clearInterval(refreshTimer);
   closeAllModals();
@@ -583,19 +540,14 @@ function showMustChange() {
   };
 }
 
-// ---------- shared bits ----------
 function agentDot(a) {
   if (a.status === 'pending') return html`<span class="dot pend" title="pending approval"></span>`;
   if (a.status === 'report_only') return html`<span class="dot pause" title="report only${a.online ? '' : ' · offline'}"></span>`;
   return html`<span class="dot ${a.online ? 'on' : 'off'}" title="${a.online ? 'online' : 'offline since ' + fmtDate(a.last_seen)}"></span>`;
 }
 function osLabel(f) { return f.os_name || [f.os_id, f.os_version].filter(Boolean).join(' ') || 'unknown OS'; }
-// Every agent has the update function; only upgrade-only systems (below the
-// lowest allowed agent version) are left out.
 const hasUpdates = (a) => !a.below_min;
-// First IPv4 address; the others on hover.
-// ---------- health and OS support ----------
-const ymd = (s) => (s ? s.split('-').reverse().join('-') : ''); // YYYY-MM-DD -> DD-MM-YYYY
+const ymd = (s) => (s ? s.split('-').reverse().join('-') : '');
 function osSupportText(o, osID) {
   if (!o) return '—';
   const esm = o.esm_until ? ` (ESM with Ubuntu Pro until ${ymd(o.esm_until)})` : '';
@@ -614,7 +566,6 @@ function upgradedBy(by) {
   if (by?.startsWith('user:')) return `${by.slice(5)} via apt`;
   return 'apt';
 }
-// Small badges on a dashboard card: failed services, OS support, automatic updates.
 function healthBadges(a, { eol = true } = {}) {
   const h = a.facts?.health, o = eol ? a.os_support : null, out = [];
   if (h?.failed_count > 0) out.push(html`<span class="badge sec xs" title="Failed services: ${(h.failed || []).join(', ')}${h.failed_count > (h.failed || []).length ? ', …' : ''}">${h.failed_count} failed</span>`);
@@ -632,7 +583,6 @@ function ipLabel(f) {
 }
 const byName = (a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: 'base', numeric: true });
 
-// Agent version: green when it is the latest, orange otherwise.
 function verPill(a) {
   if (!a.core_version) return '';
   const latest = a.core_is_latest;
@@ -650,7 +600,6 @@ function updBadges(a) {
   return out;
 }
 
-// ---------- known vulnerabilities (CVEs) ----------
 const SEV = ['unknown', 'low', 'medium', 'high', 'critical'];
 const CVE_RED = 'fixed by an update and rated High or Critical, or actively exploited';
 function cveBadge(a) {
@@ -662,7 +611,6 @@ function sevBadge(c) {
   const from = { osv: 'CVSS score from the OSV record', nvd: 'CVSS score from NVD', distro: "the distribution's own rating (no CVSS score yet)" }[c.src] || 'no rating yet';
   return html`<span class="badge ${cls} xs" title="${from}">${SEV[c.level] || 'unknown'}${c.scored ? ' ' + c.score.toFixed(1) : ''}</span>`;
 }
-// The list of an application's CVEs, from the Applications tab.
 function openCves(appName, v) {
   const pct = (x) => (x >= 0.1 ? Math.round(x * 100) + '%' : x >= 0.001 ? (x * 100).toFixed(1) + '%' : '<0.1%');
   const sum = [v.fixable ? `${v.fixable} fixed by an update` : '', v.open ? `${v.open} without a fix yet` : '', v.minor ? `${v.minor} minor` : '']
@@ -729,7 +677,6 @@ function approveModal(a, groups) {
   });
 }
 
-// Layout helpers: the complete arrangement as {gid: [agent ids]} in order.
 function layoutOf(data) {
   const lists = new Map(data.groups.map((g) => [g.id, []]));
   lists.set('', []);
@@ -741,7 +688,6 @@ async function saveLayout(groupsOrder, lists) {
   await POST('layout', body);
 }
 
-// ---------- Dashboard: shared filter (Overview and List) ----------
 const FILTER_CHIPS = [['all', 'All'], ['updates', 'Updates'], ['security', 'Security'], ['reboot', 'Reboot'], ['offline', 'Offline'], ['pending', 'Pending'], ['agent', 'Agent outdated']];
 function agentMatches(a, f, q, groups) {
   const u = a.updates || {};
@@ -761,10 +707,8 @@ function agentMatches(a, f, q, groups) {
 function filterChips(agents, cur, test) {
   return FILTER_CHIPS.map(([k, l]) => html`<button class="chip ${cur === k ? 'on' : ''}" data-act="filter" data-f="${k}">${l}<span class="n">${agents.filter((a) => test(a, k)).length}</span></button>`);
 }
-// The dashboard submenu a system page was opened from (Overview or List).
 let lastDashSub = 'overview';
 
-// ---------- Dashboard: Overview ----------
 function Dashboard() {
   lastDashSub = 'overview';
   const st = { filter: 'all', q: '', sel: new Set(), data: null, folded: new Set(), drag: null };
@@ -810,7 +754,6 @@ function Dashboard() {
   function section(g, agents, showHead, dragOnly = false) {
     const list = agents.filter(matches);
     if (dragOnly) {
-      // Shown only while dragging, so a system can always leave its group.
       return html`<section class="gsec dragonly" data-gid=""><div class="ghead"><span class="gname">Ungrouped</span></div>
         <div class="gbody" data-gid=""><div class="gempty">Drop here to take a system out of its group</div></div></section>`;
     }
@@ -848,21 +791,15 @@ function Dashboard() {
     const pending = A.filter((a) => a.status === 'pending').length;
     const reportOnly = A.filter((a) => a.status === 'report_only').length;
     setPending(pending);
-    // Oldest information: per system the age of what the dashboard shows -
-    // last contact when offline, last update check when online. Report-only and
-    // pending systems are left out.
-    // "Current": online and checked within the check interval + 15 min. An
-    // offline system is never current.
     let oldest = null, anyOffline = false, anyUnchecked = false;
     for (const a of A) {
-      if (a.status !== 'active' || a.below_min) continue; // upgrade-only systems have no data here
+      if (a.status !== 'active' || a.below_min) continue;
       const ts = a.online ? a.updates?.checked_at : a.last_seen;
       if (!a.online) anyOffline = true;
-      if (a.online && !ts && hasUpdates(a)) anyUnchecked = true; // waiting for its first check
+      if (a.online && !ts && hasUpdates(a)) anyUnchecked = true;
       if (!ts) continue;
       if (!oldest || ts < oldest.ts) oldest = { ts, a };
     }
-    // An offline system is named even if an online one has older data.
     if (anyOffline && oldest?.a.online) {
       const off = A.filter((a) => a.status === 'active' && !a.below_min && !a.online && a.last_seen).sort((x, y) => x.last_seen - y.last_seen)[0];
       if (off) oldest = { ts: off.last_seen, a: off };
@@ -908,16 +845,12 @@ function Dashboard() {
       <button class="btn ghost sm" data-act="bulk-clear">Clear</button></div>` : '');
   }
 
-  // ----- drag and drop (systems within/between groups, and groups) -----
   function clearMarks() { document.querySelectorAll('.drop-before,.drop-after,.drop-into').forEach((e) => e.classList.remove('drop-before', 'drop-after', 'drop-into')); }
   function dropTarget(e) {
     if (st.drag.type === 'agent') {
       const c = e.target.closest('.card[data-id]');
       if (c && c.dataset.id === st.drag.id) return null;
       if (c) {
-        // Within the same group a drop takes the target's place (so two
-        // neighbours swap wherever you drop); from another group, the half
-        // of the card decides before or after.
         for (const l of layoutOf(st.data).values()) {
           const from = l.indexOf(st.drag.id), to = l.indexOf(c.dataset.id);
           if (from >= 0 && to >= 0) return { el: c, kind: 'card', id: c.dataset.id, after: from < to };
@@ -975,7 +908,6 @@ function Dashboard() {
       } else {
         (lists.get(t.gid) || lists.get('')).push(drag.id);
       }
-      // Optimistic local update.
       for (const [gid, l] of lists) l.forEach((id, i) => { const a = d.agents.find((x) => x.id === id); a.group_id = gid; a.order = i; });
       const pos = new Map(); [...lists.values()].flat().forEach((id, i) => pos.set(id, i));
       d.agents.sort((a, b) => pos.get(a.id) - pos.get(b.id));
@@ -1011,8 +943,7 @@ function Dashboard() {
       c.addEventListener('dragend', onDragEnd);
       if (session.initial_password) setHTML($('#d-notice'), html`<div class="notice">You are using the generated initial password. <a href="#/settings">Change it in Settings</a>.</div>`);
     },
-    // Systems too old to connect (before 0.3.0) are only listed under Settings > Systems.
-    async refresh() { const d = await GET('overview'); d.groups ||= []; d.agents = d.agents.filter((a) => !a.legacy); if (!st.drag) { st.data = d; render(); } },
+    async refresh() { const d = await GET('overview'); d.groups ||= []; if (!st.drag) { st.data = d; render(); } },
     acts: {
       filter: (t) => { st.filter = t.dataset.f; render(); },
       fold: (t) => { const g = t.dataset.gid; st.folded.has(g) ? st.folded.delete(g) : st.folded.add(g); render(); },
@@ -1050,16 +981,12 @@ function Dashboard() {
   };
 }
 
-// Last reboot: the agent reports its uptime with every heartbeat, so the
-// time of that report (last seen) minus the uptime is the boot time.
 function lastReboot(a) {
   const up = a.facts?.uptime_sec;
   if (!up || !a.last_seen) return '';
   return `Last reboot: ${fmtDate(a.last_seen - up)}${a.online ? '' : ' (as last reported)'}`;
 }
-// Cut text to n characters with an ellipsis.
 const clipText = (s, n) => (s && s.length > n ? s.slice(0, n - 1).trimEnd() + '…' : s);
-// List, Health column: ok or "N failed", plus auto; — when not known.
 function healthCell(a) {
   const h = a.facts?.health;
   if (!h || h.failed_count < 0) return html`<span class="dim">—</span>`;
@@ -1068,12 +995,8 @@ function healthCell(a) {
     : html`<span class="badge ok xs">ok</span>`;
   return html`${main}${h.auto_updates === 'on' ? html` <span class="badge info xs" title="Automatic updates (unattended-upgrades) are on">auto</span>` : ''}`;
 }
-// Short OS name for narrow places: "Debian 13", "Ubuntu 22.04".
 const osShort = (f) => (f.os_id && f.os_version ? f.os_id.charAt(0).toUpperCase() + f.os_id.slice(1) + ' ' + f.os_version : osLabel(f));
 
-// ---------- Dashboard: List ----------
-// Every system on one line, view only. Grouped (groups A-Z, then Ungrouped),
-// systems A-Z; a column header sorts within the groups, again reverses.
 function SystemList() {
   lastDashSub = 'list';
   const st = { filter: 'all', q: '', data: null, sort: 'name', dir: 1 };
@@ -1082,7 +1005,6 @@ function SystemList() {
   const lastTs = (a) => (a.online ? a.updates?.checked_at || 0 : a.last_seen || 0);
   const healthN = (a) => (a.facts?.health?.failed_count > 0 ? 2 : 0) + (a.facts?.health?.auto_updates === 'on' ? 1 : 0);
   const COLS = [
-    // key, title, sort value, class (opt = hidden on narrow screens)
     ['status', '●', (a) => statusText(a), 'dotcol'],
     ['name', 'Name', (a) => a.name, ''],
     ['group', 'Group', (a) => groupName(a.group_id), 'opt'],
@@ -1148,7 +1070,7 @@ function SystemList() {
         <div id="l-table"></div>`);
       $('#l-q').addEventListener('input', (e) => { st.q = e.target.value; render(); });
     },
-    async refresh() { const d = await GET('overview'); d.groups ||= []; d.agents = d.agents.filter((a) => !a.legacy); st.data = d; render(); },
+    async refresh() { const d = await GET('overview'); d.groups ||= []; st.data = d; render(); },
     acts: {
       filter: (t) => { st.filter = t.dataset.f; render(); },
       sort: (t) => { const k = t.dataset.k; st.dir = st.sort === k ? -st.dir : 1; st.sort = k; render(); },
@@ -1156,7 +1078,6 @@ function SystemList() {
   };
 }
 
-// ---------- About ----------
 const COPYRIGHT = '© 2026 Dawnes, the Developer';
 function AboutPage() {
   return {
@@ -1191,8 +1112,6 @@ function LicensePage() {
           <div class="dim small">${COPYRIGHT}</div></div>`);
       const text = (p) => fetch(p, { cache: 'no-cache' }).then((x) => (x.ok ? x.text() : Promise.reject(new Error(x.status)))).catch(() => 'Could not load the license text.');
       const [main, third] = await Promise.all([text('legal/LICENSE.txt'), text('legal/THIRD-PARTY-NOTICES.txt')]);
-      // The license is Markdown: headings become headings, link markup is
-      // dropped. Built with textContent only, never as HTML.
       const box = $('#lic-main', el);
       box.textContent = '';
       for (const block of main.split(/\n\s*\n/)) {
@@ -1208,8 +1127,7 @@ function LicensePage() {
   };
 }
 
-// ---------- Ping ----------
-const shortKey = (p) => (p ? p.slice(0, 5) + '…' : ''); // the master already sends the short form
+const shortKey = (p) => (p ? p.slice(0, 5) + '…' : '');
 function clockText(ms) {
   const s = Math.abs(ms) / 1000;
   if (s < 2) return html`<span class="badge ok">${icon('check')} in sync</span>`;
@@ -1250,7 +1168,6 @@ async function pingModal(a) {
   { acts: { close: () => closeModal(), job: () => openJob(p.job_id) } });
 }
 
-// ---------- Agent page ----------
 function AgentPage([id]) {
   const st = { tab: 'updates', sel: new Set(), data: null };
   const upd = () => st.data?.agent?.state?.updates || null;
@@ -1284,7 +1201,6 @@ function AgentPage([id]) {
   function updatesTab(a) {
     const s = upd();
     const canAct = a.status === 'active' && a.online;
-    // No update buttons for read-only users or report-only systems.
     const ed = canChange() && a.status === 'active';
     if (!s) {
       return html`<div class="panel empty">${a.status === 'report_only' ? html`<div class="big">⏸</div><div>Report only: no update checks are run on this system.</div>`
@@ -1331,12 +1247,10 @@ function AgentPage([id]) {
             </tr>`)}</tbody></table></div>
       </div>` : noUpdates(a)}`;
   }
-  // Known vulnerabilities a waiting update fixes (tracked applications only).
   function fixes(pkg) {
     const l = st.data?.agent?.vulns?.update_fixes?.[pkg];
     return l?.length ? html`<span class="badge sec" title="${l.join(', ')}">fixes ${l.length} CVE</span>` : '';
   }
-  // An empty list is only good news while the OS still gets updates.
   function noUpdates(a) {
     const o = a.os_support, os = osLabel(a.facts || {});
     if (o?.status === 'expired') {
@@ -1362,9 +1276,6 @@ function AgentPage([id]) {
     return html`<div class="panel"><table class="tbl"><thead><tr><th>Job</th><th>Status</th><th>By</th><th>Created</th><th>Duration</th></tr></thead>
       <tbody>${jobs.map((j) => html`<tr class="click" data-act="open-job" data-id="${j.id}"><td><b>${jobTitle(j)}</b><div class="dim small">${jobParams(j)}</div></td><td>${statusBadge(j.status)}</td><td class="muted">${j.actor}</td><td class="muted">${when(j.created)}</td><td class="muted">${j.finished ? dur(j.finished - (j.started || j.created)) : '—'}</td></tr>`)}</tbody></table></div>`;
   }
-  // Applications: what is installed according to the package manager. Scanned
-  // with every update check, after installs, and on "Refresh now" (which also
-  // works on report-only systems: it only reads).
   function appsTab(a) {
     let s = null;
     try { s = a.state?.apps ? (typeof a.state.apps === 'string' ? JSON.parse(a.state.apps) : a.state.apps) : null; } catch { s = null; }
@@ -1377,7 +1288,6 @@ function AgentPage([id]) {
       ${vul?.status === 'unsupported' ? html`<div class="notice">${a.os_support?.status === 'expired'
         ? `${osLabel(a.facts)} is no longer supported: no security data and no fixes are published, so it can't be checked. Upgrade to a supported release.`
         : `OSV.dev has no vulnerability data for ${osLabel(a.facts)}, so the applications cannot be checked for CVEs.`}</div>` : ''}`;
-    // Security: known vulnerabilities (CVEs) of the installed version.
     const security = (x) => {
       const v = vul?.apps?.[x.name];
       if (!v || vul.status === 'unsupported') return html`<span class="dim">—</span>`;
@@ -1402,7 +1312,6 @@ function AgentPage([id]) {
     const running = (x) => (!x.running ? html`<span class="dim">—</span>`
       : x.running === 'running' ? html`<span class="badge ok xs" title="${boot(x)}">running</span>`
         : html`<span class="badge mute xs" title="${boot(x)}">stopped</span>`);
-    // Ports always with their protocol; "(local)": only reachable from this machine.
     const ports = (x) => (x.ports?.length
       ? html`<span title="${x.ports.map((p) => `${p.port}/${p.proto} on ${p.addr}`).join('\n')}">${x.ports.map((p, i) => html`${i ? ', ' : ''}${p.port}/${p.proto}${p.local ? html` <span class="dim">(local)</span>` : ''}`)}</span>`
       : html`<span class="dim">—</span>`);
@@ -1434,7 +1343,6 @@ function AgentPage([id]) {
     if (!d) return;
     const a = d.agent;
     setHTML($('#a-head'), header(a, d.groups));
-    // Upgrade only: just the Agent tab (version and update), no data.
     const tabs = a.below_min ? [['agent', 'Agent']] : [['updates', 'Updates'], ['agent', 'Agent'], ['jobs', 'Jobs'], ['system', 'System'], ['apps', 'Applications']];
     if (!tabs.some(([k]) => k === st.tab)) st.tab = tabs[0][0];
     setHTML($('#a-tabs'), tabs.map(([k, l]) => html`<button class="${st.tab === k ? 'on' : ''}" data-act="tab" data-t="${k}">${l}${k === 'updates' && a.updates?.total ? html` <span class="badge upd">${a.updates.total}</span>` : ''}${k === 'agent' && !a.core_is_latest && a.core_latest ? html` <span class="badge upd">↑</span>` : ''}</button>`));
@@ -1512,7 +1420,6 @@ function versionLess(a, b) {
   return pa.length < pb.length;
 }
 
-// ---------- Systems (enrollment, groups, management) ----------
 function Systems() {
   const st = { data: null, tokens: [], lastCmd: null };
   function render() {
@@ -1535,8 +1442,7 @@ function Systems() {
         : html`<div class="muted small" style="margin-top:10px">No groups yet. All systems are shown together.</div>`}`);
     const act = d.agents.filter((a) => a.status !== 'pending').sort(byName);
     setHTML($('#s-all'), act.length ? html`<div class="panel"><table class="tbl"><thead><tr><th>System</th><th>IP address</th><th>Group</th><th>OS</th><th>Agent</th><th>Last seen</th><th class="w1"></th></tr></thead>
-      <tbody>${act.map((a) => html`<tr><td>${agentDot(a)} ${a.legacy ? html`<b>${a.name}</b> <span class="badge sec xs" title="Agents before 0.3.0 can no longer connect and cannot be updated">cannot connect — run a new install command</span>`
-        : html`<a href="#/system/${a.id}"><b>${a.name}</b></a>`} ${a.status === 'report_only' && !a.legacy ? html`<span class="badge info">report only</span>` : ''}${a.below_min ? html`<span class="badge upd xs">update required</span>` : ''}</td>
+      <tbody>${act.map((a) => html`<tr><td>${agentDot(a)} <a href="#/system/${a.id}"><b>${a.name}</b></a> ${a.status === 'report_only' ? html`<span class="badge info">report only</span>` : ''}${a.below_min ? html`<span class="badge upd xs">update required</span>` : ''}</td>
         <td class="mono small">${ipLabel(a.facts)}</td>
         <td>${canChange() ? html`<select class="sm" data-change="set-group" data-id="${a.id}" title="Group">${groupOptions(d.groups, a.group_id)}</select>` : html`<span class="muted">${d.groups.find((g) => g.id === a.group_id)?.name || 'Ungrouped'}</span>`}</td>
         <td class="muted">${osLabel(a.facts)}</td><td>${verPill(a)}</td>
@@ -1663,11 +1569,6 @@ function Systems() {
   };
 }
 
-// ---------- endless lists (Jobs, Audit log) ----------
-// Loads `size` entries at a time as the end of the list comes near. The
-// automatic refresh only reloads the newest page: known rows are updated,
-// new ones go to the top - or, while scrolled down, wait behind a
-// "N new — back to top" button so the list does not jump.
 function endlessList({ load, keyOf, size = 50 }) {
   const p = { items: [], pending: [], more: true, busy: false, gap: false, data: null, obs: null };
   const atTop = () => window.scrollY < 150;
@@ -1694,7 +1595,7 @@ function endlessList({ load, keyOf, size = 50 }) {
       const k = keyOf(x);
       if (known.has(k)) Object.assign(known.get(k), x); else fresh.push(x);
     }
-    const full = fresh.length >= size; // a whole page new: there may be more in between
+    const full = fresh.length >= size;
     if (atTop()) {
       if (full || p.gap) { p.reset(); p.items = d.items; p.more = d.more; } else p.items.unshift(...fresh, ...p.pending.splice(0));
       p.pending = [];
@@ -1707,7 +1608,6 @@ function endlessList({ load, keyOf, size = 50 }) {
     if (p.gap) { p.reset(); await p.next(); } else { p.items.unshift(...p.pending); p.pending = []; }
     window.scrollTo({ top: 0 });
   };
-  // Watches the element below the list; rerender draws the list again.
   p.watch = (el, rerender) => {
     p.obs?.disconnect();
     p.check = async () => {
@@ -1723,7 +1623,6 @@ function endlessList({ load, keyOf, size = 50 }) {
   return p;
 }
 
-// ---------- Jobs ----------
 function Jobs() {
   const st = { active: false, agent: '', user: '' };
   const list = endlessList({
@@ -1767,7 +1666,7 @@ function Jobs() {
     },
     unmount() { list.stop(); },
     async refresh() {
-      if (st.active) list.reset(); // finished jobs leave this list: always the current page
+      if (st.active) list.reset();
       await list.refresh();
       render();
       list.check();
@@ -1779,9 +1678,6 @@ function Jobs() {
   };
 }
 
-// ---------- Releases ----------
-// Systems whose agent a group button updates: active (not report-only)
-// with an older agent.
 const outdatedIn = (list) => list.filter((a) => a.status === 'active' && !a.core_is_latest);
 function Releases() {
   const st = { rel: null, data: null, checking: false };
@@ -1790,8 +1686,7 @@ function Releases() {
     if (!R || !d) return;
     const ix = R.index, m = R.master, repo = R.repo;
     const published = new Map((ix.agents || []).map((v) => [v.version, v.published]));
-    // Systems too old to connect cannot be updated, so they are not offered.
-    const agents = d.agents.filter((a) => a.status !== 'pending' && !a.legacy);
+    const agents = d.agents.filter((a) => a.status !== 'pending');
     const minAgent = R.min_agent || '';
     setHTML($('#r-index'), html`<div class="panel panel-pad">
       <div class="row"><h2 style="margin:0">Version index</h2><span class="spacer"></span>
@@ -1812,8 +1707,6 @@ function Releases() {
         <tbody>${repo.core.map((v, i) => html`<tr><td><span class="verpill ${i === 0 ? 'ok' : 'old'}">${v.version}</span> ${i === 0 ? html`<span class="badge ok">latest</span>` : ''}</td>
           <td class="muted">${fmtDate(published.get(v.version))}</td><td>${v.platforms.map((p) => html`<span class="tag mono">${p}</span> `)}</td><td class="muted">${onVer(v.version)}</td></tr>`)}</tbody></table>`
         : html`<div class="muted">No agent versions downloaded yet.</div>`}</div>`);
-    // Per group, in the order of the groups (as on the dashboard), systems
-    // a-z, ungrouped last. Each group can update its outdated agents at once.
     const groups = d.groups || [];
     const known = new Set(groups.map((g) => g.id));
     const secs = [...groups.map((g) => [g.id, g.name, agents.filter((a) => a.group_id === g.id)]), ['', 'Ungrouped', agents.filter((a) => !known.has(a.group_id))]]
@@ -1833,8 +1726,6 @@ function Releases() {
         ${[...list].sort(byName).map(row)}</tbody>`)}</table></div>` : '');
     renderQueue();
   }
-  // Detected OS releases (each once) and the vulnerability lookups that run
-  // now or wait: running first, then the soonest.
   function renderQueue() {
     const Q = st.queue;
     if (!Q) return;
@@ -1890,7 +1781,7 @@ function Releases() {
         const groups = st.data.groups || [];
         const known = new Set(groups.map((g) => g.id));
         const name = groups.find((g) => g.id === gid)?.name || 'Ungrouped';
-        const list = outdatedIn(st.data.agents.filter((a) => !a.legacy && (gid ? a.group_id === gid : !known.has(a.group_id)))).sort(byName);
+        const list = outdatedIn(st.data.agents.filter((a) => (gid ? a.group_id === gid : !known.has(a.group_id)))).sort(byName);
         if (!list.length) return;
         if (!(await confirmBox(`Update ${list.length} agent${list.length === 1 ? '' : 's'} in ${name} to ${l}?`,
           html`${list.map((a) => html`<div>${a.name} <span class="dim">(${a.core_version}${a.online ? '' : ', offline: updates when it is online'})</span></div>`)}`,
@@ -1902,11 +1793,8 @@ function Releases() {
   };
 }
 
-// ---------- Audit ----------
 function Audit() {
   const st = { agent: '', user: '' };
-  // Entries have no ID: the whole entry is its key. The cursor is the time of
-  // the last entry shown and how many shown entries share that time.
   const keyOf = (e) => [e.time, e.actor, e.action, e.agent, e.target, e.detail, e.job, e.ip].join('|');
   const list = endlessList({
     keyOf,
@@ -1950,7 +1838,6 @@ function Audit() {
   };
 }
 
-// ---------- Settings: General, (Systems,) Login, Identity ----------
 function settingsHead(sub, title, desc) {
   return html`${settingsTabs(sub)}<div class="page-head"><div><h1>${title}</h1><div class="sub">${desc}</div></div></div>
     ${session.initial_password && sub !== 'login' ? html`<div class="notice">You are still using the generated initial password — <a href="#/settings/login">change it under Login</a>.</div>` : ''}`;
@@ -1972,7 +1859,6 @@ function SettingsGeneral() {
       ? html`<div class="notice" style="margin:0">After saving, the first cleanup with ${days} day${days === 1 ? '' : 's'} runs at <b>${fmtDate(p.at)}</b> and removes ${what}.</div>`
       : html`Cleanup runs every full hour. Next cleanup: <b>${fmtDate(p.at)}</b>, removing ${what}.`);
   }
-  // OS support lookup: when last fetched, next check, last error.
   function osInfoBox(o) {
     if (!o) return;
     const host = (o.source || '').replace(/^https?:\/\//, '').split('/')[0];
@@ -1981,7 +1867,6 @@ function SettingsGeneral() {
       ${ifChange(html`<button type="button" class="btn ghost sm" data-act="osinfo-check" ${st.osChecking ? 'disabled' : ''}>${icon('refresh')} Check now</button>`)}</div>
       ${o.error ? html`<div class="notice red small" style="margin:6px 0 0">Last lookup failed (${fmtDate(o.last_try)}): ${o.error}. Retrying every 6 hours; the previous dates stay in use.</div>` : ''}`);
   }
-  // Vulnerability check: what is sent where, last check, NVD lookups, key.
   function vulnBox(v) {
     if (!v) return;
     const mins = Math.ceil((v.nvd_pending * (v.nvd_key_set ? 0.8 : 6.5)) / 60);
@@ -2001,8 +1886,6 @@ function SettingsGeneral() {
         ${ifChange(html`<button type="button" class="btn sm" data-act="nvd-save">Save key</button>${v.nvd_key_set ? html`<button type="button" class="btn ghost sm" data-act="nvd-remove">Remove</button>` : ''}`)}</div></label>
       <div class="dim small">${v.nvd_key_set ? html`<span class="badge ok xs">key set</span> ` : ''}Without a key NVD allows about 10 lookups a minute; a free key from nvd.nist.gov makes them about 8 times faster.</div>`);
   }
-  // Master URL: locked; administrators can Change it or go back to automatic.
-  // Takes effect on Save, like the other fields.
   function urlBox() {
     const d = st.d, auto = !st.url;
     const lbl = 'Master URL used in install commands';
@@ -2046,8 +1929,7 @@ function SettingsGeneral() {
             <div id="vuln-box"></div>
             <label class="field">Lowest allowed agent version<select name="minagent">
               ${[...(d.agent_versions || [])].reverse().map((v, i) => html`<option value="${v}" ${v === (s.min_agent_version || d.min_agent) ? 'selected' : ''}>${v}${i === 0 ? ' (oldest stored)' : ''}</option>`)}</select></label>
-            <div class="dim small">Older agents can still connect, but only to be updated: the master stores and shows none of their data and runs nothing else on them.
-              Agents too old to connect at all (before 0.3.0) need a new install command.</div>
+            <div class="dim small">Older agents can still connect, but only to be updated: the master stores and shows none of their data and runs nothing else on them.</div>
             <label class="field">GitHub repository for releases<input type="text" name="gh" placeholder="owner/name" value="${s.github_repo}"></label>
             <div class="dim small mono" style="word-break:break-all">${d.index_url ? 'Version index: ' + d.index_url : ''}</div>
             ${ifChange(html`<div><button class="btn primary">Save</button></div>`)}
@@ -2106,7 +1988,7 @@ function SettingsGeneral() {
         const res = await POST('settings', { check_interval_hours: +f.interval.value, heartbeat_sec: +f.hb.value, retention_days: +f.ret.value,
           ui_port: +f.port.value, master_url: url, github_repo: f.gh.value, os_info_days: +f.osinfo.value, min_agent_version: f.minagent?.value || '',
           vuln_days: +f.vulns.value });
-        if (f.nvdkey?.value.trim()) { // Enter in the key field: save it too
+        if (f.nvdkey?.value.trim()) {
           st.d.vulns = (await POST('vulns/nvdkey', { key: f.nvdkey.value.trim() })).vulns;
           vulnBox(st.d.vulns);
         }
@@ -2235,7 +2117,6 @@ function SettingsLogin() {
 
 function SettingsIdentity() {
   const st = { d: null };
-  // Slots arrive as a status (current | new | unknown | ""), never as keys.
   function slot(s) {
     if (s === 'current') return html`<span class="badge ok">${icon('check')} current</span>`;
     if (s === 'new') return html`<span class="badge info">${icon('check')} new</span>`;
@@ -2275,7 +2156,6 @@ function SettingsIdentity() {
         ${canChange() ? html`<div class="row" style="margin-top:14px"><span class="muted small">Renewed automatically ${d.cert_renew_days} days before it expires.</span><span class="spacer"></span>
           <button class="btn" data-act="new-cert">${icon('refresh')} Generate new certificate</button></div>` : ''}
       </div>`);
-    // Systems too old to connect are only listed under Settings > Systems.
     d.agents = d.agents.filter((a) => !(a.core_version && versionLess(a.core_version, '0.3.0')));
     setHTML($('#id-agents'), d.agents.length ? html`<div class="panel"><table class="tbl">
       <thead><tr><th>System</th><th>Slot 1</th><th>Slot 2</th><th>Status</th><th>Reported</th></tr></thead>
@@ -2321,7 +2201,6 @@ function SettingsIdentity() {
           if (!(await confirmBox('Switch to the new key?', 'The master starts using the new key and the old key is deleted. Systems reconnect with the new key and remove the old one.', { okText: 'Switch' }))) return;
           await act('switch'); toast('Switched to the new key', 'ok'); return;
         }
-        // Not everyone has the new key: the safe choice (Cancel) has focus.
         await new Promise((resolve) => {
           openModal(html`<h3>Not all systems have the new key</h3>
             <div class="notice red" style="margin:12px 0 0">These ${missing.length} system(s) have not reported the new key and will <b>lose contact</b> after the switch:

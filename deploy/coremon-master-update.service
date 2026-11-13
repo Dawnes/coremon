@@ -3,6 +3,4 @@ Description=Apply a signed Coremon master update
 
 [Service]
 Type=oneshot
-# Runs as root: verifies the signature against /etc/coremon-master/signing.pub
-# (root-owned) before replacing /usr/local/bin/coremon-master.
 ExecStart=/usr/local/bin/coremon-master apply-update -data /var/lib/coremon-master -signing-key /etc/coremon-master/signing.pub

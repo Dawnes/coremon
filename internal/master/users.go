@@ -1,8 +1,6 @@
 package master
 
-// Website users and roles. Every UI request carries the signed-in user in
-// its context; requests that change something need a role that is allowed
-// to (checked here, on the server - the website only hides buttons).
+// Website users, roles and sign-in.
 
 import (
 	"context"
@@ -18,13 +16,11 @@ import (
 
 var userNameRe = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]{0,31}$`)
 
-// Permissions per role. A new role (e.g. an operator that may install
-// updates but not change settings) is a new entry here.
 type perm int
 
 const (
-	permView   perm = iota // see everything (except enrollment tokens)
-	permChange             // change anything
+	permView perm = iota
+	permChange
 )
 
 var rolePerms = map[string]map[perm]bool{
@@ -36,13 +32,11 @@ func can(u *User, p perm) bool { return u != nil && rolePerms[u.Role][p] }
 
 type ctxKey struct{}
 
-// userFrom returns the signed-in user of a UI request.
 func userFrom(r *http.Request) *User {
 	u, _ := r.Context().Value(ctxKey{}).(*User)
 	return u
 }
 
-// actor is the name recorded in the audit log for a UI request.
 func actor(r *http.Request) string {
 	if u := userFrom(r); u != nil {
 		return u.Name
@@ -50,7 +44,6 @@ func actor(r *http.Request) string {
 	return "?"
 }
 
-// requireUI checks the anti-CSRF header, the session and the permission.
 func (s *Server) requireUI(p perm, h http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if r.Header.Get("X-Coremon") != "1" {
@@ -69,12 +62,11 @@ func (s *Server) requireUI(p perm, h http.HandlerFunc) http.HandlerFunc {
 			uc = *u
 		}
 		s.st.mu.Unlock()
-		if u == nil || uc.Locked { // locking also ends the sessions; this is the safety net
+		if u == nil || uc.Locked {
 			http.Error(w, "not logged in", http.StatusUnauthorized)
 			return
 		}
 		if uc.MustChange && r.URL.Path != "/api/ui/password" {
-			// Generated password: changing it is the only thing allowed.
 			http.Error(w, "password change required", http.StatusForbidden)
 			return
 		}
@@ -91,9 +83,9 @@ type userView struct {
 	Name       string `json:"name"`
 	Role       string `json:"role"`
 	Created    int64  `json:"created"`
-	Permanent  bool   `json:"permanent"`   // the admin account
-	MustChange bool   `json:"must_change"` // still on a generated password
-	Locked     bool   `json:"locked"`      // cannot sign in until an administrator unlocks it
+	Permanent  bool   `json:"permanent"`
+	MustChange bool   `json:"must_change"`
+	Locked     bool   `json:"locked"`
 }
 
 func viewUser(u *User) userView {
@@ -105,9 +97,8 @@ func (s *Server) setCookie(w http.ResponseWriter, tok string) {
 }
 
 func (s *Server) handleSession(w http.ResponseWriter, r *http.Request) {
-	// Version and release date are only told to signed-in users.
 	out := map[string]any{"authenticated": false, "min_password": minPasswordLen, "max_password": maxPasswordLen}
-	// For the login page: is the generated first password still in use?
+
 	_, statErr := os.Stat(s.initialPwPath())
 	s.st.mu.Lock()
 	out["initial_setup"] = statErr == nil && s.st.userByID(s.st.st.InitialUser) != nil
@@ -143,13 +134,13 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 	if !readJSON(w, r, &req, 4096) {
 		return
 	}
-	// Counted before the password is checked (parallel requests cannot slip
-	// past the limit); given back when the login succeeds.
+
+	// Counted before the password check, so parallel attempts cannot bypass the limit.
 	if !s.sess.reserveLogin(ip) {
 		http.Error(w, "too many failed attempts; try again later", http.StatusTooManyRequests)
 		return
 	}
-	// A password check costs CPU on purpose: only a few run at once.
+
 	select {
 	case s.hashSem <- struct{}{}:
 		defer func() { <-s.hashSem }()
@@ -163,7 +154,7 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	name := strings.ToLower(strings.TrimSpace(req.Username))
-	if len(name) > 32 { // longest valid user name; keeps the audit log tidy
+	if len(name) > 32 {
 		name = name[:32]
 	}
 	s.st.mu.Lock()
@@ -179,8 +170,8 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "wrong user name or password", http.StatusUnauthorized)
 		return
 	}
-	// Only told with the right password, so it gives away nothing about
-	// which accounts exist. Counts as a failed attempt.
+
+	// Only told with the right password: reveals nothing about accounts.
 	if locked {
 		s.audit.write(name, ip, "login.locked", "", "account is locked")
 		time.Sleep(400 * time.Millisecond)
@@ -201,7 +192,6 @@ func (s *Server) handleLogout(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, map[string]bool{"ok": true})
 }
 
-// handlePassword changes the signed-in user's own password.
 func (s *Server) handlePassword(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Current string `json:"current"`
@@ -235,22 +225,18 @@ func (s *Server) handlePassword(w http.ResponseWriter, r *http.Request) {
 	}
 	s.st.markDirty()
 	s.st.mu.Unlock()
-	s.sess.destroyUser(u.ID) // sign out everywhere else
+	s.sess.destroyUser(u.ID)
 	s.setCookie(w, s.sess.create(u.ID))
 	s.audit.write(me.Name, clientIP(r), "password.changed", me.Name, "")
 	writeJSON(w, map[string]bool{"ok": true})
 }
 
-// passwordProblem checks a password that is being set: 5-40 characters
-// (characters, not bytes). "" when fine. Sign-in does not use this.
 func passwordProblem(pw string) string {
 	if n := utf8.RuneCountInString(pw); n < minPasswordLen || n > maxPasswordLen || !utf8.ValidString(pw) {
 		return fmt.Sprintf("password must be %d-%d characters", minPasswordLen, maxPasswordLen)
 	}
 	return ""
 }
-
-// ---- user management (administrators) ----
 
 func (s *Server) handleUsers(w http.ResponseWriter, r *http.Request) {
 	s.st.mu.Lock()
@@ -300,8 +286,6 @@ func (s *Server) handleUserCreate(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, viewUser(u))
 }
 
-// handleUserUpdate changes a user's role, sets a new password, and/or
-// locks or unlocks the account.
 func (s *Server) handleUserUpdate(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Role     *string `json:"role"`
@@ -312,7 +296,7 @@ func (s *Server) handleUserUpdate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if req.Locked != nil && (req.Role != nil || req.Password != nil) {
-		http.Error(w, "lock or unlock on its own", http.StatusBadRequest) // so a refused part never leaves half a change
+		http.Error(w, "lock or unlock on its own", http.StatusBadRequest)
 		return
 	}
 	if req.Password != nil && passwordProblem(*req.Password) != "" {
@@ -336,6 +320,7 @@ func (s *Server) handleUserUpdate(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "you cannot lock your own account", http.StatusConflict)
 			return
 		}
+		// At least one administrator must always be able to sign in.
 		if *req.Locked && s.st.lastActiveAdmin(u) {
 			http.Error(w, "this is the last administrator who can sign in; it cannot be locked", http.StatusConflict)
 			return

@@ -82,15 +82,6 @@ func TestIndexSync(t *testing.T) {
 	s := testServer(t, pub, gh.srv.URL+"/versions.json", "0.2.0")
 	plat := runtime.GOOS + "-" + runtime.GOARCH
 
-	// An agent of the old connection method (before 0.3.0) is cleaned up.
-	legacy := s.repo.path("core", "0.2.5", "linux-amd64")
-	os.MkdirAll(filepath.Dir(legacy), 0o755)
-	os.WriteFile(legacy, []byte("old"), 0o755)
-	s.cleanupLegacy()
-	if _, err := os.Stat(legacy); err == nil {
-		t.Fatal("old agent 0.2.5 not removed")
-	}
-
 	var idx release.Index
 	for _, v := range []string{"0.2.5", "0.3.0", "0.3.1", "0.4.0"} {
 		idx.Add("agent", release.Release{Version: v, Assets: map[string]release.Asset{

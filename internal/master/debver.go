@@ -1,12 +1,9 @@
 package master
 
-// Debian package version comparison, as dpkg does it
-// ([epoch:]upstream[-revision], with "~" sorting before everything, even
-// the end of the string). Used for Debian and Ubuntu versions alike.
+// Debian package version comparison, as dpkg does it.
 
 import "strings"
 
-// debVerCmp returns -1, 0 or 1 as a is older than, equal to or newer than b.
 func debVerCmp(a, b string) int {
 	ea, ua, ra := debSplit(a)
 	eb, ub, rb := debSplit(b)
@@ -30,7 +27,6 @@ func debSplit(v string) (epoch, upstream, revision string) {
 	return epoch, v, revision
 }
 
-// numCmp compares digit strings of any length (leading zeros ignored).
 func numCmp(a, b string) int {
 	a, b = strings.TrimLeft(a, "0"), strings.TrimLeft(b, "0")
 	if len(a) != len(b) {
@@ -42,8 +38,6 @@ func numCmp(a, b string) int {
 	return strings.Compare(a, b)
 }
 
-// debOrder: "~" first, then the end of the string, then letters, then
-// everything else.
 func debOrder(c byte) int {
 	switch {
 	case c == '~':
@@ -59,9 +53,8 @@ func isDigit(c byte) bool { return c >= '0' && c <= '9' }
 
 func debPartCmp(a, b string) int {
 	for a != "" || b != "" {
-		// the non-digit run
 		for (a != "" && !isDigit(a[0])) || (b != "" && !isDigit(b[0])) {
-			ca, cb := 0, 0 // 0: the run ended here
+			ca, cb := 0, 0
 			na, nb := a != "" && !isDigit(a[0]), b != "" && !isDigit(b[0])
 			if na {
 				ca = debOrder(a[0])
@@ -82,7 +75,7 @@ func debPartCmp(a, b string) int {
 				b = b[1:]
 			}
 		}
-		// the digit run
+
 		da, db := leadingDigits(a), leadingDigits(b)
 		if c := numCmp(da, db); c != 0 {
 			return c

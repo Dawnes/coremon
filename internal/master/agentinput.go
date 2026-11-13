@@ -1,8 +1,6 @@
 package master
 
-// Checks on what an agent sends besides its facts: command results, job
-// output, and how often and how many connections. A taken-over system can
-// lie about itself, but must not be able to harm the master or others.
+// Checks on everything an agent sends: results, output and request rates.
 
 import (
 	"encoding/json"
@@ -17,13 +15,11 @@ import (
 )
 
 const (
-	maxStateBytes   = 2 << 20 // a stored function state (e.g. the update list)
+	maxStateBytes   = 2 << 20
 	maxStatePkgs    = 5000
 	maxResultErrLen = 2000
 )
 
-// checkState validates a function's state before the master stores it. The
-// update list is checked field by field; other states only by size.
 func checkState(feature string, raw json.RawMessage) (json.RawMessage, error) {
 	if len(raw) > maxStateBytes {
 		return nil, fmt.Errorf("result too large (%d bytes, at most %d)", len(raw), maxStateBytes)
@@ -66,7 +62,7 @@ func checkState(feature string, raw json.RawMessage) (json.RawMessage, error) {
 			}
 		}
 	}
-	// The counts must agree with the list.
+
 	if s.Total < 0 || s.Total > len(s.Packages) {
 		s.Total = len(s.Packages)
 	}
@@ -80,14 +76,10 @@ func checkState(feature string, raw json.RawMessage) (json.RawMessage, error) {
 	return out, nil
 }
 
-// extraStates may come along with another function's result (the
-// application scan with every update check, install and upgrade).
 var extraStates = map[string]bool{"apps": true}
 
 const maxApps = 64
 
-// checkApps validates an application scan: a short list of rows with plain
-// names and cleaned versions.
 func checkApps(raw json.RawMessage) (json.RawMessage, error) {
 	var s apps.State
 	if err := json.Unmarshal(raw, &s); err != nil {
@@ -104,8 +96,7 @@ func checkApps(raw json.RawMessage) (json.RawMessage, error) {
 		if p.Package != "" && !updates.PackageNameRe.MatchString(p.Package) {
 			p.Package = ""
 		}
-		// What the vulnerability check sends to OSV: a package name, a
-		// version and the package source's name, all checked.
+
 		if p.Source != "" && !updates.PackageNameRe.MatchString(p.Source) {
 			p.Source = ""
 		}
@@ -139,11 +130,8 @@ func checkApps(raw json.RawMessage) (json.RawMessage, error) {
 
 const maxAppPorts = 32
 
-// debVersionRe: what a Debian package version may contain.
 var debVersionRe = regexp.MustCompile(`^[0-9][A-Za-z0-9.+~:-]{0,126}$`)
 
-// rateLimiter allows each agent about rate requests per second with a
-// burst; a normal agent sends a few per minute.
 type rateLimiter struct {
 	mu      sync.Mutex
 	buckets map[string]*bucket
@@ -157,7 +145,7 @@ type bucket struct {
 }
 
 const (
-	agentRate  = 10 // requests per second, sustained
+	agentRate  = 10
 	agentBurst = 50
 )
 
@@ -172,7 +160,7 @@ func (l *rateLimiter) allow(id string, now time.Time) bool {
 	}
 	b := l.buckets[id]
 	if b == nil {
-		if len(l.buckets) > 10000 { // forget idle agents
+		if len(l.buckets) > 10000 {
 			for k, v := range l.buckets {
 				if now.Sub(v.last) > time.Minute {
 					delete(l.buckets, k)

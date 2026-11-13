@@ -1,11 +1,6 @@
 package master
 
-// Version index sync. The master downloads one signed file, versions.json,
-// from a fixed address in the configured GitHub repository (the "index"
-// release), checks its signature, downloads and verifies every listed agent
-// binary and a newer master binary, and removes agent versions that are no
-// longer listed. No GitHub API is used. Rolling a version out to systems
-// stays a manual step.
+// Version index: downloads and verifies versions.json and the binaries it lists.
 
 import (
 	"context"
@@ -31,19 +26,13 @@ import (
 
 var ghRepoRe = regexp.MustCompile(`^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})/[A-Za-z0-9._-]{1,100}$`)
 
-const (
-	indexEvery = 6 * time.Hour
-	// minAgentVersion: older agents use the old connection method (pinned
-	// HTTPS, shared secret), which this master no longer serves; they are
-	// not offered or kept.
-	minAgentVersion = "0.3.0"
-)
+const indexEvery = 6 * time.Hour
 
 type indexVersion struct {
 	Version   string   `json:"version"`
 	Published string   `json:"published"`
 	Platforms []string `json:"platforms"`
-	Ready     bool     `json:"ready"` // downloaded and verified
+	Ready     bool     `json:"ready"`
 }
 
 type indexStatus struct {
@@ -75,7 +64,6 @@ func (x *indexSync) status() indexStatus {
 	return s
 }
 
-// indexURL is where versions.json is published. Caller must not hold s.st.mu.
 func (s *Server) indexURL() string {
 	if s.cfg.IndexURL != "" {
 		return s.cfg.IndexURL
@@ -144,7 +132,6 @@ func (s *Server) get(ctx context.Context, url string, max int64) ([]byte, error)
 	return b, nil
 }
 
-// syncIndex runs one complete sync. Only one runs at a time.
 func (s *Server) syncIndex() (err error) {
 	s.idx.run.Lock()
 	defer s.idx.run.Unlock()
@@ -184,7 +171,7 @@ func (s *Server) syncIndex() (err error) {
 	}
 
 	var errs []string
-	// Agents: keep exactly the listed versions (at most KeepAgents).
+
 	agents := idx.Agent
 	sort.Slice(agents, func(i, j int) bool { return versionLess(agents[j].Version, agents[i].Version) })
 	if len(agents) > release.KeepAgents {
@@ -193,7 +180,7 @@ func (s *Server) syncIndex() (err error) {
 	listed := map[string]bool{}
 	var views []indexVersion
 	for _, r := range agents {
-		if !release.VersionRe.MatchString(r.Version) || versionLess(r.Version, minAgentVersion) {
+		if !release.VersionRe.MatchString(r.Version) {
 			continue
 		}
 		listed[r.Version] = true
@@ -213,7 +200,6 @@ func (s *Server) syncIndex() (err error) {
 		s.raiseMinAgent()
 	}
 
-	// Master: only a newer version for this platform. Never a downgrade.
 	masterLatest := ""
 	for _, r := range idx.Master {
 		if release.VersionRe.MatchString(r.Version) && (masterLatest == "" || versionLess(masterLatest, r.Version)) {
@@ -245,8 +231,6 @@ func (s *Server) syncIndex() (err error) {
 	return nil
 }
 
-// fetchAsset downloads one binary if it is not present yet, verifies its
-// signature and checksum, and moves it into the release store.
 func (s *Server) fetchAsset(ctx context.Context, kind, version, plat string, a release.Asset) error {
 	pm := release.PlatRe.FindStringSubmatch(plat)
 	if pm == nil || !release.VersionRe.MatchString(version) {
@@ -256,8 +240,7 @@ func (s *Server) fetchAsset(ctx context.Context, kind, version, plat string, a r
 		return nil
 	}
 	name := binName(kind)
-	// The signature binds kind, name, version, platform and hash; check it
-	// before downloading anything.
+
 	if !sign.Verify(s.repo.pub, sign.Message(kind, name, version, pm[1], pm[2], a.SHA256), a.Signature) {
 		return fmt.Errorf("%s %s %s: signature does not verify", kind, version, plat)
 	}
@@ -299,7 +282,6 @@ func (s *Server) pruneCore(drop func(version string) bool) {
 	}
 }
 
-// pruneMaster keeps only a master version newer than the running one.
 func (s *Server) pruneMaster(keep string) {
 	dirs, _ := os.ReadDir(filepath.Join(s.cfg.ReleaseDir, "master"))
 	for _, d := range dirs {
@@ -309,16 +291,6 @@ func (s *Server) pruneMaster(keep string) {
 		}
 	}
 }
-
-// cleanupLegacy removes what masters before 0.2 stored: separate modules
-// and agents that need them.
-func (s *Server) cleanupLegacy() {
-	os.RemoveAll(filepath.Join(s.cfg.ReleaseDir, "modules"))
-	os.RemoveAll(filepath.Join(s.cfg.DataDir, "staging"))
-	s.pruneCore(func(v string) bool { return versionLess(v, minAgentVersion) })
-}
-
-// ---- UI handlers ----
 
 func (s *Server) releasesView() map[string]any {
 	ml := s.repo.masterLatest()

@@ -14,20 +14,14 @@ import (
 	"coremon/internal/proto"
 )
 
-// rebootDelay gives the agent time to report the result before the system
-// goes down.
 const rebootDelay = 5 * time.Second
 
-// System implements feature.Feature.
 type System struct {
-	// reboot is replaceable in tests.
 	reboot func() error
 }
 
-// New returns the system feature.
 func New() *System { return &System{reboot: rebootNow} }
 
-// Info describes the feature and its actions.
 func (*System) Info() proto.FeatureInfo {
 	return proto.FeatureInfo{
 		Name:  "system",
@@ -38,7 +32,6 @@ func (*System) Info() proto.FeatureInfo {
 	}
 }
 
-// Call runs one action.
 func (s *System) Call(c *feature.Ctx, action string) (any, error) {
 	switch action {
 	case "reboot":

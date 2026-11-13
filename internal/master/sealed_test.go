@@ -11,7 +11,6 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 	"time"
 
@@ -123,22 +122,6 @@ func TestSealedAgentLifecycle(t *testing.T) {
 	s.st.mu.Unlock()
 	if !ok {
 		t.Fatalf("ping job: %+v", j)
-	}
-
-	// The old method's endpoints are gone.
-	hc := &http.Client{Transport: &http.Transport{TLSClientConfig: &tls.Config{InsecureSkipVerify: true}}}
-	for _, p := range []string{"/api/agent/poll", "/api/agent/enroll", "/api/agent/migrate"} {
-		resp, err := hc.Post(url+p, "application/json", strings.NewReader(`{}`))
-		if err != nil || resp.StatusCode == 200 || resp.StatusCode == 204 {
-			t.Fatalf("%s still answers: %v", p, err)
-		}
-		resp.Body.Close()
-	}
-	// An agent with a config from before 0.3.0 refuses to start.
-	odir := t.TempDir()
-	os.WriteFile(filepath.Join(odir, "agent.json"), []byte(`{"master_url":"`+url+`","master_pins":["`+s.currentPin()+`",""]}`), 0o600)
-	if _, err := agent.Run(context.Background(), agent.Options{ConfigPath: filepath.Join(odir, "agent.json"), StateDir: odir, Version: "0.3.1"}); err == nil || !strings.Contains(err.Error(), "install command") {
-		t.Fatalf("old config: %v", err)
 	}
 
 	// 3. Key rotation with the agent running.

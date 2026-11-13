@@ -1,6 +1,4 @@
-// Package updates is the agent's built-in update function: it reports
-// available package updates and installs selected ones on request. It never
-// upgrades on its own; the master asks it to.
+// Package updates reports pending updates and installs them on request; it never upgrades on its own.
 package updates
 
 import (
@@ -17,18 +15,16 @@ import (
 	"coremon/internal/proto"
 )
 
-// Package is one pending update.
 type Package struct {
 	Name      string `json:"name"`
 	Arch      string `json:"arch,omitempty"`
-	Current   string `json:"current,omitempty"` // empty for a newly pulled-in package
+	Current   string `json:"current,omitempty"`
 	Available string `json:"available"`
 	Origin    string `json:"origin,omitempty"`
 	Security  bool   `json:"security"`
-	New       bool   `json:"new"` // not installed yet; comes in as a dependency
+	New       bool   `json:"new"`
 }
 
-// Snapshot is the state stored by the master.
 type Snapshot struct {
 	Backend        string    `json:"backend"`
 	CheckedAt      int64     `json:"checked_at"`
@@ -41,7 +37,6 @@ type Snapshot struct {
 	Security       int       `json:"security"`
 }
 
-// Backend abstracts a package manager.
 type Backend interface {
 	Refresh(c *feature.Ctx) error
 	List(c *feature.Ctx) (*Snapshot, error)
@@ -49,7 +44,6 @@ type Backend interface {
 	UpgradeAll(c *feature.Ctx) error
 }
 
-// fakeEnabled is set by fake.go (build tag "fake") for development builds.
 var fakeEnabled bool
 var newFakeBackend func() Backend
 
@@ -65,13 +59,10 @@ func pickBackend() (Backend, error) {
 
 var PackageNameRe = regexp.MustCompile(`^[a-z0-9][a-z0-9+.\-]{0,127}(:[a-z0-9]{1,16})?$`)
 
-// Updates implements feature.Feature.
 type Updates struct{}
 
-// New returns the updates feature.
 func New() *Updates { return &Updates{} }
 
-// Info describes the feature and its actions.
 func (*Updates) Info() proto.FeatureInfo {
 	return proto.FeatureInfo{
 		Name:  "updates",
@@ -85,7 +76,6 @@ func (*Updates) Info() proto.FeatureInfo {
 	}
 }
 
-// Call runs one action.
 func (*Updates) Call(c *feature.Ctx, action string) (any, error) {
 	b, err := pickBackend()
 	if err != nil {
@@ -134,8 +124,7 @@ func list(c *feature.Ctx, b Backend) (any, error) {
 	}
 	finish(s)
 	c.Log("%d update(s) available, %d security, reboot required: %v", s.Total, s.Security, s.RebootRequired)
-	// Every check, install and upgrade also rescans the applications, so the
-	// Applications tab follows the same timer and is current after changes.
+
 	return map[string]any{"state": s, "states": map[string]any{"apps": apps.Scan()}}, nil
 }
 

@@ -1,5 +1,4 @@
-// Package master implements the coremon master: web UI, UI API, agent
-// hub, job runner and signed-artifact repository.
+// Package master: website, API, agent hub, jobs and release store.
 package master
 
 import (
@@ -27,28 +26,26 @@ import (
 //go:embed web
 var webFS embed.FS
 
-// Config configures the master.
 type Config struct {
 	Listen     string
-	HTTPListen string // optional plain-HTTP UI listener, loopback only (reverse proxy)
+	HTTPListen string
 	DataDir    string
 	ReleaseDir string
 	SANs       []string
 	Version    string
-	BuildDate  string // YYYY-MM-DD, set at release build time
-	// SigningKeyPath is the release signing public key (root-owned).
+	BuildDate  string
+
 	SigningKeyPath string
-	// GitHubRepo ("owner/name") publishes the version index.
+
 	GitHubRepo string
-	// IndexURL overrides the version index location (testing).
+
 	IndexURL string
-	// OSInfoURL overrides the base URL of the distro-info files (testing).
+
 	OSInfoURL string
-	// Vulnerability data sources (testing).
+
 	OSVURL, NVDURL, KEVURL, EPSSURL string
 }
 
-// Server is the master.
 type Server struct {
 	cfg           Config
 	st            *store
@@ -56,26 +53,26 @@ type Server struct {
 	sess          *sessions
 	audit         *auditLog
 	keyMu         sync.Mutex
-	keys          keyState   // TLS keys: current and, during a rotation, next
-	certMu        sync.Mutex // one HTTPS certificate rotation at a time
+	keys          keyState
+	certMu        sync.Mutex
 	tlsMu         sync.Mutex
-	https         []*http.Server // HTTPS servers (guarded by tlsMu)
-	ticketKeys    [][32]byte     // TLS session ticket keys, newest first (guarded by tlsMu)
-	ticketKeyAt   time.Time      // when the newest ticket key was made
-	tlsCfg        *tls.Config    // TLS settings handed out per connection (guarded by tlsMu)
-	certTried     time.Time      // last automatic renewal attempt (scheduler only)
+	https         []*http.Server
+	ticketKeys    [][32]byte
+	ticketKeyAt   time.Time
+	tlsCfg        *tls.Config
+	certTried     time.Time
 	signingKeyB64 string
-	wakes         map[string]chan struct{}     // guarded by st.mu
-	pings         map[string]chan proto.Result // ping job ID -> waiting UI request; guarded by st.mu
-	polls         map[string]chan struct{}     // agent ID -> its open heartbeat (closed when replaced); guarded by st.mu
-	agentRate     rateLimiter                  // requests per agent
-	intake        intake                       // agent requests being read and processed
-	enrolls       enrollGuard                  // registration attempts per address
-	hashSem       chan struct{}                // password checks running at once
+	wakes         map[string]chan struct{}
+	pings         map[string]chan proto.Result
+	polls         map[string]chan struct{}
+	agentRate     rateLimiter
+	intake        intake
+	enrolls       enrollGuard
+	hashSem       chan struct{}
 	idx           *indexSync
-	nonces        nonceCache // sealed requests already seen (replay)
-	osi           osInfo     // OS support dates (distro-info-data)
-	vul           vulnStore  // known vulnerabilities of the tracked applications
+	nonces        nonceCache
+	osi           osInfo
+	vul           vulnStore
 
 	handler http.Handler
 
@@ -83,7 +80,7 @@ type Server struct {
 	nextPurge time.Time
 
 	uiMu  sync.Mutex
-	uiSrv *http.Server // extra website listener on port 443
+	uiSrv *http.Server
 	uiErr string
 
 	ipMu    sync.Mutex
@@ -91,13 +88,8 @@ type Server struct {
 	ipAt    time.Time
 }
 
-// readTimeout bounds reading a whole request (headers and body), so slow
-// clients cannot hold connections open. Responses are not limited: agent
-// polls are held open for up to a heartbeat and downloads may take long.
 const readTimeout = 60 * time.Second
 
-// ownIPs returns this host's addresses (cached for a minute), used to
-// recognise the master's own system among the agents.
 func (s *Server) ownIPs() map[string]bool {
 	s.ipMu.Lock()
 	defer s.ipMu.Unlock()
@@ -115,7 +107,6 @@ func (s *Server) ownIPs() map[string]bool {
 	return m
 }
 
-// agentPort is the port agents use (the -listen address).
 func (s *Server) agentPort() string {
 	_, port, err := net.SplitHostPort(s.cfg.Listen)
 	if err != nil || port == "" {
@@ -124,16 +115,13 @@ func (s *Server) agentPort() string {
 	return port
 }
 
-// applyUIPort starts or stops the extra website listener so the website is
-// reachable on the configured port. Agents always keep using agentPort.
 func (s *Server) applyUIPort(handler http.Handler) {
 	s.st.mu.Lock()
 	want := s.st.st.Settings.UIPort
 	s.st.mu.Unlock()
 	s.uiMu.Lock()
 	defer s.uiMu.Unlock()
-	// Only 443 needs its own listener; 8443 is the agents' listener, which
-	// always serves the website too.
+
 	need := want == 443 && s.agentPort() != "443"
 	if s.uiSrv != nil && !need {
 		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
@@ -178,7 +166,6 @@ func (s *Server) uiPortError() string {
 
 func (s *Server) initialPwPath() string { return filepath.Join(s.cfg.DataDir, "initial-password.txt") }
 
-// New prepares the data directory, certificate, keys and state.
 func New(cfg Config) (*Server, error) {
 	if err := os.MkdirAll(filepath.Join(cfg.DataDir, "jobs"), 0o700); err != nil {
 		return nil, err
@@ -199,9 +186,6 @@ func New(cfg Config) (*Server, error) {
 		audit: &auditLog{path: filepath.Join(cfg.DataDir, "audit.jsonl")}, wakes: map[string]chan struct{}{},
 		hashSem: make(chan struct{}, hashAtOnce)}
 
-	// Release signing public key. In production it lives in a root-owned
-	// file written by the installer, so the (unprivileged) master cannot
-	// change which code it trusts.
 	pubPath := cfg.SigningKeyPath
 	if pubPath == "" {
 		pubPath = "/etc/coremon-master/signing.pub"
@@ -220,7 +204,6 @@ func New(cfg Config) (*Server, error) {
 	if err := s.loadKeys(); err != nil {
 		return nil, err
 	}
-	s.cleanupLegacy()
 	s.raiseMinAgent()
 	s.repo.scan()
 	s.idx = newIndexSync()
@@ -234,10 +217,6 @@ func New(cfg Config) (*Server, error) {
 		st.markDirty()
 	}
 
-	// The permanent admin account: created on the first start, restored if it
-	// is missing (it cannot be deleted in the website, but an older version
-	// allowed it). Its generated password goes to initial-password.txt and
-	// must be changed at the first sign-in.
 	if st.userByName(adminName) == nil {
 		restored := len(st.st.Users) > 0
 		pw := randHex(8)
@@ -257,8 +236,7 @@ func New(cfg Config) (*Server, error) {
 			log.Printf("initial password of user admin written to %s", s.initialPwPath())
 		}
 	}
-	// A generated first password still in use must be changed (also for
-	// masters installed before this rule).
+
 	if u := st.userByID(st.st.InitialUser); u != nil && !u.MustChange {
 		if _, err := os.Stat(s.initialPwPath()); err == nil {
 			u.MustChange = true
@@ -268,9 +246,6 @@ func New(cfg Config) (*Server, error) {
 	return s, nil
 }
 
-// ResetPassword gives an existing user a new random password that must be
-// changed at the next sign-in, and records it in the audit log. For
-// coremon-reset, while the master is stopped.
 func ResetPassword(dataDir, name string) (string, error) {
 	st, err := openStore(dataDir)
 	if err != nil {
@@ -288,7 +263,7 @@ func ResetPassword(dataDir, name string) (string, error) {
 	}
 	pw := randHex(8)
 	wasLocked := u.Locked
-	u.PasswordHash, u.MustChange, u.Locked = hashPassword(pw), true, false // the last way back in
+	u.PasswordHash, u.MustChange, u.Locked = hashPassword(pw), true, false
 	if err := st.writeNow(); err != nil {
 		return "", err
 	}
@@ -307,8 +282,7 @@ func securityHeaders(h http.Handler) http.Handler {
 		hd.Set("X-Content-Type-Options", "nosniff")
 		hd.Set("X-Frame-Options", "DENY")
 		hd.Set("Referrer-Policy", "no-referrer")
-		// Search engines must not index the website, the install script or
-		// the agent downloads (everything except the API).
+
 		if !strings.HasPrefix(r.URL.Path, "/api/") {
 			hd.Set("X-Robots-Tag", "noindex")
 		}
@@ -318,24 +292,22 @@ func securityHeaders(h http.Handler) http.Handler {
 
 func (s *Server) routes() http.Handler {
 	mux := http.NewServeMux()
-	// Agent API: sealed and signed per agent (enroll needs a token).
+
 	mux.HandleFunc("POST /api/agent/v5", s.handleSealed)
 	mux.HandleFunc("GET /dl/core/{version}/{plat}", s.handlePublicCore)
 	mux.HandleFunc("GET /install.sh", s.handleInstallScript)
 	mux.HandleFunc("GET /dl/agent/{plat}", s.handlePublicAgent)
 
-	// UI API.
 	mux.HandleFunc("GET /api/ui/session", s.handleSession)
 	mux.HandleFunc("POST /api/ui/login", s.handleLogin)
 	mux.HandleFunc("POST /api/ui/logout", s.handleLogout)
-	// view: every signed-in user; change: administrators only. Enrollment
-	// tokens are secrets, so even listing them needs change rights.
+
 	view := func(p string, h http.HandlerFunc) { mux.HandleFunc(p, s.requireUI(permView, h)) }
 	change := func(p string, h http.HandlerFunc) { mux.HandleFunc(p, s.requireUI(permChange, h)) }
-	view("POST /api/ui/password", s.handlePassword) // own password
+	view("POST /api/ui/password", s.handlePassword)
 	view("GET /api/ui/overview", s.handleOverview)
 	view("GET /api/ui/agents/{id}", s.handleAgentGet)
-	view("POST /api/ui/agents/{id}/ping", s.handlePing) // no change: read-only users may ping
+	view("POST /api/ui/agents/{id}/ping", s.handlePing)
 	change("POST /api/ui/agents/{id}", s.handleAgentUpdate)
 	change("POST /api/ui/agents/{id}/approve", s.handleApprove)
 	change("POST /api/ui/agents/{id}/remove", s.handleRemove)
@@ -368,7 +340,6 @@ func (s *Server) routes() http.Handler {
 	change("POST /api/ui/users/{id}", s.handleUserUpdate)
 	change("POST /api/ui/users/{id}/delete", s.handleUserDelete)
 
-	// Static UI.
 	sub, _ := fs.Sub(webFS, "web")
 	files := http.FileServer(http.FS(sub))
 	mux.HandleFunc("GET /", func(w http.ResponseWriter, r *http.Request) {
@@ -377,9 +348,9 @@ func (s *Server) routes() http.Handler {
 			files.ServeHTTP(w, r)
 			return
 		}
-		// Only files are served. A folder would otherwise get a generated
-		// listing of its contents from the file server.
+
 		name := strings.TrimPrefix(path.Clean(r.URL.Path), "/")
+		// Files only: no directory listings.
 		if st, err := fs.Stat(sub, name); err != nil || !st.Mode().IsRegular() || strings.HasSuffix(r.URL.Path, "/") {
 			http.NotFound(w, r)
 			return
@@ -389,13 +360,7 @@ func (s *Server) routes() http.Handler {
 	return securityHeaders(mux)
 }
 
-// newHTTPSServer is the master's HTTPS server (agent port and the extra
-// website port share its TLS setup). The certificate comes from
-// currentCert on every full handshake; session tickets use the master's own
-// ticket keys, so a new certificate can invalidate them (see certrotate.go).
 func (s *Server) newHTTPSServer(handler http.Handler, addr string) *http.Server {
-	// The server copies its TLS config when it starts, so the settings that
-	// change (ticket keys) are handed out per connection instead.
 	cfg := &tls.Config{MinVersion: tls.VersionTLS12, GetCertificate: s.currentCert,
 		GetConfigForClient: func(*tls.ClientHelloInfo) (*tls.Config, error) { return s.tlsNow(), nil }}
 	srv := &http.Server{
@@ -416,7 +381,6 @@ func (s *Server) newHTTPSServer(handler http.Handler, addr string) *http.Server 
 	return srv
 }
 
-// Run serves until ctx is cancelled.
 func (s *Server) Run(ctx context.Context) error {
 	stop := make(chan struct{})
 	go s.st.flushLoop(stop)

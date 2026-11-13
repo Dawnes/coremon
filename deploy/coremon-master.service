@@ -11,14 +11,12 @@ ExecStart=/usr/local/bin/coremon-master serve -data /var/lib/coremon-master -lis
 Restart=on-failure
 RestartSec=5
 
-# Hardening (needs the LXC "nesting" feature; the installer falls back if unavailable)
 NoNewPrivileges=yes
 ProtectSystem=strict
 ProtectHome=yes
 PrivateTmp=yes
 PrivateDevices=yes
 ReadWritePaths=/var/lib/coremon-master
-# Only to bind port 443 when "Website port" is set to 443.
 CapabilityBoundingSet=CAP_NET_BIND_SERVICE
 AmbientCapabilities=CAP_NET_BIND_SERVICE
 RestrictSUIDSGID=yes

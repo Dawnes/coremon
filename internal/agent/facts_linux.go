@@ -42,8 +42,7 @@ func collectFacts() proto.Facts {
 			f.UptimeSec = int64(v)
 		}
 	}
-	// Assigned memory. Inside an LXC container, lxcfs shows the container's
-	// limit here, not the host's memory.
+
 	if m, err := os.Open("/proc/meminfo"); err == nil {
 		sc := bufio.NewScanner(m)
 		for sc.Scan() {

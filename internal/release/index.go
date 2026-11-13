@@ -1,11 +1,4 @@
-// Package release defines the signed version index (versions.json) that
-// the release workflows publish and the master downloads.
-//
-// The index is one small JSON file at a fixed download address, next to a
-// detached ed25519 signature (versions.json.sig). It lists the newest
-// master releases and the newest KeepAgents agent releases, each with a
-// download URL, sha256 and artifact signature per platform. The master
-// reads only this file: no GitHub API, no scraping.
+// Package release defines the signed version index (versions.json).
 package release
 
 import (
@@ -21,49 +14,40 @@ import (
 	"coremon/internal/sign"
 )
 
-// KeepAgents is how many agent versions the index (and the master) keep.
 const KeepAgents = 3
 
-// keepMasters is how many master versions the index lists.
 const keepMasters = 3
 
-// IndexFile and IndexSigFile are the asset names in the "index" release.
 const (
 	IndexFile    = "versions.json"
 	IndexSigFile = "versions.json.sig"
 	IndexTag     = "index"
 )
 
-// VersionRe matches release versions (X.Y.Z, optional suffix).
 var VersionRe = regexp.MustCompile(`^[0-9]+\.[0-9]+\.[0-9]+(?:[-+][A-Za-z0-9.]+)?$`)
 
-// PlatRe matches platform keys like "linux-amd64".
 var PlatRe = regexp.MustCompile(`^([a-z0-9]+)-([a-z0-9]+)$`)
 
-// Index is the content of versions.json.
 type Index struct {
 	Format    int       `json:"format"`
 	Generated string    `json:"generated"`
-	Master    []Release `json:"master"` // newest first
-	Agent     []Release `json:"agent"`  // newest first, at most KeepAgents
+	Master    []Release `json:"master"`
+	Agent     []Release `json:"agent"`
 }
 
-// Release is one version of one track.
 type Release struct {
 	Version   string           `json:"version"`
 	Published string           `json:"published"`
-	Assets    map[string]Asset `json:"assets"` // platform -> asset
+	Assets    map[string]Asset `json:"assets"`
 }
 
-// Asset is one downloadable, signed binary.
 type Asset struct {
 	URL       string `json:"url"`
 	Size      int64  `json:"size"`
 	SHA256    string `json:"sha256"`
-	Signature string `json:"signature"` // artifact signature (sign.Message)
+	Signature string `json:"signature"`
 }
 
-// Kind and binary name per track, as used in artifact signatures.
 func TrackInfo(track string) (kind, name string, err error) {
 	switch track {
 	case "agent":
@@ -79,10 +63,8 @@ func indexMessage(b []byte) []byte {
 	return sign.Message("index", "coremon-versions", "1", "any", "any", hex.EncodeToString(sum[:]))
 }
 
-// SignIndex returns the detached signature for the index bytes.
 func SignIndex(priv ed25519.PrivateKey, b []byte) string { return sign.Sign(priv, indexMessage(b)) }
 
-// VerifyIndex checks the signature and parses the index.
 func VerifyIndex(pub ed25519.PublicKey, b []byte, sig string) (*Index, error) {
 	if !sign.Verify(pub, indexMessage(b), sig) {
 		return nil, errors.New("version index signature does not verify")
@@ -97,7 +79,6 @@ func VerifyIndex(pub ed25519.PublicKey, b []byte, sig string) (*Index, error) {
 	return &idx, nil
 }
 
-// Add inserts or replaces a release in a track and trims the list.
 func (idx *Index) Add(track string, r Release) error {
 	if !VersionRe.MatchString(r.Version) {
 		return fmt.Errorf("invalid version %q", r.Version)
@@ -126,7 +107,6 @@ func (idx *Index) Add(track string, r Release) error {
 
 var verSegRe = regexp.MustCompile(`\d+|[^\d]+`)
 
-// VersionLess compares versions numerically segment by segment.
 func VersionLess(a, b string) bool {
 	pa, pb := verSegRe.FindAllString(a, -1), verSegRe.FindAllString(b, -1)
 	for i := 0; i < len(pa) && i < len(pb); i++ {

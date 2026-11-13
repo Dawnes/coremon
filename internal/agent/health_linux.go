@@ -14,7 +14,6 @@ import (
 	"coremon/internal/proto"
 )
 
-// run runs a fixed, read-only command with a timeout.
 func run(name string, args ...string) (string, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
@@ -52,7 +51,7 @@ func collectHealth() *proto.Health {
 	active, _ := run("systemctl", "is-active", "apt-daily-upgrade.timer")
 	h.AutoUpdates = autoUpdates(installed, periodic, strings.TrimSpace(active) == "active")
 	if len(status) == 0 {
-		h.AutoUpdates = "" // not a dpkg system: unknown
+		h.AutoUpdates = ""
 	}
 	cur, _ := os.ReadFile("/var/log/apt/history.log")
 	h.LastUpgrade = lastUpgrade([]string{readGz("/var/log/apt/history.log.1.gz"), string(cur)}, time.Local)

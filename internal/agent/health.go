@@ -1,5 +1,7 @@
 package agent
 
+// System health: failed services, automatic updates, last upgrade.
+
 import (
 	"bufio"
 	"strings"
@@ -18,8 +20,6 @@ const (
 	maxFailed   = 10
 )
 
-// health caches the last collected health; collecting runs in the
-// background so a heartbeat never waits for it.
 var health struct {
 	mu      sync.Mutex
 	h       *proto.Health
@@ -27,8 +27,6 @@ var health struct {
 	stale   bool
 }
 
-// currentHealth returns the cached health and starts a refresh when it is
-// older than healthEvery (or marked stale).
 func currentHealth() *proto.Health {
 	health.mu.Lock()
 	defer health.mu.Unlock()
@@ -48,16 +46,12 @@ func currentHealth() *proto.Health {
 	return health.h
 }
 
-// healthStale makes the next heartbeat refresh the health (e.g. after an
-// upgrade).
 func healthStale() {
 	health.mu.Lock()
 	health.stale = true
 	health.mu.Unlock()
 }
 
-// parseFailedUnits reads `systemctl list-units --state=failed --plain
-// --no-legend` output.
 func parseFailedUnits(out string) (count int, names []string) {
 	for _, line := range strings.Split(out, "\n") {
 		f := strings.Fields(line)
@@ -72,8 +66,6 @@ func parseFailedUnits(out string) (count int, names []string) {
 	return count, names
 }
 
-// dpkgInstalled reports whether pkg is installed according to the contents
-// of /var/lib/dpkg/status.
 func dpkgInstalled(status, pkg string) bool {
 	sc := bufio.NewScanner(strings.NewReader(status))
 	sc.Buffer(make([]byte, 64<<10), 1<<20)
@@ -92,8 +84,6 @@ func dpkgInstalled(status, pkg string) bool {
 	return false
 }
 
-// aptPeriodicOn reads `apt-config dump APT::Periodic::Unattended-Upgrade`
-// output: on unless missing, "0" or "false".
 func aptPeriodicOn(out string) bool {
 	for _, line := range strings.Split(out, "\n") {
 		k, v, ok := strings.Cut(strings.TrimSpace(line), " ")
@@ -106,7 +96,6 @@ func aptPeriodicOn(out string) bool {
 	return false
 }
 
-// autoUpdates combines the three conditions.
 func autoUpdates(installed, periodic, timerActive bool) string {
 	switch {
 	case !installed:
@@ -117,8 +106,6 @@ func autoUpdates(installed, periodic, timerActive bool) string {
 	return "off"
 }
 
-// lastUpgrade finds the newest run in apt history logs (oldest log first)
-// that upgraded packages.
 func lastUpgrade(logs []string, loc *time.Location) *proto.Upgrade {
 	var last *proto.Upgrade
 	for _, l := range logs {
@@ -135,7 +122,7 @@ func lastUpgrade(logs []string, loc *time.Location) *proto.Upgrade {
 			cmd, by, upg, end = "", "", "", ""
 		}
 		sc := bufio.NewScanner(strings.NewReader(l))
-		sc.Buffer(make([]byte, 64<<10), 16<<20) // an Upgrade: line lists every package
+		sc.Buffer(make([]byte, 64<<10), 16<<20)
 		for sc.Scan() {
 			line := sc.Text()
 			k, v, _ := strings.Cut(line, ": ")
@@ -157,12 +144,9 @@ func lastUpgrade(logs []string, loc *time.Location) *proto.Upgrade {
 	return last
 }
 
-// upgradedBy says what started an apt run.
 func upgradedBy(cmd, requestedBy string) string {
 	switch {
-	case strings.Contains(cmd, "Coremon::Run=1"),
-		// Coremon before 0.3.3: its fixed set of apt options.
-		strings.Contains(cmd, "Dpkg::Options::=--force-confold") && strings.Contains(cmd, "DPkg::Lock::Timeout=300"):
+	case strings.Contains(cmd, "Coremon::Run=1"):
 		return "coremon"
 	case strings.Contains(cmd, "unattended-upgrade"):
 		return "automatic"

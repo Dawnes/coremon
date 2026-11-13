@@ -11,8 +11,6 @@ import (
 	"time"
 )
 
-// run runs a fixed, read-only command; its output also on a non-zero exit
-// (systemctl is-enabled exits 1 when a unit is disabled).
 func run(name string, args ...string) string {
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
@@ -22,8 +20,6 @@ func run(name string, args ...string) string {
 	return string(out)
 }
 
-// packageOrigins asks apt which package source each package comes from
-// (read-only: `apt-cache policy`). Without apt, nothing is known.
 func packageOrigins(pkgs []string) map[string]string {
 	if _, err := exec.LookPath("apt-cache"); err != nil {
 		return nil
@@ -33,14 +29,11 @@ func packageOrigins(pkgs []string) map[string]string {
 	return parseOrigins(run("apt-cache", args...), sources)
 }
 
-// collectSystem gathers the services of the known applications: whether
-// they exist, run and start at boot, and what they listen on. Read-only.
 func collectSystem() *System {
 	sys := &System{Active: map[string]bool{}, Enabled: map[string]bool{}, Ports: map[string][]Port{}}
 	parseListUnits(run("systemctl", "list-units", "--all", "--plain", "--no-legend", "--no-pager", "--type=service,socket"), sys.Active)
 	parseUnitFiles(run("systemctl", "list-unit-files", "--plain", "--no-legend", "--no-pager", "--type=service,socket"), sys.Active)
 
-	// Only the units of the known applications are looked at further.
 	var units []string
 	for u := range sys.Active {
 		for _, p := range UnitPatterns() {
@@ -60,7 +53,6 @@ func collectSystem() *System {
 	}
 	sys.Enabled = parseIsEnabled(units, run("systemctl", append([]string{"is-enabled"}, units...)...))
 
-	// Ports: listening sockets -> owning process -> its service.
 	byInode := map[string]sock{}
 	for _, f := range []struct{ file, proto string }{{"tcp", "tcp"}, {"tcp6", "tcp"}, {"udp", "udp"}, {"udp6", "udp"}} {
 		b, _ := os.ReadFile("/proc/net/" + f.file)
@@ -91,11 +83,11 @@ func collectSystem() *System {
 				if _, known := sys.Active[unit]; known {
 					sys.Ports[unit] = append(sys.Ports[unit], s.toPort())
 				}
-				delete(byInode, s.inode) // each socket once
+				delete(byInode, s.inode)
 			}
 		}
 	}
-	// Socket-activated services: the system holds the port.
+
 	var sockets []string
 	for _, u := range units {
 		if strings.HasSuffix(u, ".socket") {

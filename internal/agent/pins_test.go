@@ -55,29 +55,19 @@ func TestKeysOnlyChangeOverATrustedReply(t *testing.T) {
 func TestConfigFormats(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "agent.json")
-	// A config from before 0.3.0 (pinned HTTPS certificate) is refused.
-	os.WriteFile(path, []byte(`{"master_url":"https://m:8443","master_pins":["rIHN9u/4L8W8KmxvAw0rWrom4Xjgl+gCgVz6LHI73iw=",""]}`), 0o600)
-	var old Config
-	loadJSON(path, &old)
-	if err := old.validate(); err == nil || !strings.Contains(err.Error(), "new install command") {
-		t.Fatalf("config from before 0.3.0 must be refused, got %v", err)
+	// A config without master keys is refused.
+	os.WriteFile(path, []byte(`{"master_url":"https://m:8443"}`), 0o600)
+	var none Config
+	loadJSON(path, &none)
+	if err := none.validate(); err == nil || !strings.Contains(err.Error(), "new install command") {
+		t.Fatalf("config without keys must be refused, got %v", err)
 	}
-	// A sealed config with a left-over empty master_pins is cleaned up.
 	k := payloadKey(t)
-	os.WriteFile(path, []byte(`{"master_url":"https://m:8443","master_keys":["`+k+`",""],"master_pins":["",""]}`), 0o600)
+	os.WriteFile(path, []byte(`{"master_url":"https://m:8443","master_keys":["`+k+`",""]}`), 0o600)
 	var cfg Config
 	loadJSON(path, &cfg)
 	if err := cfg.validate(); err != nil || !cfg.sealed() {
 		t.Fatalf("sealed config: %v", err)
-	}
-	if !hasOldFields(path) {
-		t.Fatal("old fields not detected")
-	}
-	a := &Agent{opt: Options{ConfigPath: path, StateDir: dir}, cfg: cfg}
-	a.cleanConfig()
-	b, _ := os.ReadFile(path)
-	if hasOldFields(path) || !strings.Contains(string(b), k) {
-		t.Fatalf("after clean-up: %s", b)
 	}
 }
 

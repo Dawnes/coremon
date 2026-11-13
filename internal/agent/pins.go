@@ -1,5 +1,7 @@
 package agent
 
+// Master key slots and re-enrollment.
+
 import (
 	"context"
 	"errors"
@@ -31,14 +33,11 @@ func shortPin(p string) string {
 	return f[:6] + "…" + f[len(f)-6:]
 }
 
-// setPins replaces both payload key slots. The new pair must still contain
-// the key that signed the reply carrying this command: a key can only be
-// added in a reply signed by a key the agent already trusts, and the agent
-// never drops the key it is talking to.
 func (a *Agent) setPins(p [2]string) error {
 	if err := validKeys(p); err != nil {
 		return err
 	}
+	// A new key is only accepted alongside the key of the current connection.
 	_, last := a.cl.getPins()
 	if last == "" || (p[0] != last && p[1] != last) {
 		return errors.New("refused: the new keys must include the key of the current connection")
@@ -59,21 +58,6 @@ func (a *Agent) setPins(p [2]string) error {
 	return nil
 }
 
-// cleanConfig removes fields of the method before 0.3.0 from the stored
-// config (rewriting it with the current fields only).
-func (a *Agent) cleanConfig() {
-	if !hasOldFields(a.opt.ConfigPath) {
-		return
-	}
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	if err := saveJSON(a.opt.ConfigPath, a.cfg, 0o600); err != nil {
-		log.Printf("warning: could not clean up the config: %v", err)
-		return
-	}
-	log.Printf("removed the old HTTPS pins from the config")
-}
-
 func (a *Agent) tokenPending() bool {
 	a.mu.Lock()
 	defer a.mu.Unlock()
@@ -89,8 +73,6 @@ func (a *Agent) dropToken() {
 	}
 }
 
-// reenroll registers this system again with the token from the config,
-// replacing the identity the master no longer knows.
 func (a *Agent) reenroll(ctx context.Context) error {
 	old := a.id
 	os.Remove(a.identityPath())

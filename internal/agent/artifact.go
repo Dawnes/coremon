@@ -14,7 +14,6 @@ import (
 	"coremon/internal/sign"
 )
 
-// fetchVerified downloads an artifact and verifies signature and hash.
 func fetchVerified(ctx context.Context, cl *client, pub string, a *proto.Artifact, dst string) error {
 	if a == nil {
 		return errors.New("missing artifact")
@@ -26,8 +25,7 @@ func fetchVerified(ctx context.Context, cl *client, pub string, a *proto.Artifac
 	if a.OS != runtime.GOOS || a.Arch != runtime.GOARCH {
 		return fmt.Errorf("artifact is for %s/%s, this system is %s/%s", a.OS, a.Arch, runtime.GOOS, runtime.GOARCH)
 	}
-	// The signature is checked first against the advertised hash, then the
-	// downloaded bytes are checked against that hash.
+
 	if !sign.Verify(key, sign.Message(a.Kind, a.Name, a.Version, a.OS, a.Arch, a.SHA256), a.Signature) {
 		return errors.New("signature verification FAILED - refusing artifact")
 	}

@@ -1,5 +1,7 @@
 package updates
 
+// The apt backend.
+
 import (
 	"bufio"
 	"os"
@@ -17,7 +19,7 @@ var aptEnv = []string{
 	"LANG=C.UTF-8", "LC_ALL=C.UTF-8",
 	"DEBIAN_FRONTEND=noninteractive",
 	"APT_LISTCHANGES_FRONTEND=none",
-	"NEEDRESTART_MODE=a", // Ubuntu: never prompt for service restarts
+	"NEEDRESTART_MODE=a",
 	"NEEDRESTART_SUSPEND=1",
 }
 
@@ -26,7 +28,7 @@ var aptOpts = []string{
 	"-o", "Dpkg::Options::=--force-confdef",
 	"-o", "Dpkg::Options::=--force-confold",
 	"-o", "DPkg::Lock::Timeout=300",
-	// Marks the run as Coremon's in apt's history log (no effect on apt).
+
 	"-o", "Coremon::Run=1",
 }
 
@@ -65,7 +67,6 @@ func (aptBackend) UpgradeAll(c *feature.Ctx) error {
 	return err
 }
 
-// Inst libssl3 [3.0.11-1~deb12u2] (3.0.13-1~deb12u1 Debian:12.6/stable, Debian-Security:12/stable-security [amd64]) []
 var instRe = regexp.MustCompile(`^Inst (\S+) (?:\[([^\]]+)\] )?\((\S+)(?: ([^\[\)]*?))?(?: \[([^\]]+)\])?\)`)
 var remvRe = regexp.MustCompile(`^Remv (\S+)`)
 
@@ -105,8 +106,6 @@ func isSecurityOrigin(origin string) bool {
 	return strings.Contains(o, "-security") || strings.Contains(o, "security:")
 }
 
-// rebootRequired checks the Debian/Ubuntu flag file and, outside containers,
-// whether a newer kernel is installed than the one running.
 func rebootRequired() (bool, []string) {
 	var pkgs []string
 	flag := false
@@ -155,7 +154,6 @@ func latestKernel() string {
 	return vers[len(vers)-1]
 }
 
-// versionLess compares kernel version strings numerically segment by segment.
 var verSegRe = regexp.MustCompile(`\d+|[^\d]+`)
 
 func versionLess(a, b string) bool {

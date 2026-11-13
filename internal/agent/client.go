@@ -1,5 +1,7 @@
 package agent
 
+// HTTPS client for the sealed agent API.
+
 import (
 	"bytes"
 	"context"
@@ -17,10 +19,6 @@ import (
 	"coremon/internal/seal"
 )
 
-// client talks to the master. HTTPS only carries the traffic and is not
-// verified: every request is encrypted to the master's payload key and
-// signed with the agent's own key, and only replies signed by a key in one
-// of the two slots are accepted.
 type client struct {
 	base string
 	hc   *http.Client
@@ -29,18 +27,16 @@ type client struct {
 	agentKey ed25519.PrivateKey
 
 	mu      sync.Mutex
-	pins    [2]string // master payload keys
-	lastPin string    // key that signed the last verified reply
-	prefer  int       // slot that answered last
+	pins    [2]string
+	lastPin string
+	prefer  int
 
-	plain bool // tests only: send JSON without sealing
+	plain bool
 }
 
-// newSealedClient trusts the master payload keys in keys.
 func newSealedClient(base string, keys [2]string, agentKey ed25519.PrivateKey) *client {
 	c := &client{base: base, pins: keys, agentKey: agentKey}
 	c.hc = &http.Client{Transport: &http.Transport{
-		// Not verified on purpose: security comes from the sealed layer.
 		TLSClientConfig:     &tls.Config{MinVersion: tls.VersionTLS12, InsecureSkipVerify: true},
 		IdleConnTimeout:     90 * time.Second,
 		MaxIdleConnsPerHost: 4,
@@ -86,7 +82,6 @@ func (c *client) post(ctx context.Context, path string, body []byte) ([]byte, er
 	return io.ReadAll(io.LimitReader(resp.Body, 24<<20))
 }
 
-// postJSON sends one sealed API call ("/api/agent/<op>").
 func (c *client) postJSON(ctx context.Context, path string, in, out any, timeout time.Duration) error {
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
@@ -106,8 +101,7 @@ func (c *client) postJSON(ctx context.Context, path string, in, out any, timeout
 	if err != nil {
 		return err
 	}
-	// Seal to the slot that answered last; if the master no longer has
-	// that key (after a switch), try the other slot.
+
 	c.mu.Lock()
 	keys, first := c.pins, c.prefer
 	agentID := c.agentID
@@ -127,7 +121,7 @@ func (c *client) postJSON(ctx context.Context, path string, in, out any, timeout
 		var he *httpError
 		if errors.As(err, &he) && he.Status == http.StatusMisdirectedRequest {
 			lastErr = err
-			continue // master does not have this key: try the other slot
+			continue
 		}
 		if err != nil {
 			return err
@@ -154,8 +148,6 @@ func (c *client) postJSON(ctx context.Context, path string, in, out any, timeout
 	return lastErr
 }
 
-// download streams a public file from the master into w, up to max bytes.
-// Its integrity is checked by the caller (release signature and checksum).
 func (c *client) download(ctx context.Context, path string, w io.Writer, max int64) error {
 	ctx, cancel := context.WithTimeout(ctx, 30*time.Minute)
 	defer cancel()

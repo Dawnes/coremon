@@ -43,7 +43,7 @@ func TestMinimumAgentVersion(t *testing.T) {
 	if m := s.minAgent(); m != "0.3.1" {
 		t.Fatalf("default minimum %q", m)
 	}
-	if s.belowMin(cur) || !s.belowMin(old) || s.belowMin(ancient) || !tooOldToConnect(ancient) {
+	if s.belowMin(cur) || !s.belowMin(old) || !s.belowMin(ancient) {
 		t.Fatal("classification")
 	}
 	// The view of an upgrade-only system holds no data.
@@ -88,7 +88,7 @@ func TestMinimumAgentVersion(t *testing.T) {
 	c := newUIClient(t, srv.URL)
 	c.do("POST", "/api/ui/login", `{"username":"admin","password":"`+strings.TrimSpace(string(pw))+`"}`)
 	set := func(min string) (int, string) {
-		return c.do("POST", "/api/ui/settings", `{"check_interval_hours":6,"heartbeat_sec":30,"retention_days":3,"ui_port":8443,"min_agent_version":"`+min+`"}`)
+		return c.do("POST", "/api/ui/settings", `{"check_interval_hours":6,"heartbeat_sec":30,"retention_days":3,"ui_port":8443,"os_info_days":14,"vuln_days":1,"min_agent_version":"`+min+`"}`)
 	}
 	if code, _ := set("0.3.0"); code != 400 {
 		t.Error("a minimum below the stored versions was accepted")
@@ -113,9 +113,6 @@ func TestMinimumAgentVersion(t *testing.T) {
 	}
 	if code, _ := c.do("POST", "/api/ui/agents/a_cur/core", `{"version":"0.3.2"}`); code != 400 {
 		t.Error("downgrade below the minimum accepted")
-	}
-	if code, _ := c.do("POST", "/api/ui/agents/a_ancient/core", `{"version":"0.3.3"}`); code != 409 {
-		t.Error("update offered to an agent that cannot connect")
 	}
 
 	// A new release pushes 0.3.1 out: a minimum below the oldest is raised.

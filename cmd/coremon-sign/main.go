@@ -1,15 +1,5 @@
 // Command coremon-sign manages the release signing key, signs binaries and
-// maintains the signed version index.
-//
-//	coremon-sign keygen  -key keys/signing.key
-//	coremon-sign pubkey  -key keys/signing.key
-//	coremon-sign release -dir dist/.../release        # sign every binary below dir
-//	coremon-sign index   -track agent -version 0.2.0 -dir dist/.../release \
-//	                     -base https://github.com/o/r/releases/download/agent-v0.2.0 \
-//	                     -in versions.json -out versions.json
-//
-// Instead of -key, the private key can be passed in the COREMON_SIGNING_KEY
-// environment variable (used by the GitHub Actions release workflows).
+// maintains the signed version index (versions.json).
 package main
 
 import (
@@ -94,7 +84,6 @@ func main() {
 	}
 }
 
-// AssetName is the file name of a binary as a release asset.
 func AssetName(track, version, plat string) string {
 	_, name, _ := release.TrackInfo(track)
 	return fmt.Sprintf("%s-%s-%s", name, version, plat)
@@ -105,14 +94,13 @@ func index(priv ed25519.PrivateKey, track, version, dir, base, in, out string) e
 	if err != nil {
 		return err
 	}
-	local := strings.HasPrefix(base, "http://127.0.0.1:") // local testing only
+	local := strings.HasPrefix(base, "http://127.0.0.1:")
 	if !release.VersionRe.MatchString(version) || dir == "" || !(strings.HasPrefix(base, "https://") || local) {
 		return errors.New("index needs -track, -version, -dir and an https -base")
 	}
 	pub := priv.Public().(ed25519.PublicKey)
 	var idx release.Index
 	if b, err := os.ReadFile(in); err == nil {
-		// Only ever build on an index we signed ourselves.
 		sig, err := os.ReadFile(in + ".sig")
 		if err != nil {
 			return fmt.Errorf("%s exists but %s.sig is missing", in, in)
@@ -195,7 +183,6 @@ func loadKey(path string) ed25519.PrivateKey {
 	return k
 }
 
-// signFile signs <dir>/<ver>/<os>-<arch>/<file>.
 func signFile(priv ed25519.PrivateKey, file, kind, name string) {
 	plat := filepath.Base(filepath.Dir(file))
 	ver := filepath.Base(filepath.Dir(filepath.Dir(file)))

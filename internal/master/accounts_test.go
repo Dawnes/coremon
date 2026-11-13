@@ -25,9 +25,7 @@ func TestStateFileObfuscated(t *testing.T) {
 	if bytes.Contains(b, []byte("secret-web-01")) || bytes.Contains(b, []byte("192.168.77.12")) || bytes.Contains(b, []byte("admin")) || bytes.Contains(b, []byte("\x1f\x8b")) {
 		t.Fatal("state file is readable or plain gzip")
 	}
-	if _, err := os.Stat(filepath.Join(s.cfg.DataDir, oldStateFile)); !os.IsNotExist(err) {
-		t.Fatal("plain state.json left behind")
-	}
+
 	out, err := ShowState(s.cfg.DataDir)
 	if err != nil || !bytes.Contains(out, []byte(`"name": "secret-web-01"`)) {
 		t.Fatalf("show-state: %v %s", err, out)
@@ -36,19 +34,6 @@ func TestStateFileObfuscated(t *testing.T) {
 	b[len(b)-5] ^= 0xff
 	if _, err := decodeState(b); err == nil {
 		t.Fatal("damaged state accepted")
-	}
-	// An older master's plain state.json is converted.
-	dir := t.TempDir()
-	os.WriteFile(filepath.Join(dir, oldStateFile), []byte(`{"agents":{"a_9":{"id":"a_9","name":"old-format"}}}`), 0o600)
-	st, err := openStore(dir)
-	if err != nil || st.st.Agents["a_9"] == nil {
-		t.Fatalf("conversion: %v", err)
-	}
-	if _, err := os.Stat(filepath.Join(dir, oldStateFile)); !os.IsNotExist(err) {
-		t.Fatal("state.json not removed after conversion")
-	}
-	if _, err := os.Stat(filepath.Join(dir, stateFile)); err != nil {
-		t.Fatal("state.dat not written")
 	}
 }
 

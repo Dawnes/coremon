@@ -1,10 +1,6 @@
 package master
 
-// Registration attempts per address. Anyone can send a correctly sealed
-// "register" request (the master's public key is in the install script), so
-// attempts with a wrong token are limited like failed logins and summarised
-// in the audit log instead of logged one by one. With a valid token, an
-// address can have one system waiting for approval at a time.
+// Limits on registration attempts per address.
 
 import (
 	"sync"
@@ -12,24 +8,22 @@ import (
 )
 
 const (
-	enrollFails   = 5 // attempts with a wrong token per address ...
+	enrollFails   = 5
 	enrollWindow  = 15 * time.Minute
-	enrollTracked = 10000 // addresses remembered at most
+	enrollTracked = 10000
 )
 
 type enrollWin struct {
 	start time.Time
-	n     int // attempts in this window (the first one is logged on its own)
+	n     int
 }
 
 type enrollGuard struct {
 	mu      sync.Mutex
 	fails   map[string]*enrollWin
-	waiting map[string]bool // addresses already told (and logged) to wait
+	waiting map[string]bool
 }
 
-// rejected records an attempt with a wrong token. first: log it on its own;
-// blocked: the address is over its limit (answer "too many").
 func (g *enrollGuard) rejected(ip string, now time.Time) (first, blocked bool) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
@@ -38,11 +32,11 @@ func (g *enrollGuard) rejected(ip string, now time.Time) (first, blocked bool) {
 	}
 	w := g.fails[ip]
 	if w != nil && now.Sub(w.start) >= enrollWindow {
-		w = nil // an expired window is summarised by flush; start anew
+		w = nil
 	}
 	if w == nil {
 		if len(g.fails) >= enrollTracked {
-			return false, true // under attack from many addresses: no bookkeeping, no log
+			return false, true
 		}
 		g.fails[ip] = &enrollWin{start: now, n: 1}
 		return true, false
@@ -51,8 +45,6 @@ func (g *enrollGuard) rejected(ip string, now time.Time) (first, blocked bool) {
 	return false, w.n > enrollFails
 }
 
-// over reports whether the address is over its limit right now (checked
-// before the token is looked at).
 func (g *enrollGuard) over(ip string, now time.Time) bool {
 	g.mu.Lock()
 	defer g.mu.Unlock()
@@ -60,8 +52,6 @@ func (g *enrollGuard) over(ip string, now time.Time) bool {
 	return w != nil && now.Sub(w.start) < enrollWindow && w.n >= enrollFails
 }
 
-// flush returns, per address, how many further attempts followed the logged
-// first one in windows that have ended, and forgets those windows.
 func (g *enrollGuard) flush(now time.Time) map[string]int {
 	g.mu.Lock()
 	defer g.mu.Unlock()
@@ -77,8 +67,6 @@ func (g *enrollGuard) flush(now time.Time) map[string]int {
 	return out
 }
 
-// noteWaiting reports whether this is the first refusal for the address
-// since it had a system waiting (so it is logged once, not per retry).
 func (g *enrollGuard) noteWaiting(ip string) bool {
 	g.mu.Lock()
 	defer g.mu.Unlock()

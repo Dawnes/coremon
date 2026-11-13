@@ -1,5 +1,4 @@
-// Command coremon-agent is agent-core: a small service that connects out
-// to the coremon master and runs signed modules on its behalf.
+// Command coremon-agent is the agent: it connects out to the master and runs what the master asks.
 package main
 
 import (
@@ -24,7 +23,7 @@ func main() {
 	cfg := flag.String("config", "/etc/coremon/agent.json", "config file")
 	state := flag.String("state", "/var/lib/coremon", "state directory")
 	flag.Parse()
-	log.SetFlags(0) // journald adds timestamps
+	log.SetFlags(0)
 
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()

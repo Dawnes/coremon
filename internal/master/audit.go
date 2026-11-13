@@ -1,5 +1,7 @@
 package master
 
+// The audit log.
+
 import (
 	"bufio"
 	"bytes"
@@ -11,8 +13,6 @@ import (
 	"time"
 )
 
-// auditLog is an append-only JSON-lines file of every user-visible action.
-// Entries older than the retention period are purged.
 type auditLog struct {
 	mu   sync.Mutex
 	path string
@@ -23,23 +23,20 @@ type auditEntry struct {
 	Actor  string `json:"actor"`
 	IP     string `json:"ip,omitempty"`
 	Action string `json:"action"`
-	Agent  string `json:"agent,omitempty"` // system the entry is about
+	Agent  string `json:"agent,omitempty"`
 	Target string `json:"target,omitempty"`
 	Detail string `json:"detail,omitempty"`
-	Job    string `json:"job,omitempty"` // job started by this action (its output)
+	Job    string `json:"job,omitempty"`
 }
 
-// write records an entry that is not about one system.
 func (a *auditLog) write(actor, ip, action, target, detail string) {
 	a.add(auditEntry{Actor: actor, IP: ip, Action: action, Target: target, Detail: detail})
 }
 
-// writeAgent records an entry about one system.
 func (a *auditLog) writeAgent(actor, ip, action string, ag *Agent, detail string) {
 	a.add(auditEntry{Actor: actor, IP: ip, Action: action, Agent: ag.ID, Target: ag.Name, Detail: detail})
 }
 
-// writeJob records an action about one system that started a job.
 func (a *auditLog) writeJob(actor, ip, action string, ag *Agent, detail string, j *Job) {
 	e := auditEntry{Actor: actor, IP: ip, Action: action, Agent: ag.ID, Target: ag.Name, Detail: detail}
 	if j != nil {
@@ -61,26 +58,17 @@ func (a *auditLog) add(e auditEntry) {
 	f.Close()
 }
 
-// about reports whether the entry concerns the given system. Entries from
-// before 0.2 have no agent field but carried the agent ID as target.
 func (e *auditEntry) about(agentID string) bool {
-	return e.Agent == agentID || (e.Agent == "" && e.Target == agentID)
+	return e.Agent == agentID
 }
 
 const maxAuditRead = 32 << 20
 
-// list returns the newest entries first, optionally only about one system
-// and/or by one actor (user name, "agent" or "scheduler").
 func (a *auditLog) list(agentID, actor string, limit int) []auditEntry {
 	out, _ := a.page(agentID, actor, 0, 0, limit)
 	return out
 }
 
-// page returns up to limit entries, newest first, older than a cursor:
-// before is the time of the last entry already shown (0: from the newest)
-// and skip how many entries with exactly that time were shown already.
-// Appends only add newer entries and the cleanup only removes the oldest,
-// so the cursor stays valid. more: there are older entries.
 func (a *auditLog) page(agentID, actor string, before int64, skip, limit int) (out []auditEntry, more bool) {
 	out = []auditEntry{}
 	all := a.read(agentID, actor)
@@ -102,7 +90,6 @@ func (a *auditLog) page(agentID, actor string, before int64, skip, limit int) (o
 	return out, false
 }
 
-// read returns the matching entries, newest first.
 func (a *auditLog) read(agentID, actor string) []auditEntry {
 	a.mu.Lock()
 	defer a.mu.Unlock()
@@ -121,7 +108,7 @@ func (a *auditLog) read(agentID, actor string) []auditEntry {
 	b, _ := io.ReadAll(f)
 	lines := bytes.Split(b, []byte("\n"))
 	if off > 0 && len(lines) > 0 {
-		lines = lines[1:] // first line may be partial
+		lines = lines[1:]
 	}
 	for i := len(lines) - 1; i >= 0; i-- {
 		var e auditEntry
@@ -139,7 +126,6 @@ func (a *auditLog) read(agentID, actor string) []auditEntry {
 	return out
 }
 
-// countOlder counts entries older than cutoff.
 func (a *auditLog) countOlder(cutoff int64) int {
 	a.mu.Lock()
 	defer a.mu.Unlock()
@@ -160,7 +146,6 @@ func (a *auditLog) countOlder(cutoff int64) int {
 	return n
 }
 
-// purge drops entries older than cutoff by rewriting the file.
 func (a *auditLog) purge(cutoff int64) (int, error) {
 	a.mu.Lock()
 	defer a.mu.Unlock()

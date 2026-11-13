@@ -1,5 +1,7 @@
 package main
 
+// coremon-reset: gives a user a new password (as root, on the master).
+
 import (
 	"bytes"
 	"flag"
@@ -11,15 +13,6 @@ import (
 
 const service = "coremon-master.service"
 
-// resetMain is coremon-reset: gives an existing user (default admin) a new
-// random password that must be changed at the next sign-in. Briefly stops
-// and starts the master; the password is only shown on screen.
-//
-// Root only stops and starts the service. The files are changed by a child
-// process running as the owner of the data directory (the master's own
-// user): root never writes or re-owns anything in a directory that the
-// master's user controls, so a compromised master cannot use this command
-// to reach files outside it.
 func resetMain(args []string) int {
 	fs := flag.NewFlagSet("coremon-reset", flag.ExitOnError)
 	user := fs.String("user", "admin", "user whose password is reset (must exist)")
@@ -37,6 +30,7 @@ func resetMain(args []string) int {
 		return fail("%v", err)
 	}
 	child := exec.Command(exe, "reset-apply", "-user", *user, "-data", *data)
+	// Files are changed as the master's user, never as root.
 	if err := runAsOwner(child, *data); err != nil {
 		return fail("%v", err)
 	}

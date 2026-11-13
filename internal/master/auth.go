@@ -1,5 +1,7 @@
 package master
 
+// Sessions and login limits.
+
 import (
 	"context"
 	"crypto/pbkdf2"
@@ -32,7 +34,6 @@ func sha256hex(s string) string {
 	return hex.EncodeToString(h[:])
 }
 
-// hashPassword returns "pbkdf2-sha256$iter$salt$hash".
 func hashPassword(pw string) string {
 	salt := make([]byte, 16)
 	_, _ = rand.Read(salt)
@@ -65,19 +66,16 @@ func checkPassword(stored, pw string) bool {
 	return subtle.ConstantTimeCompare(got, want) == 1
 }
 
-// dummyHash is checked for unknown user names so a login takes as long
-// whether or not the user exists.
 var dummyHash = hashPassword(randHex(8))
 
 type session struct {
-	user string // user ID
+	user string
 	exp  int64
 }
 
-// sessions are kept in memory; a master restart logs everyone out.
 type sessions struct {
 	mu   sync.Mutex
-	m    map[string]session // token hash -> session
+	m    map[string]session
 	fail map[string][]int64
 }
 
@@ -96,7 +94,6 @@ func (s *sessions) create(userID string) string {
 	return tok
 }
 
-// userOf returns the user ID of a valid session, or "".
 func (s *sessions) userOf(tok string) string {
 	if tok == "" {
 		return ""
@@ -110,7 +107,7 @@ func (s *sessions) userOf(tok string) string {
 		delete(s.m, h)
 		return ""
 	}
-	se.exp = now.Add(sessionTTL).Unix() // sliding expiry
+	se.exp = now.Add(sessionTTL).Unix()
 	s.m[h] = se
 	return se.user
 }
@@ -121,7 +118,6 @@ func (s *sessions) destroy(tok string) {
 	s.mu.Unlock()
 }
 
-// destroyUser ends every session of one user.
 func (s *sessions) destroyUser(userID string) {
 	s.mu.Lock()
 	for h, se := range s.m {
@@ -133,15 +129,11 @@ func (s *sessions) destroyUser(userID string) {
 }
 
 const (
-	loginFails  = 5 // failed logins per address ...
+	loginFails  = 5
 	loginWindow = 15 * time.Minute
-	hashAtOnce  = 4 // password checks running at once (each costs CPU on purpose)
+	hashAtOnce  = 4
 )
 
-// reserveLogin rate-limits failed logins per client IP: 5 per 15 minutes.
-// The attempt is counted here, before the password is checked, so parallel
-// requests cannot slip past the limit; a successful login gives it back
-// (forgiveLogin).
 func (s *sessions) reserveLogin(ip string) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -160,7 +152,6 @@ func (s *sessions) reserveLogin(ip string) bool {
 	return true
 }
 
-// forgiveLogin removes the attempt reserved for a login that succeeded.
 func (s *sessions) forgiveLogin(ip string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -171,8 +162,6 @@ func (s *sessions) forgiveLogin(ip string) {
 	}
 }
 
-// sweep forgets addresses whose failed logins have all expired, and expired
-// sessions, so neither list grows without end.
 func (s *sessions) sweep() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -190,7 +179,6 @@ func (s *sessions) sweep() {
 	}
 }
 
-// clientIP is the address used for login rate limiting and the audit log.
 func clientIP(r *http.Request) string {
 	if ip, ok := r.Context().Value(proxiedIPKey{}).(string); ok {
 		return ip
@@ -204,11 +192,6 @@ func clientIP(r *http.Request) string {
 
 type proxiedIPKey struct{}
 
-// viaLocalProxy wraps the loopback-only plain-HTTP listener, which exists
-// only for a reverse proxy on the same machine. Every request there comes
-// from 127.0.0.1, so the visitor's address is taken from the last
-// X-Forwarded-For entry (the one that proxy added). Never used on the
-// HTTPS listeners, where X-Forwarded-For could be forged by anyone.
 func viaLocalProxy(h http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		host, _, _ := net.SplitHostPort(r.RemoteAddr)

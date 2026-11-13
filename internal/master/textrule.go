@@ -1,5 +1,7 @@
 package master
 
+// The text rule: free text never contains anything that could act as code or markup.
+
 import (
 	"fmt"
 	"strings"
@@ -11,38 +13,29 @@ import (
 // install-command notes) and text an agent reports. Shown everywhere as text
 // only, but kept free of anything that could ever act as code or markup.
 
-// shellAndMarkup are characters with a meaning in shells, HTML or scripts.
 const shellAndMarkup = "<>\"'`$\\;|&"
 
-// forbiddenRune: control characters (C0, DEL, C1), invisible and
-// direction-changing format characters (zero-width, bidi overrides), line and
-// paragraph separators, private-use and non-characters, and shellAndMarkup.
 func forbiddenRune(r rune) bool {
 	switch {
 	case r == utf8.RuneError,
 		unicode.IsControl(r),
-		unicode.Is(unicode.Cf, r), // format: zero-width, bidi controls, soft hyphen...
+		unicode.Is(unicode.Cf, r),
 		unicode.Is(unicode.Zl, r), unicode.Is(unicode.Zp, r),
-		unicode.Is(unicode.Co, r),  // private use
-		r >= 0xFFF0 && r <= 0xFFFF, // specials, non-characters
+		unicode.Is(unicode.Co, r),
+		r >= 0xFFF0 && r <= 0xFFFF,
 		strings.ContainsRune(shellAndMarkup, r):
 		return true
 	}
 	return false
 }
 
-// Website names: limits in characters.
 const (
 	maxSystemName = 64
 	maxGroupName  = 48
 	maxNoteLen    = 64
 )
 
-// checkName validates a name typed in the website: trimmed, at most max
-// characters, no forbidden characters. It refuses rather than repairs.
 func checkName(what, s string, max int) (string, error) {
-	// Check before trimming: trimming would silently drop some control
-	// characters at the ends (e.g. U+0085), and the rule is to refuse.
 	s = strings.Trim(s, " ")
 	if !utf8.ValidString(s) {
 		return "", fmt.Errorf("%s contains characters that are not allowed", what)
@@ -63,8 +56,6 @@ func checkName(what, s string, max int) (string, error) {
 
 func spaced(s string) string { return strings.Join(strings.Split(s, ""), " ") }
 
-// cleanText repairs text an agent reports: invalid UTF-8 and forbidden
-// characters are dropped, spaces trimmed, at most max characters.
 func cleanText(s string, max int) string {
 	var b strings.Builder
 	n := 0
@@ -81,9 +72,6 @@ func cleanText(s string, max int) string {
 	return strings.TrimSpace(b.String())
 }
 
-// cleanLog repairs free-running text such as job output and error messages:
-// punctuation stays (it is a log), but control characters other than line
-// breaks and tabs, and invisible format characters, are dropped.
 func cleanLog(s string) string {
 	return strings.Map(func(r rune) rune {
 		switch {

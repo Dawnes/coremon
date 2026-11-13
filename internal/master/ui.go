@@ -1,5 +1,7 @@
 package master
 
+// Website API: overview, systems, jobs and settings.
+
 import (
 	"encoding/json"
 	"errors"
@@ -19,11 +21,9 @@ import (
 
 const (
 	minPasswordLen = 5
-	maxPasswordLen = 40 // characters; checked when a password is set
-	maxTokenHours  = 3  // validity of an install command
+	maxPasswordLen = 40
+	maxTokenHours  = 3
 )
-
-// ---- views ----
 
 type updatesSummary struct {
 	Total          int   `json:"total"`
@@ -45,23 +45,21 @@ type agentView struct {
 	CoreLatest   string                     `json:"core_latest"`
 	CoreIsLatest bool                       `json:"core_is_latest"`
 	DesiredCore  string                     `json:"desired_core"`
-	Legacy       bool                       `json:"legacy"`            // agent before 0.3.0: old connection method, cannot connect
-	IsMaster     bool                       `json:"is_master"`         // the system the master itself runs on
-	AgentReport  bool                       `json:"agent_report_only"` // mode the agent itself confirmed
+	IsMaster     bool                       `json:"is_master"`
+	AgentReport  bool                       `json:"agent_report_only"`
 	OSSupport    *osSupport                 `json:"os_support,omitempty"`
-	BelowMin     bool                       `json:"below_min"`           // older than the lowest allowed version: upgrade only
-	MinAgent     string                     `json:"min_agent,omitempty"` // that lowest allowed version
+	BelowMin     bool                       `json:"below_min"`
+	MinAgent     string                     `json:"min_agent,omitempty"`
 	Facts        proto.Facts                `json:"facts"`
 	Features     []string                   `json:"features"`
 	Updates      *updatesSummary            `json:"updates,omitempty"`
-	Vulns        *vulnView                  `json:"vulns,omitempty"` // known vulnerabilities of the tracked applications
-	Busy         int                        `json:"busy"`            // open jobs
+	Vulns        *vulnView                  `json:"vulns,omitempty"`
+	Busy         int                        `json:"busy"`
 	Removing     bool                       `json:"removing"`
 	State        map[string]json.RawMessage `json:"state,omitempty"`
 	StateAt      map[string]int64           `json:"state_at,omitempty"`
 }
 
-// view builds the UI representation. Caller holds s.st.mu.
 func (s *Server) view(a *Agent, full bool) agentView {
 	now := time.Now().Unix()
 	v := agentView{
@@ -71,7 +69,6 @@ func (s *Server) view(a *Agent, full bool) agentView {
 	}
 	v.CoreLatest = s.repo.coreLatest()
 	v.CoreIsLatest = v.CoreLatest != "" && a.CoreVersion == v.CoreLatest
-	v.Legacy = a.CoreVersion != "" && versionLess(a.CoreVersion, minAgentVersion)
 	v.AgentReport = a.ReportOnly
 	v.OSSupport = s.supportFor(a.Facts.OSID, a.Facts.OSVersion, time.Now())
 	for _, f := range a.Features {
@@ -99,8 +96,6 @@ func (s *Server) view(a *Agent, full bool) agentView {
 	}
 	v.Vulns = s.vulnsFor(a, full)
 	if s.belowMin(a) {
-		// Upgrade only: none of the stored data is shown (it stays, hidden,
-		// until the agent is updated).
 		v.BelowMin, v.MinAgent = true, s.minAgent()
 		v.Facts = proto.Facts{OS: a.Facts.OS, Arch: a.Facts.Arch}
 		v.Features, v.Updates, v.OSSupport, v.State, v.StateAt, v.Vulns = []string{}, nil, nil, nil, nil, nil
@@ -109,8 +104,6 @@ func (s *Server) view(a *Agent, full bool) agentView {
 	return v
 }
 
-// orderedAgents returns agents in display order: by group (in group order,
-// ungrouped last), then by position. Caller holds s.st.mu.
 func (s *Server) orderedAgents() []*Agent {
 	gpos := map[string]int{"": len(s.st.st.Groups)}
 	for i, g := range s.st.st.Groups {
@@ -164,8 +157,6 @@ func (s *Server) jobsFor(agentID string, limit int, activeOnly bool) []*Job {
 	return s.jobsFiltered(agentID, "", limit, activeOnly)
 }
 
-// jobsFiltered returns the newest matching jobs; filters are applied before
-// the limit. actor is a user name or "scheduler".
 func (s *Server) jobsFiltered(agentID, actor string, limit int, activeOnly bool) []*Job {
 	out := []*Job{}
 	for i := len(s.st.st.Jobs) - 1; i >= 0 && len(out) < limit; i-- {
@@ -192,9 +183,6 @@ var actionNameRe = regexp.MustCompile(`^[a-z][a-z0-9_]{0,31}$`)
 
 const maxActionPackages = 5000
 
-// checkActionParams validates an action request before it goes to agents:
-// plain names, a JSON object as parameters and, for package installs, only
-// names matching the agent's own package pattern.
 func checkActionParams(feature, action string, params json.RawMessage) error {
 	if !actionNameRe.MatchString(feature) || !actionNameRe.MatchString(action) {
 		return errors.New("invalid function or action name")
@@ -220,7 +208,6 @@ func checkActionParams(feature, action string, params json.RawMessage) error {
 	return nil
 }
 
-// setGroup moves an agent to the end of a group. Caller holds s.st.mu.
 func (s *Server) setGroup(a *Agent, groupID string) error {
 	if groupID != "" && s.st.group(groupID) == nil {
 		return fmt.Errorf("group not found")
@@ -237,7 +224,6 @@ func (s *Server) handleAgentUpdate(w http.ResponseWriter, r *http.Request) {
 		Name       *string `json:"name"`
 		GroupID    *string `json:"group_id"`
 		ReportOnly *bool   `json:"report_only"`
-		Paused     *bool   `json:"paused"` // before 0.2.8
 	}
 	if !readJSON(w, r, &req, 16<<10) {
 		return
@@ -264,9 +250,6 @@ func (s *Server) handleAgentUpdate(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	if req.ReportOnly == nil {
-		req.ReportOnly = req.Paused
-	}
 	if req.ReportOnly != nil && s.belowMin(a) {
 		http.Error(w, upgradeOnlyMsg(a, s.minAgent()), http.StatusConflict)
 		return
@@ -276,7 +259,7 @@ func (s *Server) handleAgentUpdate(w http.ResponseWriter, r *http.Request) {
 		switch {
 		case *req.ReportOnly && a.Status != StatusReportOnly:
 			a.Status = StatusReportOnly
-			// Nothing queued earlier runs later; agent version changes stay.
+
 			n := s.cancelQueued(a, "system set to report only")
 			j = s.syncMode(a, actor(r))
 			s.audit.writeJob(actor(r), clientIP(r), "agent.report_only", a, fmt.Sprintf("%d queued job(s) cancelled", n), j)
@@ -325,7 +308,7 @@ func (s *Server) handleApprove(w http.ResponseWriter, r *http.Request) {
 	s.st.markDirty()
 	s.wake(a.ID)
 	s.audit.writeAgent(actor(r), clientIP(r), "agent.approved", a, "")
-	go s.schedulerTick() // run the first check right away
+	go s.schedulerTick()
 	writeJSON(w, s.view(a, false))
 }
 
@@ -352,13 +335,11 @@ func (s *Server) handleRemove(w http.ResponseWriter, r *http.Request) {
 	delete(s.st.st.Agents, a.ID)
 	delete(s.wakes, a.ID)
 	s.st.markDirty()
-	s.kickVulns() // its lookups are cleaned up
+	s.kickVulns()
 	s.audit.writeAgent(actor(r), clientIP(r), "agent.removed", a, "")
 	writeJSON(w, map[string]any{"removed": true})
 }
 
-// handleCoreUpdate up- or downgrades one agent to a version from the
-// release store.
 func (s *Server) handleCoreUpdate(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Version string `json:"version"`
@@ -374,10 +355,6 @@ func (s *Server) handleCoreUpdate(w http.ResponseWriter, r *http.Request) {
 	}
 	if req.Version == "" {
 		req.Version = s.repo.coreLatest()
-	}
-	if tooOldToConnect(a) {
-		http.Error(w, a.Name+": agent "+a.CoreVersion+" cannot connect and cannot be updated — run a new install command", http.StatusConflict)
-		return
 	}
 	if min := s.minAgent(); min != "" && versionLess(req.Version, min) {
 		http.Error(w, fmt.Sprintf("agent %s is older than the lowest allowed version %s", req.Version, min), http.StatusBadRequest)
@@ -413,7 +390,6 @@ func (s *Server) handleCoreUpdate(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, res)
 }
 
-// handleActions runs a feature action on one or more agents.
 func (s *Server) handleActions(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		AgentIDs []string        `json:"agent_ids"`
@@ -476,9 +452,6 @@ func (s *Server) handleActions(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, map[string]any{"jobs": jobs, "errors": errs})
 }
 
-// handleJobs lists jobs newest first, a page at a time: ?before=<job ID>
-// (with before_t, its creation time, in case that job was cleaned up)
-// continues after the last job shown.
 func (s *Server) handleJobs(w http.ResponseWriter, r *http.Request) {
 	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
 	if limit <= 0 || limit > 500 {
@@ -501,8 +474,6 @@ func (s *Server) handleJobs(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, map[string]any{"jobs": jobs, "names": names, "users": users, "more": more, "retention_days": s.st.st.Settings.RetentionDays})
 }
 
-// jobsPage: up to limit jobs older than the job beforeID (or, if that one is
-// gone, created before beforeT), newest first. Caller holds s.st.mu.
 func (s *Server) jobsPage(agentID, actor string, activeOnly bool, beforeID string, beforeT int64, limit int) ([]*Job, bool) {
 	out := []*Job{}
 	start := len(s.st.st.Jobs) - 1
@@ -514,7 +485,7 @@ func (s *Server) jobsPage(agentID, actor string, activeOnly bool, beforeID strin
 				break
 			}
 		}
-		if start == -1 && beforeT > 0 { // cleaned up meanwhile: go by time
+		if start == -1 && beforeT > 0 {
 			for i := len(s.st.st.Jobs) - 1; i >= 0; i-- {
 				if s.st.st.Jobs[i].Created < beforeT {
 					start = i
@@ -584,7 +555,7 @@ func (s *Server) handleTokenCreate(w http.ResponseWriter, r *http.Request) {
 	if !readJSON(w, r, &req, 4096) {
 		return
 	}
-	// Install commands are short-lived: 1 hour by default, at most 3.
+
 	if req.TTLHours <= 0 {
 		req.TTLHours = 1
 	}
@@ -625,7 +596,7 @@ func (s *Server) handleTokenDelete(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleSettingsGet(w http.ResponseWriter, r *http.Request) {
 	url := s.indexURL()
-	vs := s.vulnStatus(s.vulnDays()) // takes s.st.mu itself
+	vs := s.vulnStatus(s.vulnDays())
 	s.st.mu.Lock()
 	defer s.st.mu.Unlock()
 	writeJSON(w, map[string]any{"settings": s.st.st.Settings, "pin": s.currentPin(), "suggested_url": s.derivedURL(r), "index_url": url, "vulns": vs,
@@ -636,8 +607,6 @@ func (s *Server) handleSettingsGet(w http.ResponseWriter, r *http.Request) {
 		"limits": map[string]int{"heartbeat_min": minHeartbeat, "heartbeat_max": maxHeartbeat, "retention_min": minRetention, "retention_max": maxRetention}})
 }
 
-// handleRetentionPreview tells what a retention of ?days=N would remove,
-// and when, if it were saved now.
 func (s *Server) handleRetentionPreview(w http.ResponseWriter, r *http.Request) {
 	days, _ := strconv.Atoi(r.URL.Query().Get("days"))
 	days = clamp(days, minRetention, maxRetention)
@@ -690,19 +659,13 @@ func (s *Server) handleSettingsSave(w http.ResponseWriter, r *http.Request) {
 	req.GitHubSeeded = true
 	s.st.mu.Lock()
 	old := s.st.st.Settings
-	if req.OSInfoDays == 0 {
-		req.OSInfoDays = old.OSInfoDays // a page from before this setting
-	}
-	if req.VulnDays == 0 {
-		req.VulnDays = old.VulnDays // a page from before this setting
-	}
 	if !validVulnDays(req.VulnDays) {
 		s.st.mu.Unlock()
 		bad("vulnerability check must be every 1, 7, 30 or 90 days")
 		return
 	}
 	if req.MinAgentVersion == "" {
-		req.MinAgentVersion = old.MinAgentVersion // a page from before this setting
+		req.MinAgentVersion = old.MinAgentVersion
 	} else if !contains(s.repo.coreVersions(), req.MinAgentVersion) {
 		s.st.mu.Unlock()
 		bad("lowest allowed agent version must be one of the versions stored on the master")
@@ -759,8 +722,6 @@ func (s *Server) handleAudit(w http.ResponseWriter, r *http.Request) {
 	sort.Strings(users)
 	writeJSON(w, map[string]any{"entries": rows, "names": names, "users": users, "more": more, "retention_days": retention})
 }
-
-// ---- groups and ordering ----
 
 func (s *Server) handleGroupCreate(w http.ResponseWriter, r *http.Request) {
 	var req struct {
@@ -832,7 +793,7 @@ func (s *Server) handleGroupDelete(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "group not found", http.StatusNotFound)
 		return
 	}
-	// Its systems move to the end of "Ungrouped", in their current order.
+
 	members := []*Agent{}
 	for _, a := range s.orderedAgents() {
 		if a.GroupID == id {
@@ -856,12 +817,10 @@ func (s *Server) handleGroupDelete(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, map[string]bool{"ok": true})
 }
 
-// handleLayout stores the complete arrangement in one go: the order of the
-// groups and, per group, which systems it holds in which order.
 func (s *Server) handleLayout(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Groups []struct {
-			ID     string   `json:"id"` // "" = ungrouped
+			ID     string   `json:"id"`
 			Agents []string `json:"agents"`
 		} `json:"groups"`
 	}
@@ -874,7 +833,7 @@ func (s *Server) handleLayout(w http.ResponseWriter, r *http.Request) {
 	for _, g := range s.st.st.Groups {
 		byID[g.ID] = g
 	}
-	order := []*Group{} // never nil: stored and sent as [] even without groups
+	order := []*Group{}
 	seenG := map[string]bool{}
 	seenA := map[string]bool{}
 	for _, gl := range req.Groups {
@@ -895,7 +854,7 @@ func (s *Server) handleLayout(w http.ResponseWriter, r *http.Request) {
 			seenA[id] = true
 		}
 	}
-	// Groups not mentioned keep their relative order at the end.
+
 	for _, g := range s.st.st.Groups {
 		if !seenG[g.ID] {
 			order = append(order, g)
@@ -908,7 +867,7 @@ func (s *Server) handleLayout(w http.ResponseWriter, r *http.Request) {
 			a.GroupID, a.Order = gl.ID, i
 		}
 	}
-	// Systems not mentioned (e.g. enrolled meanwhile) go after the others.
+
 	for _, a := range s.st.st.Agents {
 		if !seenA[a.ID] {
 			a.Order += 100000

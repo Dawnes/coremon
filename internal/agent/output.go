@@ -10,7 +10,6 @@ import (
 	"coremon/internal/proto"
 )
 
-// outputBuffer batches streamed command output and posts it periodically.
 type outputBuffer struct {
 	mu    sync.Mutex
 	bufs  map[string]*strings.Builder
@@ -59,7 +58,6 @@ func (o *outputBuffer) take() []proto.OutputItem {
 	return items
 }
 
-// flush sends everything buffered now.
 func (o *outputBuffer) flush(ctx context.Context) {
 	items := o.take()
 	if len(items) == 0 {

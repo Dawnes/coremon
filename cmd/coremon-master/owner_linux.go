@@ -11,8 +11,6 @@ import (
 
 func isRoot() bool { return os.Geteuid() == 0 }
 
-// runAsOwner makes cmd run as the owner of dir, with no extra groups. dir
-// itself must be a real directory (not a link).
 func runAsOwner(cmd *exec.Cmd, dir string) error {
 	st, err := os.Lstat(dir)
 	if err != nil {

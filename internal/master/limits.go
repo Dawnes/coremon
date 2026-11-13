@@ -14,22 +14,18 @@ func isIPv4(s string) bool {
 	return ip != nil && ip.To4() != nil && !strings.Contains(s, ":")
 }
 
-// Limits on what an agent may report. An enrolled system (even one still
-// waiting for approval) must not be able to bloat the master's state.
 const (
-	maxPollBody    = 256 << 10 // heartbeat request
+	maxPollBody    = 256 << 10
 	maxEnrollBody  = 64 << 10
-	maxFactLen     = 256 // any text fact
+	maxFactLen     = 256
 	maxIPs         = 32
 	maxDNS         = 8
 	maxFailedUnits = 10
 	maxFeatures    = 16
 	maxActions     = 32
-	maxNameLen     = 64 // feature and action names, titles
+	maxNameLen     = 64
 )
 
-// notFuture: an agent cannot report times after now (that would make a
-// system look current forever).
 func notFuture(t int64) int64 {
 	if now := time.Now().Unix(); t > now {
 		return now
@@ -48,7 +44,6 @@ func clip(s string, n int) string {
 	return s
 }
 
-// sanitizeFacts cuts reported facts to sane sizes.
 func sanitizeFacts(f proto.Facts) proto.Facts {
 	for _, p := range []*string{&f.Hostname, &f.OSName, &f.OSID, &f.OSVersion, &f.Kernel, &f.OS, &f.Arch, &f.Virt} {
 		*p = cleanText(*p, maxFactLen)
@@ -60,7 +55,7 @@ func sanitizeFacts(f proto.Facts) proto.Facts {
 		}
 	}
 	f.IPs = ips
-	// Network facts: IPv4 addresses only, a short interface name.
+
 	if !isIPv4(f.Gateway) {
 		f.Gateway, f.GatewayIf = "", ""
 	}
@@ -120,7 +115,6 @@ func sanitizeFacts(f proto.Facts) proto.Facts {
 	return f
 }
 
-// sanitizeFeatures cuts the reported feature list to sane sizes.
 func sanitizeFeatures(in []proto.FeatureInfo) []proto.FeatureInfo {
 	if len(in) > maxFeatures {
 		in = in[:maxFeatures]

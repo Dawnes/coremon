@@ -1,5 +1,4 @@
-// Package agent implements the coremon agent: enrollment, the poll loop,
-// command dispatch, the built-in features and self-update.
+// Package agent: enrollment, the poll loop, running commands and self-update.
 package agent
 
 import (
@@ -23,19 +22,16 @@ import (
 	"coremon/internal/seal"
 )
 
-// features are the agent's built-in functions.
 func features() []feature.Feature {
 	return []feature.Feature{updates.New(), system.New(), apps.New()}
 }
 
-// Options configure the agent.
 type Options struct {
 	ConfigPath string
 	StateDir   string
 	Version    string
 }
 
-// Agent is a running agent.
 type Agent struct {
 	opt       Options
 	cfg       Config
@@ -44,17 +40,15 @@ type Agent struct {
 	out       *outputBuffer
 	feats     map[string]feature.Feature
 	infos     []proto.FeatureInfo
-	locks     map[string]*sync.Mutex // one action per feature at a time
+	locks     map[string]*sync.Mutex
 	mu        sync.Mutex
 	running   map[string]bool
-	heartbeat int // seconds, as told by the master
+	heartbeat int
 	exitReq   chan int
-	agentKey  ed25519.PrivateKey // the agent's own key (sealed method)
-	mode      Mode               // stored on disk; guarded by mu
+	agentKey  ed25519.PrivateKey
+	mode      Mode
 }
 
-// Mode is the agent's own record of report-only mode. It survives restarts
-// and is only changed by an explicit agent.mode command from the master.
 type Mode struct {
 	ReportOnly bool  `json:"report_only"`
 	Since      int64 `json:"since"`
@@ -68,7 +62,6 @@ func (a *Agent) reportOnly() bool {
 	return a.mode.ReportOnly
 }
 
-// setMode changes and stores the mode.
 func (a *Agent) setMode(reportOnly bool) error {
 	a.mu.Lock()
 	defer a.mu.Unlock()
@@ -88,8 +81,6 @@ func (a *Agent) setMode(reportOnly bool) error {
 	return nil
 }
 
-// Run starts the agent and blocks until ctx is cancelled or the agent must
-// exit (self-update or uninstall). It returns the desired exit code.
 func Run(ctx context.Context, opt Options) (int, error) {
 	a := &Agent{opt: opt, running: map[string]bool{}, exitReq: make(chan int, 1),
 		feats: map[string]feature.Feature{}, locks: map[string]*sync.Mutex{}, heartbeat: 60}
@@ -108,11 +99,7 @@ func Run(ctx context.Context, opt Options) (int, error) {
 	if err := os.MkdirAll(opt.StateDir, 0o700); err != nil {
 		return 1, err
 	}
-	// Agents before 0.2 installed separate modules here; everything is
-	// built in now.
-	os.RemoveAll(filepath.Join(opt.StateDir, "modules"))
 	if err := loadJSON(a.modePath(), &a.mode); err != nil && !os.IsNotExist(err) {
-		// An unreadable mode file must not silently allow changes.
 		log.Printf("mode file unreadable (%v): staying in report-only mode until the master decides", err)
 		a.mode = Mode{ReportOnly: true}
 	}
@@ -124,7 +111,6 @@ func Run(ctx context.Context, opt Options) (int, error) {
 		return 1, fmt.Errorf("agent key: %w", err)
 	}
 	a.agentKey = key
-	a.cleanConfig()
 	a.cl = newSealedClient(a.cfg.MasterURL, a.cfg.MasterKeys, key)
 
 	if err := a.ensureEnrolled(ctx); err != nil {
@@ -168,7 +154,7 @@ func (a *Agent) ensureEnrolled(ctx context.Context) error {
 			if err := saveJSON(a.identityPath(), a.id, 0o600); err != nil {
 				return fmt.Errorf("save identity: %w", err)
 			}
-			// The token is single-use; drop it from the config.
+
 			a.dropToken()
 			log.Printf("enrolled as %s; waiting for approval in the master UI", a.id.AgentID)
 			return nil
@@ -199,7 +185,7 @@ func (a *Agent) pollLoop(ctx context.Context) {
 	backoff := 2 * time.Second
 	for ctx.Err() == nil {
 		var resp proto.PollResponse
-		// The master holds the request for up to one heartbeat.
+
 		timeout := time.Duration(a.heartbeat+30) * time.Second
 		err := a.cl.postJSON(ctx, "/api/agent/poll", proto.PollRequest{
 			Protocol:    proto.ProtocolVersion,
@@ -218,9 +204,6 @@ func (a *Agent) pollLoop(ctx context.Context) {
 			var he *httpError
 			if errors.As(err, &he) && (he.Status == 401 || he.Status == 403) {
 				if a.tokenPending() {
-					// The master no longer knows this system (e.g. a new
-					// master) and a fresh install command left a token:
-					// register again.
 					log.Printf("master does not know this agent (%d); enrolling again with the new token", he.Status)
 					if err := a.reenroll(ctx); err == nil {
 						backoff = 2 * time.Second
@@ -247,23 +230,9 @@ func (a *Agent) pollLoop(ctx context.Context) {
 			a.heartbeat = resp.Heartbeat
 		}
 		if a.tokenPending() {
-			// The master still knows this system: the token from a repeated
-			// install command is not needed.
 			a.dropToken()
 		}
-		if a.id.Secret != "" {
-			// The first sealed exchange worked: the hand-over is complete and
-			// the old shared secret is not needed anymore.
-			a.id.Secret = ""
-			if err := saveJSON(a.identityPath(), a.id, 0o600); err != nil {
-				log.Printf("warning: could not remove the old secret: %v", err)
-			} else {
-				log.Printf("now using the master's payload key; old shared secret removed")
-			}
-		}
-		// Mode changes are applied first and in order, so an action sent
-		// right after "allow changes" is not refused (and one sent after
-		// "report only" is).
+
 		for _, c := range resp.Commands {
 			if immediate(c.Type) && a.claim(c.ID) {
 				a.execute(ctx, c)
@@ -283,14 +252,10 @@ func (a *Agent) pollLoop(ctx context.Context) {
 	}
 }
 
-// immediate commands are small and handled in order before the others,
-// outside the running-command limit: mode and key changes (so later
-// commands in the same reply see them) and ping.
 func immediate(t string) bool {
 	return t == proto.CmdSetMode || t == proto.CmdSetPins || t == proto.CmdPing
 }
 
-// claim marks a command as running; false if it already is.
 func (a *Agent) claim(id string) bool {
 	a.mu.Lock()
 	defer a.mu.Unlock()
@@ -301,20 +266,16 @@ func (a *Agent) claim(id string) bool {
 	return true
 }
 
-// maxRunning caps the commands in progress at once, so a faulty master
-// cannot exhaust the system by sending thousands of commands.
 const maxRunning = 16
 
 type claimResult int
 
 const (
-	claimDuplicate claimResult = iota // already running: ignore
+	claimDuplicate claimResult = iota
 	claimed
-	claimBusy // too many in progress: refuse
+	claimBusy
 )
 
-// claimLimited marks a command as running unless it already is or the
-// limit is reached.
 func (a *Agent) claimLimited(id string) claimResult {
 	a.mu.Lock()
 	defer a.mu.Unlock()
@@ -330,7 +291,6 @@ func (a *Agent) claimLimited(id string) claimResult {
 
 var errBusy = fmt.Errorf("agent busy: %d commands already in progress; try again later", maxRunning)
 
-// reject reports a command as failed without running it.
 func (a *Agent) reject(ctx context.Context, c proto.Command, err error) {
 	res := proto.Result{CommandID: c.ID, OK: false, Error: err.Error()}
 	for attempt := 0; attempt < 3; attempt++ {
@@ -341,10 +301,8 @@ func (a *Agent) reject(ctx context.Context, c proto.Command, err error) {
 	}
 }
 
-// errReportOnly is returned for every action while in report-only mode.
 var errReportOnly = errors.New("this system is in report-only mode: it refuses checks, installs and reboots until the master allows changes")
 
-// callFeature runs one action of a built-in feature.
 func (a *Agent) callFeature(ctx context.Context, c proto.Command, timeout time.Duration) (data json.RawMessage, err error) {
 	f := a.feats[c.Feature]
 	if f == nil {
@@ -383,16 +341,13 @@ func (a *Agent) execute(ctx context.Context, c proto.Command) {
 
 	switch c.Type {
 	case proto.CmdAction:
-		// Report only refuses every action, except the application scan:
-		// it only reads.
 		if a.reportOnly() && c.Feature != "apps" {
 			err = errReportOnly
 			break
 		}
 		data, err = a.callFeature(ctx, c, timeout)
-		healthStale() // an install or upgrade changes the last upgrade
+		healthStale()
 	case proto.CmdPing:
-		// Answer at once; nothing is done on the system.
 		keys, used := a.cl.getPins()
 		data, _ = json.Marshal(proto.PingReply{TimeMs: time.Now().UnixMilli(), Version: a.opt.Version, KeyUsed: used, Keys: keys})
 	case proto.CmdSetPins:
@@ -455,7 +410,6 @@ func (a *Agent) execute(ctx context.Context, c proto.Command) {
 	after()
 }
 
-// exitRestart makes systemd (Restart=on-failure) start the new binary.
 const exitRestart = 75
 
 func (a *Agent) requestExit(code int) {

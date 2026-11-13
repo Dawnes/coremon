@@ -1,8 +1,6 @@
 package master
 
-// A new self-signed HTTPS certificate: on request (Settings > Identity) and
-// automatically 30 days before the current one expires. Agents do not rely
-// on it; browsers ask once to accept the new one.
+// Renews the self-signed HTTPS certificate, on request and before it expires.
 
 import (
 	"crypto/rand"
@@ -16,9 +14,9 @@ import (
 )
 
 const (
-	certValidity  = 1                   // years
-	certRenewLead = 10 * 24 * time.Hour // renew this long before expiry
-	certRetry     = time.Hour           // after a failed automatic renewal
+	certValidity  = 1
+	certRenewLead = 10 * 24 * time.Hour
+	certRetry     = time.Hour
 )
 
 func parseLeaf(c *tls.Certificate) (*x509.Certificate, error) {
@@ -28,7 +26,6 @@ func parseLeaf(c *tls.Certificate) (*x509.Certificate, error) {
 	return x509.ParseCertificate(c.Certificate[0])
 }
 
-// certDates returns when a certificate was made and when it expires.
 func certDates(c *tls.Certificate) (from, until time.Time) {
 	leaf, err := parseLeaf(c)
 	if err != nil {
@@ -37,8 +34,6 @@ func certDates(c *tls.Certificate) (from, until time.Time) {
 	return leaf.NotBefore, leaf.NotAfter
 }
 
-// certNames: the names the certificate is made for besides the host name and
-// IP addresses: -san flags and a Master URL set by hand.
 func (s *Server) certNames() []string {
 	names := append([]string{}, s.cfg.SANs...)
 	s.st.mu.Lock()
@@ -50,9 +45,6 @@ func (s *Server) certNames() []string {
 	return names
 }
 
-// rotateCert replaces the HTTPS certificate with a new one and uses it at
-// once (new connections). The files are swapped so that an interrupted
-// rotation is completed at the next start (see recoverCert).
 func (s *Server) rotateCert(actor, ip string) error {
 	s.certMu.Lock()
 	defer s.certMu.Unlock()
@@ -76,8 +68,7 @@ func (s *Server) rotateCert(actor, ip string) error {
 	old := s.keys.tlsPin
 	s.keys.cert, s.keys.tlsPin = &cert, pin
 	s.keyMu.Unlock()
-	// Browsers would otherwise keep the old certificate: they resume their
-	// TLS session (no certificate is sent then) and reuse open connections.
+
 	s.resetTLSSessions()
 	_, until := certDates(&cert)
 	s.audit.write(actor, ip, "identity.cert", "", fmt.Sprintf("new HTTPS certificate %s → %s, valid until %s",
@@ -91,37 +82,28 @@ func newTicketKey() (k [32]byte) {
 	return k
 }
 
-// applyTicketKeys builds the TLS settings handed out per connection, with
-// these session ticket keys (tickets made with other keys are rejected, so
-// the browser does a full handshake). Caller holds s.tlsMu.
 func (s *Server) applyTicketKeys(keys [][32]byte) {
 	cfg := &tls.Config{MinVersion: tls.VersionTLS12, GetCertificate: s.currentCert, NextProtos: []string{"h2", "http/1.1"}}
 	cfg.SetSessionTicketKeys(keys)
 	s.ticketKeys, s.ticketKeyAt, s.tlsCfg = keys, time.Now(), cfg
 }
 
-// tlsNow returns the TLS settings for a new connection.
 func (s *Server) tlsNow() *tls.Config {
 	s.tlsMu.Lock()
 	defer s.tlsMu.Unlock()
 	return s.tlsCfg
 }
 
-// resetTLSSessions makes every browser do a full handshake (and so get the
-// current certificate): all session tickets become invalid, and idle
-// keep-alive connections are closed.
 func (s *Server) resetTLSSessions() {
 	s.tlsMu.Lock()
 	defer s.tlsMu.Unlock()
 	s.applyTicketKeys([][32]byte{newTicketKey()})
 	for _, srv := range s.https {
-		srv.SetKeepAlivesEnabled(false) // closes idle connections
+		srv.SetKeepAlivesEnabled(false)
 		srv.SetKeepAlivesEnabled(true)
 	}
 }
 
-// renewTicketKeys makes a new session ticket key once a day; the previous one
-// stays valid one more day, so sessions are resumed but not forever.
 func (s *Server) renewTicketKeys(now time.Time) {
 	s.tlsMu.Lock()
 	defer s.tlsMu.Unlock()
@@ -131,8 +113,6 @@ func (s *Server) renewTicketKeys(now time.Time) {
 	s.applyTicketKeys([][32]byte{newTicketKey(), s.ticketKeys[0]})
 }
 
-// recoverCert completes a rotation that was interrupted between the two
-// file renames, so the key and certificate always match.
 func recoverCert(dir string) {
 	crt, key := certPaths(dir, "current")
 	if _, _, err := loadCert(crt, key); err == nil {
@@ -140,7 +120,7 @@ func recoverCert(dir string) {
 		os.Remove(key + ".new")
 		return
 	}
-	if _, _, err := loadCert(crt+".new", key); err == nil { // key already renamed
+	if _, _, err := loadCert(crt+".new", key); err == nil {
 		os.Rename(crt+".new", crt)
 		return
 	}
@@ -150,8 +130,6 @@ func recoverCert(dir string) {
 	}
 }
 
-// renewCertIfDue renews the certificate automatically when it expires within
-// certRenewLead; after a failure it waits certRetry.
 func (s *Server) renewCertIfDue(now time.Time) {
 	s.keyMu.Lock()
 	cert := s.keys.cert

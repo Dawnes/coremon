@@ -1,5 +1,7 @@
 package master
 
+// Local release store: release/core/<version>/<os>-<arch>/coremon-agent (+ .sig).
+
 import (
 	"crypto/ed25519"
 	"encoding/base64"
@@ -32,8 +34,8 @@ type repo struct {
 	mu      sync.RWMutex
 	dir     string
 	pub     ed25519.PublicKey
-	core    map[string]map[string]*artifactEntry // version -> platform -> entry
-	masters map[string]map[string]*artifactEntry // version -> platform -> entry
+	core    map[string]map[string]*artifactEntry
+	masters map[string]map[string]*artifactEntry
 	errors  []string
 }
 
@@ -86,7 +88,6 @@ func (r *repo) scan() {
 		if kind == "master" {
 			m = masters
 		} else {
-			// Public: agents check the release signature and checksum.
 			e.URL = fmt.Sprintf("/dl/core/%s/%s-%s", version, e.OS, e.Arch)
 		}
 		if m[version] == nil {
@@ -107,7 +108,6 @@ func (r *repo) scan() {
 	r.mu.Unlock()
 }
 
-// latest returns the highest version among keys.
 func latest[T any](m map[string]T) string {
 	var vs []string
 	for v := range m {
@@ -159,7 +159,7 @@ type repoVersion struct {
 
 type repoSummary struct {
 	CoreLatest   string        `json:"core_latest"`
-	Core         []repoVersion `json:"core"` // newest first
+	Core         []repoVersion `json:"core"`
 	MasterLatest string        `json:"master_latest"`
 	Errors       []string      `json:"errors"`
 	SigningKey   string        `json:"signing_key"`

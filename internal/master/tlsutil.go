@@ -18,7 +18,6 @@ import (
 	"time"
 )
 
-// Key files: the current key, and during a rotation the next one.
 func certPaths(dir, slot string) (crt, key string) {
 	if slot == "next" {
 		return filepath.Join(dir, "tls-next.crt"), filepath.Join(dir, "tls-next.key")
@@ -26,8 +25,6 @@ func certPaths(dir, slot string) (crt, key string) {
 	return filepath.Join(dir, "tls.crt"), filepath.Join(dir, "tls.key")
 }
 
-// loadOrCreateCert returns the master's TLS certificate, creating a
-// self-signed one on first start. Agents pin its public key.
 func loadOrCreateCert(dir string, extraSANs []string) (tls.Certificate, string, error) {
 	certPath, keyPath := certPaths(dir, "current")
 	recoverCert(dir)
@@ -39,8 +36,6 @@ func loadOrCreateCert(dir string, extraSANs []string) (tls.Certificate, string, 
 	return loadCert(certPath, keyPath)
 }
 
-// loadCert loads a key pair and returns it with its pin (base64 sha256 of
-// the public key).
 func loadCert(certPath, keyPath string) (tls.Certificate, string, error) {
 	cert, err := tls.LoadX509KeyPair(certPath, keyPath)
 	if err != nil {
@@ -54,8 +49,6 @@ func loadCert(certPath, keyPath string) (tls.Certificate, string, error) {
 	return cert, base64.StdEncoding.EncodeToString(sum[:]), nil
 }
 
-// certCN is the certificate's name: "coremon <host>", or just "coremon" when
-// the host is called that (any case) or unknown.
 func certCN(host string) string {
 	if host == "" || strings.EqualFold(host, "coremon") {
 		return "coremon"

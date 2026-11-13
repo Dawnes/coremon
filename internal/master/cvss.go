@@ -1,15 +1,12 @@
 package master
 
-// CVSS 3.x base score from a vector string ("CVSS:3.1/AV:N/AC:L/...").
-// Only the base metrics count; temporal and environmental ones are ignored.
+// CVSS 3.x base score from a vector string.
 
 import (
 	"math"
 	"strings"
 )
 
-// cvss3Score returns the base score (0.0-10.0) and whether the vector
-// could be read.
 func cvss3Score(vector string) (float64, bool) {
 	parts := strings.Split(vector, "/")
 	if len(parts) < 9 || !strings.HasPrefix(parts[0], "CVSS:3.") {
@@ -61,8 +58,6 @@ func cvss3Score(vector string) (float64, bool) {
 	return roundUp(math.Min(1.08*(impact+expl), 10)), true
 }
 
-// roundUp rounds up to one decimal as CVSS 3.1 prescribes (free of
-// floating-point surprises).
 func roundUp(x float64) float64 {
 	n := int64(math.Round(x * 100000))
 	if n%10000 == 0 {
@@ -71,7 +66,6 @@ func roundUp(x float64) float64 {
 	return float64(n/10000+1) / 10
 }
 
-// Severity levels: 0 unknown, 1 low, 2 medium, 3 high, 4 critical.
 func scoreLevel(score float64) int {
 	switch {
 	case score >= 9:
@@ -85,7 +79,6 @@ func scoreLevel(score float64) int {
 	}
 }
 
-// wordLevel maps the words distributions and advisories use.
 func wordLevel(w string) int {
 	switch strings.ToLower(strings.TrimSpace(w)) {
 	case "critical":
@@ -100,7 +93,6 @@ func wordLevel(w string) int {
 	return 0
 }
 
-// minorWord: what the distribution itself considers not worth fixing.
 func minorWord(w string) bool {
 	switch strings.ToLower(strings.TrimSpace(w)) {
 	case "unimportant", "negligible", "end-of-life":

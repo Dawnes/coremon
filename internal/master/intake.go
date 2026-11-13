@@ -1,11 +1,6 @@
 package master
 
-// Intake limits for the agent endpoint. A request is read and decrypted
-// before the master knows who sent it, so without limits anyone could make
-// the master hold many large bodies in memory at once. Requests are
-// admitted per address and in total, small and large separately; the slot
-// is held only while the body is read and processed (not while a poll
-// waits for commands).
+// Limits on agent requests, which are read before the sender is known.
 
 import (
 	"net/http"
@@ -14,10 +9,10 @@ import (
 )
 
 const (
-	intakeLargeFrom   = 256 << 10 // bodies above this are "large"
-	intakeSmallTotal  = 64        // small requests being processed at once
+	intakeLargeFrom   = 256 << 10
+	intakeSmallTotal  = 64
 	intakeSmallPerIP  = 8
-	intakeLargeTotal  = 2 // large requests being processed at once
+	intakeLargeTotal  = 2
 	intakeLargePerIP  = 1
 	intakeSmallWait   = 5 * time.Second
 	intakeLargeWait   = 20 * time.Second
@@ -30,11 +25,11 @@ type intake struct {
 	large       int
 	smallPer    map[string]int
 	largePer    map[string]int
-	smallTotal  int // limits (0 = defaults); set in tests
+	smallTotal  int
 	largeTotal  int
 	smallPerMax int
 	largePerMax int
-	wait        time.Duration // how long to wait for a slot (0 = defaults); set in tests
+	wait        time.Duration
 }
 
 func (in *intake) limits() (st, sp, lt, lp int) {
@@ -54,7 +49,6 @@ func (in *intake) limits() (st, sp, lt, lp int) {
 	return
 }
 
-// try takes a slot if one is free.
 func (in *intake) try(ip string, large bool) bool {
 	in.mu.Lock()
 	defer in.mu.Unlock()
@@ -94,10 +88,7 @@ func (in *intake) release(ip string, large bool) {
 	}
 }
 
-// admit waits briefly for a slot. It returns a release function (safe to
-// call more than once), or nil after answering 503.
 func (in *intake) admit(w http.ResponseWriter, r *http.Request) func() {
-	// Unknown length (chunked) counts as large.
 	large := r.ContentLength < 0 || r.ContentLength > intakeLargeFrom
 	ip := clientIP(r)
 	wait := intakeSmallWait

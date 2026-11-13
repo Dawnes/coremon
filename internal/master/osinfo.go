@@ -1,9 +1,6 @@
 package master
 
-// OS support status: the end-of-support dates of Debian and Ubuntu releases,
-// looked up from Debian's distro-info-data (the files the distributions' own
-// tools use) and stored on the master. Not signed, so they are checked
-// strictly and only ever affect the EOL badges.
+// End-of-support dates of Debian and Ubuntu releases (distro-info-data).
 
 import (
 	"encoding/csv"
@@ -23,19 +20,17 @@ import (
 
 const (
 	osInfoBase     = "https://salsa.debian.org/debian/distro-info-data/-/raw/main"
-	osInfoRetry    = 6 * time.Hour        // after a failed lookup
-	osInfoSoon     = 183 * 24 * time.Hour // "EOL soon": within about 6 months
+	osInfoRetry    = 6 * time.Hour
+	osInfoSoon     = 183 * 24 * time.Hour
 	maxOSInfoBytes = 1 << 20
 )
 
-// osRelease is one release from debian.csv or ubuntu.csv. Dates are
-// YYYY-MM-DD, "" if not known yet.
 type osRelease struct {
-	Version string `json:"version"` // "12", "24.04"
+	Version string `json:"version"`
 	Release string `json:"release"`
-	EOL     string `json:"eol"`     // Debian: security support; Ubuntu: standard support
-	EOLLTS  string `json:"eol_lts"` // Debian LTS
-	EOLESM  string `json:"eol_esm"` // Ubuntu ESM (Ubuntu Pro)
+	EOL     string `json:"eol"`
+	EOLLTS  string `json:"eol_lts"`
+	EOLESM  string `json:"eol_esm"`
 }
 
 type osInfoData struct {
@@ -53,7 +48,7 @@ type osInfoFile struct {
 type osInfo struct {
 	mu    sync.Mutex
 	f     osInfoFile
-	fetch sync.Mutex // one lookup at a time
+	fetch sync.Mutex
 	kick  chan struct{}
 }
 
@@ -88,8 +83,6 @@ func (s *Server) osInfoDays() int {
 	return s.st.st.Settings.OSInfoDays
 }
 
-// osInfoDue: no data yet or older than the interval; after a failure, retry
-// after osInfoRetry.
 func osInfoDue(f osInfoFile, days int, now time.Time) bool {
 	if f.Error != "" && now.Sub(time.Unix(f.LastTry, 0)) < osInfoRetry {
 		return false
@@ -115,12 +108,10 @@ func (s *Server) osInfoLoop(stop <-chan struct{}) {
 			return
 		case <-t.C:
 		case <-s.osi.kick:
-			// A changed interval: re-evaluate now.
 		}
 	}
 }
 
-// refreshOSInfo looks the dates up now. On failure the previous data stays.
 func (s *Server) refreshOSInfo() error {
 	s.osi.fetch.Lock()
 	defer s.osi.fetch.Unlock()
@@ -180,12 +171,10 @@ func (s *Server) fetchOSInfo() (*osInfoData, error) {
 
 var (
 	dateRe      = regexp.MustCompile(`^\d{4}-\d{2}-\d{2}$`)
-	debianVerRe = regexp.MustCompile(`^\d{1,3}(\.\d{1,2})?$`) // old releases: "1.1" ... "3.1"
-	ubuntuVerRe = regexp.MustCompile(`^\d{1,2}\.\d{2}$`)      // "4.10" ... "26.04"
+	debianVerRe = regexp.MustCompile(`^\d{1,3}(\.\d{1,2})?$`)
+	ubuntuVerRe = regexp.MustCompile(`^\d{1,2}\.\d{2}$`)
 )
 
-// parseDistroInfo reads debian.csv or ubuntu.csv strictly: known columns,
-// valid dates, sane versions; rows without a version (sid) are skipped.
 func parseDistroInfo(b []byte, distro string) ([]osRelease, error) {
 	r := csv.NewReader(strings.NewReader(string(b)))
 	r.FieldsPerRecord = -1
@@ -244,7 +233,7 @@ func parseDistroInfo(b []byte, distro string) ([]osRelease, error) {
 		} else {
 			var server string
 			if server, err = field(row, "eol-server"); err == nil && server != "" {
-				rel.EOL = server // server support is what matters here
+				rel.EOL = server
 			}
 			if err == nil {
 				rel.EOLESM, err = field(row, "eol-esm")
@@ -264,17 +253,15 @@ func parseDistroInfo(b []byte, distro string) ([]osRelease, error) {
 	return out, nil
 }
 
-// osSupport is a system's support status for the UI.
 type osSupport struct {
-	Status   string `json:"status"`              // supported | soon | expired
-	Phase    string `json:"phase"`               // security | lts | standard | ended | open (no end date yet)
-	Until    string `json:"until,omitempty"`     // end of the current phase (YYYY-MM-DD)
-	End      string `json:"end,omitempty"`       // end of free support (Debian LTS, Ubuntu standard)
-	LTSUntil string `json:"lts_until,omitempty"` // Debian: LTS end, while still in security support
-	ESMUntil string `json:"esm_until,omitempty"` // Ubuntu: ESM end (Ubuntu Pro)
+	Status   string `json:"status"`
+	Phase    string `json:"phase"`
+	Until    string `json:"until,omitempty"`
+	End      string `json:"end,omitempty"`
+	LTSUntil string `json:"lts_until,omitempty"`
+	ESMUntil string `json:"esm_until,omitempty"`
 }
 
-// supportFor works out a system's support status; nil if unknown.
 func (s *Server) supportFor(osID, version string, now time.Time) *osSupport {
 	s.osi.mu.Lock()
 	d := s.osi.f.Data
@@ -304,7 +291,7 @@ func supportStatus(d *osInfoData, osID, version string, now time.Time) *osSuppor
 	if rel == nil || version == "" {
 		return nil
 	}
-	day := func(s string) time.Time { t, _ := time.Parse("2006-01-02", s); return t.Add(24 * time.Hour) } // end of that day
+	day := func(s string) time.Time { t, _ := time.Parse("2006-01-02", s); return t.Add(24 * time.Hour) }
 	o := &osSupport{}
 	if osID == "debian" {
 		o.End = rel.EOLLTS
@@ -343,7 +330,6 @@ func supportStatus(d *osInfoData, osID, version string, now time.Time) *osSuppor
 	return o
 }
 
-// osInfoStatus is shown under Settings > General. days: the interval.
 func (s *Server) osInfoStatus(days int) map[string]any {
 	s.osi.mu.Lock()
 	f := s.osi.f
@@ -361,7 +347,6 @@ func (s *Server) osInfoStatus(days int) map[string]any {
 	return out
 }
 
-// handleOSInfoCheck looks the dates up now (administrators).
 func (s *Server) handleOSInfoCheck(w http.ResponseWriter, r *http.Request) {
 	err := s.refreshOSInfo()
 	s.audit.write(actor(r), clientIP(r), "osinfo.check", "", map[bool]string{true: "OS support dates updated", false: fmt.Sprint("failed: ", err)}[err == nil])

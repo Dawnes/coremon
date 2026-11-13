@@ -1,4 +1,4 @@
-// Command coremon-master serves the Coremon web UI and agent hub.
+// Command coremon-master serves the Coremon website and the agent hub.
 package main
 
 import (
@@ -17,12 +17,10 @@ import (
 
 var (
 	version   = "dev"
-	buildDate = "" // YYYY-MM-DD, set by build.sh
+	buildDate = ""
 )
 
 func main() {
-	// coremon-reset is a second name for this program (a link in
-	// /usr/local/sbin), so it always comes with the signed master release.
 	if strings.TrimSuffix(filepath.Base(os.Args[0]), ".exe") == "coremon-reset" {
 		os.Exit(resetMain(os.Args[1:]))
 	}
@@ -49,8 +47,6 @@ func main() {
 	case "version":
 		fmt.Println(version)
 	case "reset-apply":
-		// The file part of coremon-reset, run by it as the owner of the data
-		// directory (never as root). Prints only the new password.
 		pw, err := master.ResetPassword(*data, *user)
 		if err != nil {
 			fmt.Fprintln(os.Stderr, err)
@@ -58,7 +54,6 @@ func main() {
 		}
 		fmt.Println(pw)
 	case "show-state":
-		// Read-only: prints the (obfuscated) state file readably.
 		if !isRoot() {
 			log.Fatal("show-state: run as root")
 		}

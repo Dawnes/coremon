@@ -1,20 +1,6 @@
 package master
 
-// Known vulnerabilities (CVEs) of the tracked applications.
-//
-// The agents report each application's source package, its version and the
-// package source it came from. For applications from the distribution
-// itself, the master asks OSV.dev which advisories affect that exact
-// version (OSV uses Debian's and Ubuntu's own data, so backported fixes
-// count). Only the release ("Debian:12"), source package names and
-// versions are sent; no host names or addresses.
-//
-// Severity, once per CVE: a CVSS 3 vector in the OSV record; otherwise the
-// distribution's own word (Debian urgency, Ubuntu priority); NVD fills in a
-// CVSS score where OSV has none. CISA's list of actively exploited CVEs
-// (KEV) and FIRST's EPSS (chance of exploitation) are added on top.
-//
-// Everything downloaded is public data, kept in <data>/vulns.json.
+// Known vulnerabilities (CVEs) of the tracked applications: OSV.dev, NVD, CISA KEV and EPSS.
 
 import (
 	"context"
@@ -47,10 +33,10 @@ const (
 	osvLink   = "https://osv.dev/vulnerability/"
 	userAgent = "coremon"
 
-	vulnRetry      = 6 * time.Hour   // after a failed check
-	vulnQuickEvery = 2 * time.Minute // new versions (an upgrade, a new system) are looked up this soon
+	vulnRetry      = 6 * time.Hour
+	vulnQuickEvery = 2 * time.Minute
 	vulnKEVEvery   = 24 * time.Hour
-	nvdNoneRetry   = 7 * 24 * time.Hour // NVD had no score yet: ask again after this
+	nvdNoneRetry   = 7 * 24 * time.Hour
 	nvdGapNoKey    = 6500 * time.Millisecond
 	nvdGapKey      = 800 * time.Millisecond
 	maxVulnBody    = 32 << 20
@@ -59,7 +45,6 @@ const (
 	defaultVulnDay = 1
 )
 
-// vulnChoices are the allowed check intervals in days.
 var vulnChoices = []int{1, 7, 30, 90}
 
 func validVulnDays(d int) bool {
@@ -77,31 +62,29 @@ var (
 	nvdKeyRe = regexp.MustCompile(`^[A-Za-z0-9-]{20,64}$`)
 )
 
-// ---- stored data ----
-
 type vulnAff struct {
 	Eco    string      `json:"e"`
 	Pkg    string      `json:"p"`
-	Events [][2]string `json:"ev"`          // in order: ["introduced","0"], ["fixed","1.2-3"], ...
-	Word   string      `json:"w,omitempty"` // the distribution's word for this package (Debian urgency)
+	Events [][2]string `json:"ev"`
+	Word   string      `json:"w,omitempty"`
 }
 
 type vulnRec struct {
 	Modified string    `json:"m"`
 	CVE      string    `json:"c"`
-	Score    float64   `json:"s,omitempty"`  // from a CVSS 3 vector in the record
-	Scored   bool      `json:"sc,omitempty"` //
-	Word     string    `json:"w,omitempty"`  // record-wide word (Ubuntu priority)
+	Score    float64   `json:"s,omitempty"`
+	Scored   bool      `json:"sc,omitempty"`
+	Word     string    `json:"w,omitempty"`
 	Aff      []vulnAff `json:"a"`
 }
 
 type cveMeta struct {
 	Score  float64 `json:"score,omitempty"`
 	Scored bool    `json:"scored,omitempty"`
-	Src    string  `json:"src,omitempty"` // osv | nvd
+	Src    string  `json:"src,omitempty"`
 	NVDAt  int64   `json:"nvd_at,omitempty"`
 	EPSS   float64 `json:"epss,omitempty"`
-	Pct    float64 `json:"pct,omitempty"` // EPSS percentile
+	Pct    float64 `json:"pct,omitempty"`
 }
 
 type vulnQuery struct {
@@ -111,13 +94,13 @@ type vulnQuery struct {
 
 type vulnData struct {
 	Records map[string]*vulnRec   `json:"records"`
-	Queries map[string]*vulnQuery `json:"queries"` // "eco|package|version"
+	Queries map[string]*vulnQuery `json:"queries"`
 	CVEs    map[string]*cveMeta   `json:"cves"`
-	Ecos    map[string]bool       `json:"ecos"` // release -> OSV has data for it
+	Ecos    map[string]bool       `json:"ecos"`
 	KEV     map[string]bool       `json:"kev"`
 	KEVAt   int64                 `json:"kev_at"`
 	EPSSAt  int64                 `json:"epss_at"`
-	LastRun int64                 `json:"last_run"` // last complete check
+	LastRun int64                 `json:"last_run"`
 	LastTry int64                 `json:"last_try"`
 	Error   string                `json:"error"`
 	NVDErr  string                `json:"nvd_error"`
@@ -126,15 +109,15 @@ type vulnData struct {
 type vulnStore struct {
 	mu   sync.Mutex
 	d    vulnData
-	run  sync.Mutex // one check at a time
+	run  sync.Mutex
 	kick chan struct{}
 	nvd  chan struct{}
-	// What is happening now, for the list on the Releases page (guarded by mu).
-	running   map[string]bool // OSV lookups of the check that runs now
-	nextTick  time.Time       // next look for new versions
-	nvdNow    string          // CVE being looked up at NVD
-	nvdNextAt time.Time       // next NVD lookup allowed
-	nvdErr    bool            // the last NVD lookup failed
+
+	running   map[string]bool
+	nextTick  time.Time
+	nvdNow    string
+	nvdNextAt time.Time
+	nvdErr    bool
 }
 
 func newVulnData() vulnData {
@@ -171,7 +154,6 @@ func (s *Server) loadVulns() {
 	s.vul.mu.Unlock()
 }
 
-// saveVulns writes the file. Caller holds s.vul.mu.
 func (s *Server) saveVulnsLocked() {
 	b, err := json.Marshal(s.vul.d)
 	if err != nil {
@@ -210,10 +192,6 @@ func (s *Server) base(override, def string) string {
 	return def
 }
 
-// ---- what to look up ----
-
-// osvEcosystem is OSV's name for a system's release, "" if not Debian or
-// Ubuntu: "Debian:12", "Ubuntu:24.04:LTS", "Ubuntu:25.10".
 func osvEcosystem(f proto.Facts) string {
 	switch f.OSID {
 	case "debian":
@@ -239,7 +217,6 @@ func osvEcosystem(f proto.Facts) string {
 	return ""
 }
 
-// fromDistro: the package comes from the system's own distribution.
 func fromDistro(osID, origin string) bool {
 	switch osID {
 	case "debian":
@@ -252,7 +229,6 @@ func fromDistro(osID, origin string) bool {
 
 func vulnKey(eco, pkg, ver string) string { return eco + "|" + pkg + "|" + ver }
 
-// appsOf reads an agent's application scan. Caller holds s.st.mu.
 func appsOf(a *Agent) *apps.State {
 	raw, ok := a.State["apps"]
 	if !ok {
@@ -265,7 +241,6 @@ func appsOf(a *Agent) *apps.State {
 	return &st
 }
 
-// wantedKeys: what the current systems need looked up. Caller holds s.st.mu.
 func (s *Server) wantedKeysLocked() map[string]bool {
 	out := map[string]bool{}
 	for _, a := range s.st.st.Agents {
@@ -286,15 +261,13 @@ func (s *Server) wantedKeysLocked() map[string]bool {
 	return out
 }
 
-// ---- the check ----
-
 func (s *Server) vulnLoop(stop <-chan struct{}) {
 	t := time.NewTicker(vulnQuickEvery)
 	defer t.Stop()
 	kicked := false
 	for {
 		s.vulnTick(false)
-		if kicked { // a new scan arrived or a system was removed (or a setting changed)
+		if kicked {
 			s.pruneVulns()
 		}
 		s.vul.mu.Lock()
@@ -311,9 +284,6 @@ func (s *Server) vulnLoop(stop <-chan struct{}) {
 	}
 }
 
-// vulnTick runs a full check when one is due, otherwise only looks up what
-// is new (an upgraded application, a new system) and refreshes the KEV list
-// once a day.
 func (s *Server) vulnTick(force bool) error {
 	days := s.vulnDays()
 	s.st.mu.Lock()
@@ -358,9 +328,6 @@ func (s *Server) vulnTick(force bool) error {
 	return nil
 }
 
-// runVulnCheck looks up keys at OSV and fetches new or changed records. A
-// full check also drops what no system needs any more and refreshes KEV and
-// EPSS.
 func (s *Server) runVulnCheck(keys map[string]bool, full bool) (err error) {
 	s.vul.run.Lock()
 	defer s.vul.run.Unlock()
@@ -393,8 +360,6 @@ func (s *Server) runVulnCheck(keys map[string]bool, full bool) (err error) {
 		s.kickNVD()
 	}()
 
-	// 1. Releases: does OSV have data for them? (An unknown name gives no
-	// results, which must not read as "no vulnerabilities".)
 	ecos := map[string]bool{}
 	for k := range keys {
 		ecos[strings.SplitN(k, "|", 2)[0]] = true
@@ -410,7 +375,7 @@ func (s *Server) runVulnCheck(keys map[string]bool, full bool) (err error) {
 	if len(probe) > 0 {
 		qs := make([]osvQuery, len(probe))
 		for i, e := range probe {
-			qs[i] = osvQuery{Eco: e, Pkg: "openssl", Ver: "0.1"} // every Debian and Ubuntu release ships openssl
+			qs[i] = osvQuery{Eco: e, Pkg: "openssl", Ver: "0.1"}
 		}
 		res, err := s.osvQueryBatch(ctx, qs)
 		if err != nil {
@@ -423,7 +388,6 @@ func (s *Server) runVulnCheck(keys map[string]bool, full bool) (err error) {
 		s.vul.mu.Unlock()
 	}
 
-	// 2. The lookups.
 	s.vul.mu.Lock()
 	var qs []osvQuery
 	for k := range keys {
@@ -439,9 +403,7 @@ func (s *Server) runVulnCheck(keys map[string]bool, full bool) (err error) {
 		return fmt.Errorf("OSV: %w", err)
 	}
 
-	// 3. Records: only the per-CVE ones (DEBIAN-CVE-…, UBUNTU-CVE-…);
-	// advisories (DSA, DLA, USN) repeat what those say.
-	need := map[string]string{} // id -> modified
+	need := map[string]string{}
 	now := time.Now().Unix()
 	s.vul.mu.Lock()
 	for i, q := range qs {
@@ -466,7 +428,7 @@ func (s *Server) runVulnCheck(keys map[string]bool, full bool) (err error) {
 	if !full {
 		return nil
 	}
-	// 4. Forget what no system needs any more.
+
 	s.st.mu.Lock()
 	inUse := s.ecosInUseLocked()
 	s.st.mu.Unlock()
@@ -474,8 +436,6 @@ func (s *Server) runVulnCheck(keys map[string]bool, full bool) (err error) {
 	list := s.pruneLocked(keys, inUse)
 	s.vul.mu.Unlock()
 
-	// 5. Exploited (KEV) and chance of exploitation (EPSS). Failures here do
-	// not spoil the check: the previous lists stay.
 	if err := s.refreshKEV(ctx); err != nil {
 		log.Printf("vulnerability check: CISA list: %v", err)
 	}
@@ -485,13 +445,6 @@ func (s *Server) runVulnCheck(keys map[string]bool, full bool) (err error) {
 	return nil
 }
 
-// ---- cleanup ----
-
-// The cleanup runs when a system is removed, when a new application scan
-// arrives, on Check now and with every full check. It only compares what
-// the systems run with what is stored: no network traffic.
-
-// ecosInUseLocked: the releases the current systems run. Caller holds s.st.mu.
 func (s *Server) ecosInUseLocked() map[string]bool {
 	out := map[string]bool{}
 	for _, a := range s.st.st.Agents {
@@ -502,9 +455,6 @@ func (s *Server) ecosInUseLocked() map[string]bool {
 	return out
 }
 
-// pruneLocked forgets lookups, records, CVEs (with their NVD and EPSS data,
-// so NVD only looks up what a system still needs) and releases that no
-// current system needs. Returns the CVEs kept. Caller holds s.vul.mu.
 func (s *Server) pruneLocked(keys, ecos map[string]bool) []string {
 	d := &s.vul.d
 	used := map[string]bool{}
@@ -543,20 +493,17 @@ func (s *Server) pruneLocked(keys, ecos map[string]bool) []string {
 	return list
 }
 
-// pruneVulns runs the cleanup on its own.
 func (s *Server) pruneVulns() {
 	s.st.mu.Lock()
 	keys, ecos := s.wantedKeysLocked(), s.ecosInUseLocked()
 	s.st.mu.Unlock()
-	s.vul.run.Lock() // not while a check is busy
+	s.vul.run.Lock()
 	defer s.vul.run.Unlock()
 	s.vul.mu.Lock()
 	s.pruneLocked(keys, ecos)
 	s.saveVulnsLocked()
 	s.vul.mu.Unlock()
 }
-
-// ---- OSV ----
 
 type osvQuery struct{ Eco, Pkg, Ver string }
 
@@ -611,8 +558,7 @@ func (s *Server) vulnGet(ctx context.Context, method, u string, body any, hdr ma
 	return resp.StatusCode, nil
 }
 
-// osvQueryBatch asks which records affect each package version, following
-// page tokens where a query has more results than fit in one answer.
+// Only the release, package names and versions are sent; no host names.
 func (s *Server) osvQueryBatch(ctx context.Context, qs []osvQuery) ([][]osvHit, error) {
 	out := make([][]osvHit, len(qs))
 	type q struct {
@@ -623,7 +569,7 @@ func (s *Server) osvQueryBatch(ctx context.Context, qs []osvQuery) ([][]osvHit, 
 		Version   string `json:"version"`
 		PageToken string `json:"page_token,omitempty"`
 	}
-	pending := make([]int, len(qs)) // indexes still to (re)ask
+	pending := make([]int, len(qs))
 	tokens := make([]string, len(qs))
 	for i := range qs {
 		pending[i] = i
@@ -694,7 +640,6 @@ type osvRecord struct {
 	DBSpecific map[string]any `json:"database_specific"`
 }
 
-// reduceRecord keeps what Coremon needs from an OSV record.
 func reduceRecord(r osvRecord) (*vulnRec, bool) {
 	cve := ""
 	if i := strings.Index(r.ID, "CVE-"); i >= 0 && cveRe.MatchString(r.ID[i:]) {
@@ -754,7 +699,6 @@ func reduceRecord(r osvRecord) (*vulnRec, bool) {
 	return out, true
 }
 
-// fetchRecords downloads records, a few at a time.
 func (s *Server) fetchRecords(ctx context.Context, need map[string]string) error {
 	ids := make([]string, 0, len(need))
 	for id := range need {
@@ -781,7 +725,7 @@ func (s *Server) fetchRecords(ctx context.Context, need map[string]string) error
 			}
 			if err != nil {
 				mu.Lock()
-				if code != http.StatusNotFound { // a withdrawn record is no error
+				if code != http.StatusNotFound {
 					failed++
 					if firstErr == nil {
 						firstErr = fmt.Errorf("record %s: %w", id, err)
@@ -801,7 +745,7 @@ func (s *Server) fetchRecords(ctx context.Context, need map[string]string) error
 				m = &cveMeta{}
 				s.vul.d.CVEs[rec.CVE] = m
 			}
-			// The first CVSS score stays; a later one only fills a gap.
+
 			if rec.Scored && !m.Scored {
 				m.Score, m.Scored, m.Src = rec.Score, true, "osv"
 			}
@@ -814,8 +758,6 @@ func (s *Server) fetchRecords(ctx context.Context, need map[string]string) error
 	}
 	return nil
 }
-
-// ---- KEV and EPSS ----
 
 func (s *Server) refreshKEV(ctx context.Context) error {
 	var resp struct {
@@ -875,10 +817,6 @@ func (s *Server) refreshEPSS(ctx context.Context, cves []string) error {
 	return nil
 }
 
-// ---- NVD ----
-
-// nvdLoop fills in CVSS scores for CVEs that OSV has none for, one CVE at
-// a time within NVD's limits (5 requests per 30 s without a key).
 func (s *Server) nvdLoop(stop <-chan struct{}) {
 	for {
 		id, key := s.nextNVD(time.Now())
@@ -917,7 +855,6 @@ func (s *Server) nvdLoop(stop <-chan struct{}) {
 	}
 }
 
-// nextNVD picks a CVE without a CVSS score that is due for a lookup.
 func (s *Server) nextNVD(now time.Time) (string, string) {
 	s.st.mu.Lock()
 	key := s.st.st.NVDKey
@@ -929,7 +866,7 @@ func (s *Server) nextNVD(now time.Time) (string, string) {
 		if m.Scored || (m.NVDAt != 0 && now.Sub(time.Unix(m.NVDAt, 0)) < nvdNoneRetry) {
 			continue
 		}
-		if best == "" || c > best { // newest CVEs first
+		if best == "" || c > best {
 			best = c
 		}
 	}
@@ -980,7 +917,7 @@ func (s *Server) lookupNVD(id, key string) error {
 		}
 		for _, k := range []string{"cvssMetricV31", "cvssMetricV30", "cvssMetricV40", "cvssMetricV2"} {
 			list := v.CVE.Metrics[k]
-			for _, m := range list { // the NVD's own (Primary) score first
+			for _, m := range list {
 				if m.Type == "Primary" && !found {
 					score, found = m.Data.Score, true
 				}
@@ -997,7 +934,7 @@ func (s *Server) lookupNVD(id, key string) error {
 	defer s.vul.mu.Unlock()
 	m := s.vul.d.CVEs[id]
 	if m == nil {
-		return nil // no longer needed
+		return nil
 	}
 	m.NVDAt = time.Now().Unix()
 	if found && score >= 0 && score <= 10 && !m.Scored {
@@ -1007,33 +944,29 @@ func (s *Server) lookupNVD(id, key string) error {
 	return nil
 }
 
-// ---- results for the website ----
-
 type cveView struct {
 	ID       string  `json:"id"`
 	Link     string  `json:"link"`
-	Level    int     `json:"level"`           // 0 unknown, 1 low ... 4 critical
-	Score    float64 `json:"score,omitempty"` // CVSS
+	Level    int     `json:"level"`
+	Score    float64 `json:"score,omitempty"`
 	Scored   bool    `json:"scored,omitempty"`
-	Src      string  `json:"src,omitempty"` // where the severity came from: osv | nvd | distro
-	KEV      bool    `json:"kev,omitempty"` // actively exploited
+	Src      string  `json:"src,omitempty"`
+	KEV      bool    `json:"kev,omitempty"`
 	EPSS     float64 `json:"epss,omitempty"`
 	Pct      float64 `json:"pct,omitempty"`
-	Fixed    string  `json:"fixed,omitempty"` // version that fixes it, "" if none yet
+	Fixed    string  `json:"fixed,omitempty"`
 	ByUpdate bool    `json:"by_update,omitempty"`
-	Minor    bool    `json:"minor,omitempty"` // the distribution considers it not worth fixing
+	Minor    bool    `json:"minor,omitempty"`
 	Word     string  `json:"word,omitempty"`
 }
 
 func (c cveView) red() bool { return c.KEV || (!c.Minor && c.Fixed != "" && c.Level >= 3) }
 
 type appVulns struct {
-	// ok | found | pending (not looked up yet) | not_distro (from another
-	// package source) | manual (no package source) | old_agent
 	Status  string    `json:"status"`
 	Origin  string    `json:"origin,omitempty"`
-	Fixable int       `json:"fixable"` // not minor, fix released
-	Open    int       `json:"open"`    // not minor, no fix yet
+	Fixable int       `json:"fixable"`
+	Open    int       `json:"open"`
 	Minor   int       `json:"minor"`
 	Red     bool      `json:"red"`
 	KEV     int       `json:"kev"`
@@ -1041,15 +974,13 @@ type appVulns struct {
 }
 
 type vulnView struct {
-	// checked | pending | unsupported (no data for this release) | old_agent
 	Status      string               `json:"status"`
-	Badge       int                  `json:"badge"` // red: fixable High/Critical or actively exploited
+	Badge       int                  `json:"badge"`
 	CheckedAt   int64                `json:"checked_at,omitempty"`
 	Apps        map[string]*appVulns `json:"apps,omitempty"`
-	UpdateFixes map[string][]string  `json:"update_fixes,omitempty"` // package -> CVEs its waiting update fixes
+	UpdateFixes map[string][]string  `json:"update_fixes,omitempty"`
 }
 
-// vulnsFor builds a system's results. Caller holds s.st.mu (not s.vul.mu).
 func (s *Server) vulnsFor(a *Agent, full bool) *vulnView {
 	st := appsOf(a)
 	if st == nil || a.Status == StatusPending {
@@ -1057,7 +988,7 @@ func (s *Server) vulnsFor(a *Agent, full bool) *vulnView {
 	}
 	eco := osvEcosystem(a.Facts)
 	if eco == "" {
-		return nil // not Debian or Ubuntu
+		return nil
 	}
 	var upd map[string]string
 	if full {
@@ -1136,7 +1067,6 @@ func (s *Server) vulnsFor(a *Agent, full bool) *vulnView {
 				}
 			}
 			if !c.Scored {
-				// No CVSS score (yet): the distribution's word, if any.
 				for _, w := range []string{c.Word, r.Word} {
 					if l := wordLevel(w); l > c.Level {
 						c.Level, c.Src = l, "distro"
@@ -1215,17 +1145,16 @@ func (s *Server) vulnsFor(a *Agent, full bool) *vulnView {
 	return v
 }
 
-// vulnStatus is shown under Settings > General.
 func (s *Server) vulnStatus(days int) map[string]any {
 	s.st.mu.Lock()
 	keySet := s.st.st.NVDKey != ""
 	systems := 0
 	type release struct {
 		Eco  string `json:"eco"`
-		Name string `json:"name"` // as the system reports it
-		EOL  bool   `json:"eol"`  // no longer supported
+		Name string `json:"name"`
+		EOL  bool   `json:"eol"`
 	}
-	inUse := map[string]release{} // releases the current systems run
+	inUse := map[string]release{}
 	now := time.Now()
 	for _, a := range s.st.st.Agents {
 		if e := osvEcosystem(a.Facts); a.Status != StatusPending && e != "" && appsOf(a) != nil {
@@ -1260,7 +1189,6 @@ func (s *Server) vulnStatus(days int) map[string]any {
 	}
 }
 
-// releaseName is how a system names its OS release.
 func releaseName(f proto.Facts) string {
 	if f.OSName != "" {
 		return f.OSName
@@ -1268,18 +1196,15 @@ func releaseName(f proto.Facts) string {
 	return strings.TrimSpace(f.OSID + " " + f.OSVersion)
 }
 
-// queueItem is one outstanding lookup on the Releases page.
 type queueItem struct {
-	What   string `json:"what"`         // CVE number, or "release package version"
-	Where  string `json:"where"`        // NVD | OSV
-	Status string `json:"status"`       // now | ratelimit | noscore | nvd_error | next | failed
-	At     int64  `json:"at,omitempty"` // when it is (expected to be) looked up
+	What   string `json:"what"`
+	Where  string `json:"where"`
+	Status string `json:"status"`
+	At     int64  `json:"at,omitempty"`
 }
 
 const maxQueueItems = 500
 
-// handleVulnQueue: the OS releases the systems run (each once) and the
-// lookups that run now or wait, running first, then the soonest.
 func (s *Server) handleVulnQueue(w http.ResponseWriter, r *http.Request) {
 	s.st.mu.Lock()
 	want := s.wantedKeysLocked()
@@ -1317,7 +1242,6 @@ func (s *Server) handleVulnQueue(w http.ResponseWriter, r *http.Request) {
 			running = append(running, queueItem{What: label, Where: "OSV", Status: "now"})
 		case d.Queries[k] != nil:
 		case probed && !known:
-			// OSV has no data for this release: nothing to wait for.
 		case failed:
 			waiting = append(waiting, queueItem{What: label, Where: "OSV", Status: "failed", At: d.LastTry + int64(vulnRetry/time.Second)})
 		default:
@@ -1340,7 +1264,7 @@ func (s *Server) handleVulnQueue(w http.ResponseWriter, r *http.Request) {
 			due = append(due, c)
 		}
 	}
-	sort.Sort(sort.Reverse(sort.StringSlice(due))) // the order nvdLoop takes them in: newest first
+	sort.Sort(sort.Reverse(sort.StringSlice(due)))
 	base := s.vul.nvdNextAt
 	if base.Before(now) {
 		base = now

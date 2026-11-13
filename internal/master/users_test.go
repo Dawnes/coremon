@@ -140,19 +140,3 @@ func TestUsersAndRoles(t *testing.T) {
 		t.Errorf("audit for viewer1: %+v", got)
 	}
 }
-
-func TestMigrateSingleAdminPassword(t *testing.T) {
-	dir := t.TempDir()
-	h := hashPassword("oldpass")
-	os.WriteFile(filepath.Join(dir, "state.json"), []byte(`{"password_hash":"`+h+`"}`), 0o600)
-	st, err := openStore(dir)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(st.st.Users) != 1 || st.st.Users[0].Name != "admin" || st.st.Users[0].Role != RoleAdmin || !checkPassword(st.st.Users[0].PasswordHash, "oldpass") {
-		t.Fatalf("migration: %+v", st.st.Users)
-	}
-	if st.st.PasswordHash != "" {
-		t.Fatal("old password field must be cleared")
-	}
-}

@@ -1,9 +1,6 @@
 package master
 
-// The sealed agent API (agents 0.3.0+): every request is encrypted to the
-// master's payload key and signed by the agent's own key; every reply is
-// encrypted and signed by the master, bound to the request. HTTPS only
-// carries it.
+// The sealed agent API: requests and replies are encrypted and signed.
 
 import (
 	"crypto/ed25519"
@@ -19,17 +16,13 @@ import (
 	"coremon/internal/seal"
 )
 
-// maxSealedBody bounds a sealed request (output batches and results are the
-// largest payloads).
 const maxSealedBody = 12 << 20
 
 type sealedMsg struct {
-	Op   string          `json:"op"` // enroll | poll | output | result
+	Op   string          `json:"op"`
 	Body json.RawMessage `json:"body"`
 }
 
-// nonceCache rejects a request seen before (replay), for as long as its
-// timestamp would still be accepted.
 type nonceCache struct {
 	mu   sync.Mutex
 	seen map[string]int64
@@ -57,12 +50,11 @@ func (c *nonceCache) fresh(nonce string) bool {
 }
 
 func (s *Server) handleSealed(w http.ResponseWriter, r *http.Request) {
-	// Admitted per address and in total, before anything is read: the sender
-	// is not known yet.
 	if r.ContentLength > maxSealedBody {
 		http.Error(w, "request too large", http.StatusRequestEntityTooLarge)
 		return
 	}
+	// Limited before reading: the sender is not known yet.
 	release := s.intake.admit(w, r)
 	if release == nil {
 		return
@@ -78,7 +70,6 @@ func (s *Server) handleSealed(w http.ResponseWriter, r *http.Request) {
 			return nil, errors.New("bad request")
 		}
 		if agentID == "" {
-			// Enrollment: the request proves possession of the key it brings.
 			if msg.Op != "enroll" {
 				return nil, errors.New("bad request")
 			}
@@ -92,8 +83,7 @@ func (s *Server) handleSealed(w http.ResponseWriter, r *http.Request) {
 		defer s.st.mu.Unlock()
 		a := s.st.st.Agents[agentID]
 		if a == nil || a.AgentKey == "" {
-			// The same answer as for a wrong signature: nobody can find
-			// out which agent IDs exist.
+			// Same answer as a bad signature, so agent IDs cannot be probed.
 			return nil, seal.ErrBadSig
 		}
 		return seal.ParseAgentKey(a.AgentKey)
@@ -114,8 +104,7 @@ func (s *Server) handleSealed(w http.ResponseWriter, r *http.Request) {
 		}
 		return
 	}
-	// Rate limit per verified agent (checked after the signature, so nobody
-	// can slow down another agent by using its ID); enrollments per address.
+
 	key := env.Agent
 	if key == "" {
 		key = "enroll:" + clientIP(r)
@@ -150,7 +139,7 @@ func (s *Server) handleSealed(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "bad request", http.StatusBadRequest)
 			return
 		}
-		release() // a poll waits for commands; it must not hold an intake slot
+		release()
 		resp, err := s.pollCore(r.Context(), env.Agent, req)
 		if err != nil {
 			if r.Context().Err() == nil {
@@ -186,8 +175,6 @@ func (s *Server) handleSealed(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, rep)
 }
 
-// handlePublicCore serves any agent version in the store. Binaries are not
-// secret; agents check the release signature and checksum.
 func (s *Server) handlePublicCore(w http.ResponseWriter, r *http.Request) {
 	goos, arch, ok := strings.Cut(r.PathValue("plat"), "-")
 	if !ok {

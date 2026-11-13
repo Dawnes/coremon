@@ -11,28 +11,23 @@ import (
 	"coremon/internal/seal"
 )
 
-// pingWait is how long a ping waits for the agent's answer.
 const pingWait = 15 * time.Second
 
-// pingResult is what the UI shows after a ping.
 type pingResult struct {
 	Answered   bool      `json:"answered"`
 	JobID      string    `json:"job_id"`
 	RTTMs      int64     `json:"rtt_ms"`
 	Version    string    `json:"version,omitempty"`
-	KeyUsed    string    `json:"key_used,omitempty"` // short fingerprint of the payload key of the connection
-	KeyCurrent bool      `json:"key_current"`        // that key is the master's current key
-	Slots      [2]string `json:"slots"`              // short fingerprints of the agent's slots
-	SlotsOK    bool      `json:"slots_ok"`           // the slots hold what the master wants
-	ClockMs    int64     `json:"clock_ms"`           // agent clock minus master clock
+	KeyUsed    string    `json:"key_used,omitempty"`
+	KeyCurrent bool      `json:"key_current"`
+	Slots      [2]string `json:"slots"`
+	SlotsOK    bool      `json:"slots_ok"`
+	ClockMs    int64     `json:"clock_ms"`
 	Error      string    `json:"error,omitempty"`
 	LastSeen   int64     `json:"last_seen"`
 	Online     bool      `json:"online"`
 }
 
-// handlePing sends a ping to an agent and waits for its answer. Nothing is
-// done on the system; it checks the connection and the payload keys at once.
-// Pings are listed under Jobs but not in the audit log.
 func (s *Server) handlePing(w http.ResponseWriter, r *http.Request) {
 	s.st.mu.Lock()
 	a := s.agentOr404(w, r)
@@ -108,26 +103,22 @@ func (s *Server) handlePing(w http.ResponseWriter, r *http.Request) {
 	want := s.desiredPins()
 	out.RTTMs = rtt.Milliseconds()
 	out.Version = clip(p.Version, 32)
-	// Fingerprints in their short form only: that is all the pop-up shows,
-	// and read-only users must not receive more.
+
 	out.KeyUsed = shortPin(seal.Fingerprint(p.KeyUsed))
 	out.KeyCurrent = p.KeyUsed != "" && p.KeyUsed == want[0]
 	out.Slots = [2]string{shortPin(seal.Fingerprint(p.Keys[0])), shortPin(seal.Fingerprint(p.Keys[1]))}
 	out.SlotsOK = samePair(p.Keys, want)
-	// The agent's clock was read about halfway through the round trip.
+
 	if p.TimeMs > 0 {
 		out.ClockMs = p.TimeMs - sent.Add(rtt/2).UnixMilli()
 	}
 	writeJSON(w, out)
 }
 
-// samePair compares two key slot pairs regardless of order.
 func samePair(a, b [2]string) bool {
 	return (a[0] == b[0] && a[1] == b[1]) || (a[0] == b[1] && a[1] == b[0])
 }
 
-// pingAnswered hands a ping result to the waiting UI request and notes it
-// in the job output. Caller holds s.st.mu.
 func (s *Server) pingAnswered(j *Job, res proto.Result) {
 	if ch := s.pings[j.ID]; ch != nil {
 		select {

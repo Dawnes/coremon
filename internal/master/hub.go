@@ -1,5 +1,7 @@
 package master
 
+// Agent hub: registration, polls, commands and results.
+
 import (
 	"context"
 	"encoding/json"
@@ -17,11 +19,8 @@ import (
 
 const maxJobLog = 20 << 20
 
-// heartbeat returns the configured heartbeat in seconds. Caller holds s.st.mu.
 func (s *Server) heartbeat() int { return s.st.st.Settings.HeartbeatSec }
 
-// online: an agent is online while it was heard from within three
-// heartbeats. Caller holds s.st.mu.
 func (s *Server) online(a *Agent, now int64) bool {
 	return now-a.LastSeen < int64(3*s.heartbeat())
 }
@@ -41,7 +40,6 @@ func writeJSON(w http.ResponseWriter, v any) {
 	_ = json.NewEncoder(w).Encode(v)
 }
 
-// wake interrupts a waiting long-poll for the agent. Caller holds s.st.mu.
 func (s *Server) wake(agentID string) {
 	ch := s.wakes[agentID]
 	if ch == nil {
@@ -53,7 +51,6 @@ func (s *Server) wake(agentID string) {
 	}
 }
 
-// enqueue adds a job for an agent. Caller holds s.st.mu.
 func (s *Server) enqueue(a *Agent, j *Job) *Job {
 	j.ID = "j_" + randHex(8)
 	j.AgentID = a.ID
@@ -67,15 +64,9 @@ func (s *Server) enqueue(a *Agent, j *Job) *Job {
 	return j
 }
 
-// jobAllowed: which jobs a system may receive in its status.
-//   - pending: only an uninstall
-//   - report only: no actions (checks, installs, reboots) except the
-//     application scan, which only reads; agent version changes, mode
-//     changes and uninstall are fine
-//   - active: everything
 func jobAllowed(a *Agent, j *Job) bool {
 	if j.Type == proto.CmdSetPins || j.Type == proto.CmdPing {
-		return true // key slots and ping: every status, even pending
+		return true
 	}
 	switch a.Status {
 	case StatusActive:
@@ -86,14 +77,8 @@ func jobAllowed(a *Agent, j *Job) bool {
 	return j.Type == proto.CmdUninstall
 }
 
-// readOnlyAction: a function that only reads, so it may run on report-only
-// systems (the application scan's "Refresh now").
 func readOnlyAction(feature string) bool { return feature == "apps" }
 
-// syncMode sends the master's decision (active or report only) to an agent
-// that supports report-only mode and has not confirmed it yet. actor is the
-// user who switched, or "scheduler" for an automatic resync. Caller holds
-// s.st.mu.
 func (s *Server) syncMode(a *Agent, actor string) *Job {
 	if a.Status == StatusPending || a.Removing {
 		return nil
@@ -106,9 +91,6 @@ func (s *Server) syncMode(a *Agent, actor string) *Job {
 	return s.enqueue(a, &Job{Type: proto.CmdSetMode, Params: p, Actor: actor, Timeout: 60})
 }
 
-// cancelQueued cancels an agent's queued actions (checks, installs,
-// reboots) that have not started yet; running jobs finish normally and
-// agent version changes stay. Caller holds s.st.mu.
 func (s *Server) cancelQueued(a *Agent, reason string) int {
 	n := 0
 	now := time.Now().Unix()
@@ -124,7 +106,6 @@ func (s *Server) cancelQueued(a *Agent, reason string) int {
 	return n
 }
 
-// openJob reports whether a queued or running job matches.
 func (s *Server) openJob(agentID, typ, feature string) bool {
 	for i := len(s.st.st.Jobs) - 1; i >= 0; i-- {
 		j := s.st.st.Jobs[i]
@@ -135,7 +116,6 @@ func (s *Server) openJob(agentID, typ, feature string) bool {
 	return false
 }
 
-// recentFailure reports whether a matching job failed within d.
 func (s *Server) recentFailure(agentID, typ, feature string, d time.Duration) bool {
 	cut := time.Now().Add(-d).Unix()
 	for i := len(s.st.st.Jobs) - 1; i >= 0; i-- {
@@ -150,8 +130,6 @@ func (s *Server) recentFailure(agentID, typ, feature string, d time.Duration) bo
 	return false
 }
 
-// ---- agent API logic (carried by the sealed method, sealed.go) ----
-
 type apiError struct {
 	code int
 	msg  string
@@ -159,16 +137,14 @@ type apiError struct {
 
 func (e *apiError) Error() string { return e.msg }
 
-// enrollCore registers a new system with its own key. Caller must not hold
-// s.st.mu.
 func (s *Server) enrollCore(req proto.EnrollRequest, ip, agentKey string) (*proto.EnrollResponse, error) {
 	if agentKey == "" {
 		return nil, &apiError{http.StatusBadRequest, "agent key missing"}
 	}
 	now := time.Now()
-	// An address over its limit of wrong tokens gets no further look.
+
 	if s.enrolls.over(ip, now) {
-		s.enrolls.rejected(ip, now) // counted for the summary
+		s.enrolls.rejected(ip, now)
 		return nil, &apiError{http.StatusTooManyRequests, "too many registration attempts; try again later"}
 	}
 	req.Facts = sanitizeFacts(req.Facts)
@@ -178,16 +154,12 @@ func (s *Server) enrollCore(req proto.EnrollRequest, ip, agentKey string) (*prot
 	h := sha256hex(strings.TrimSpace(req.Token))
 	tok := s.st.st.Tokens[h]
 	if tok == nil || now.Unix() > tok.Expires {
-		// Only the first attempt of an address is logged on its own; the
-		// rest is summarised (see flushEnrolls).
 		if first, _ := s.enrolls.rejected(ip, now); first {
 			s.audit.write("agent", ip, "enroll.rejected", cleanText(req.Facts.Hostname, 64), "invalid or expired token")
 		}
 		return nil, &apiError{http.StatusForbidden, "invalid or expired enrollment token"}
 	}
-	// One system per address may wait for approval. The token is kept, so
-	// the waiting agent registers by itself once the other one is approved
-	// or removed.
+
 	if ip != "" {
 		for _, p := range s.st.st.Agents {
 			if p.Status == StatusPending && p.EnrollIP == ip {
@@ -226,15 +198,12 @@ func (s *Server) enrollCore(req proto.EnrollRequest, ip, agentKey string) (*prot
 	return resp, nil
 }
 
-// flushEnrolls writes one summary line per address for the registration
-// attempts with a wrong token that followed the first (logged) one.
 func (s *Server) flushEnrolls(now time.Time) {
 	for ip, n := range s.enrolls.flush(now) {
 		s.audit.write("agent", ip, "enroll.rejected", "", fmt.Sprintf("%d more rejected registration attempt(s) from this address in %d minutes", n, int(enrollWindow/time.Minute)))
 	}
 }
 
-// pollCore records a heartbeat and waits up to one heartbeat for commands.
 func (s *Server) pollCore(ctx context.Context, agentID string, req proto.PollRequest) (*proto.PollResponse, error) {
 	s.st.mu.Lock()
 	a := s.st.st.Agents[agentID]
@@ -252,27 +221,24 @@ func (s *Server) pollCore(ctx context.Context, agentID string, req proto.PollReq
 	if a.DesiredCore != "" && a.DesiredCore == a.CoreVersion {
 		a.DesiredCore = ""
 	}
-	// Key slots also below the minimum: a key rotation must not cut it off.
+
 	a.Pins = [2]string{clip(req.Pins[0], 256), clip(req.Pins[1], 256)}
 	a.PinsAt = now
 	if s.belowMin(a) {
-		// Upgrade only: just the platform (for the right update); none of its
-		// data is stored. What was stored before stays, hidden, until updated.
 		f := sanitizeFacts(proto.Facts{OS: req.Facts.OS, Arch: req.Facts.Arch})
 		a.Facts.OS, a.Facts.Arch = f.OS, f.Arch
 	} else {
 		a.Facts = sanitizeFacts(req.Facts)
-		// Agents before protocol 2 have no built-in features.
+
 		a.Features = sanitizeFeatures(req.Features)
 		if a.Features == nil {
 			a.Features = []proto.FeatureInfo{}
 		}
 		a.ReportOnly = req.ReportOnly
-		s.syncMode(a, "scheduler") // the master's decision wins; sent in this same reply
+		s.syncMode(a, "scheduler")
 	}
 	s.syncPins(a, "scheduler")
-	// Commands the agent no longer runs but never reported: lost (e.g. the
-	// agent restarted mid-command).
+
 	running := map[string]bool{}
 	for _, id := range req.Running {
 		running[id] = true
@@ -280,8 +246,6 @@ func (s *Server) pollCore(ctx context.Context, agentID string, req proto.PollReq
 	for _, j := range s.st.st.Jobs {
 		if j.AgentID == a.ID && j.Status == JobRunning && !running[j.ID] && now-j.Started > 45 {
 			if j.Type == proto.CmdCoreUpdate && j.Artifact != nil && a.CoreVersion == j.Artifact.Version {
-				// The agent restarted into the new version before its result
-				// reached us.
 				j.Status, j.Finished = JobSuccess, now
 				continue
 			}
@@ -295,8 +259,7 @@ func (s *Server) pollCore(ctx context.Context, agentID string, req proto.PollReq
 		s.wakes[a.ID] = ch
 	}
 	hb := s.heartbeat()
-	// At most one open heartbeat per agent: a new one ends the previous one,
-	// as a reconnect would.
+
 	if s.polls == nil {
 		s.polls = map[string]chan struct{}{}
 	}
@@ -325,7 +288,7 @@ func (s *Server) pollCore(ctx context.Context, agentID string, req proto.PollReq
 		}
 		select {
 		case <-ch:
-		case <-mine: // replaced by a newer heartbeat
+		case <-mine:
 			return &proto.PollResponse{Commands: []proto.Command{}, Heartbeat: hb}, nil
 		case <-deadline.C:
 			return &proto.PollResponse{Commands: []proto.Command{}, Heartbeat: hb}, nil
@@ -335,8 +298,6 @@ func (s *Server) pollCore(ctx context.Context, agentID string, req proto.PollReq
 	}
 }
 
-// takeCommands moves queued jobs to running and returns them as commands.
-// Caller holds s.st.mu.
 func (s *Server) takeCommands(agentID string) []proto.Command {
 	a := s.st.st.Agents[agentID]
 	if a == nil {
@@ -363,7 +324,6 @@ func (s *Server) takeCommands(agentID string) []proto.Command {
 	return out
 }
 
-// outputCore appends streamed job output.
 func (s *Server) outputCore(agentID string, req proto.OutputBatch) {
 	s.st.mu.Lock()
 	defer s.st.mu.Unlock()
@@ -378,7 +338,7 @@ func (s *Server) outputCore(agentID string, req proto.OutputBatch) {
 			continue
 		}
 		if upgradeOnly && !upgradeOnlyJob(j.Type) {
-			continue // below the minimum: only an agent update's output is kept
+			continue
 		}
 		data := cleanLog(it.Data)
 		if j.LogSize+int64(len(data)) > maxJobLog {
@@ -395,7 +355,6 @@ func (s *Server) outputCore(agentID string, req proto.OutputBatch) {
 	s.st.markDirty()
 }
 
-// resultCore records a job's outcome.
 func (s *Server) resultCore(agentID string, res proto.Result, ip string) {
 	s.st.mu.Lock()
 	defer s.st.mu.Unlock()
@@ -407,7 +366,6 @@ func (s *Server) resultCore(agentID string, res proto.Result, ip string) {
 	now := time.Now().Unix()
 	j.Finished = now
 	if s.belowMin(a) && !upgradeOnlyJob(j.Type) {
-		// E.g. a check that was running when the minimum was raised.
 		j.Status, j.Error = JobFailed, "result discarded: the agent is older than the lowest allowed version"
 		s.st.markDirty()
 		return
@@ -421,7 +379,7 @@ func (s *Server) resultCore(agentID string, res proto.Result, ip string) {
 	case j.Type == proto.CmdAction && len(res.Data) > 0:
 		var d struct {
 			State  json.RawMessage            `json:"state"`
-			States map[string]json.RawMessage `json:"states"` // extra states, e.g. the application scan with a check
+			States map[string]json.RawMessage `json:"states"`
 		}
 		if json.Unmarshal(res.Data, &d) == nil && len(d.State) > 0 && string(d.State) != "null" {
 			state, err := checkState(j.Feature, d.State)
@@ -442,18 +400,17 @@ func (s *Server) resultCore(agentID string, res proto.Result, ip string) {
 			}
 		}
 		if _, ok := a.StateAt["apps"]; ok && a.StateAt["apps"] == now {
-			s.kickVulns() // new versions are looked up soon (not under this lock)
+			s.kickVulns()
 		}
 	case j.Type == proto.CmdPing:
 		s.pingAnswered(j, res)
 	case j.Type == proto.CmdCoreUpdate && !res.OK:
-		// Do not retry a failed up/downgrade on our own.
 		a.DesiredCore = ""
 	case j.Type == proto.CmdUninstall && res.OK:
 		s.audit.writeAgent("agent", ip, "agent.uninstalled", a, "")
 		delete(s.st.st.Agents, a.ID)
 		delete(s.wakes, a.ID)
-		s.kickVulns() // its lookups are cleaned up
+		s.kickVulns()
 	}
 	s.st.markDirty()
 }
@@ -484,9 +441,6 @@ func (s *Server) serveArtifact(w http.ResponseWriter, r *http.Request, e *artifa
 	io.Copy(w, f)
 }
 
-// handlePublicAgent serves the latest agent binary to the install script.
-// Binaries are not secret; integrity is enforced by the checksum embedded
-// in the install script (whose own hash is in the install command).
 func (s *Server) handlePublicAgent(w http.ResponseWriter, r *http.Request) {
 	goos, arch, ok := strings.Cut(r.PathValue("plat"), "-")
 	if !ok {
@@ -496,10 +450,7 @@ func (s *Server) handlePublicAgent(w http.ResponseWriter, r *http.Request) {
 	s.serveArtifact(w, r, s.repo.find("core", s.repo.coreLatest(), goos, arch))
 }
 
-// requestCore queues an agent up/downgrade to version if possible. Caller
-// holds s.st.mu.
 func (s *Server) requestCore(a *Agent, version, actor string) *Job {
-	// Agent versions may change in report-only mode too.
 	if (a.Status != StatusActive && a.Status != StatusReportOnly) || a.Removing || !s.online(a, time.Now().Unix()) || s.openJob(a.ID, proto.CmdCoreUpdate, "") {
 		return nil
 	}
@@ -515,8 +466,6 @@ func (s *Server) requestCore(a *Agent, version, actor string) *Job {
 	return s.enqueue(a, &Job{Type: proto.CmdCoreUpdate, Artifact: &art, Actor: actor, Timeout: 900})
 }
 
-// scheduler applies requested agent versions, triggers periodic checks,
-// expires stale jobs and purges old history.
 func (s *Server) schedulerLoop(stop <-chan struct{}) {
 	t := time.NewTicker(15 * time.Second)
 	defer t.Stop()
@@ -538,13 +487,10 @@ func (s *Server) schedulerLoop(stop <-chan struct{}) {
 	}
 }
 
-// The history cleanup runs on every full hour.
 const purgeMinNotice = 3 * time.Minute
 
 func nextFullHour(t time.Time) time.Time { return t.Truncate(time.Hour).Add(time.Hour) }
 
-// purgeAfterChange is when a changed retention period takes effect: the
-// next full hour, unless that is less than three minutes away.
 func purgeAfterChange(now time.Time) time.Time {
 	n := nextFullHour(now)
 	if n.Sub(now) < purgeMinNotice {
@@ -584,21 +530,21 @@ func (s *Server) schedulerTick() {
 		if a.Status == StatusPending {
 			continue
 		}
-		// Requested agent version (set while the agent was offline).
+
 		if a.DesiredCore != "" && a.CoreVersion != a.DesiredCore &&
 			!s.recentFailure(a.ID, proto.CmdCoreUpdate, "", 10*time.Minute) {
 			s.requestCore(a, a.DesiredCore, "scheduler")
 		}
 		if s.belowMin(a) {
-			continue // upgrade only: no mode sync, no checks
+			continue
 		}
 		if !s.recentFailure(a.ID, proto.CmdSetMode, "", 2*time.Minute) {
 			s.syncMode(a, "scheduler")
 		}
 		if a.Status != StatusActive {
-			continue // report only: no checks
+			continue
 		}
-		// Periodic checks: any feature offering a "check" action.
+
 		for i := range a.Features {
 			f := &a.Features[i]
 			spec := f.Action("check")
@@ -611,7 +557,7 @@ func (s *Server) schedulerTick() {
 			s.enqueue(a, &Job{Type: proto.CmdAction, Feature: f.Name, Action: "check", Params: json.RawMessage("{}"), Actor: "scheduler", Timeout: spec.Timeout})
 		}
 	}
-	// Expire jobs.
+
 	for _, j := range s.st.st.Jobs {
 		switch {
 		case j.Status == JobRunning && nowU > j.Started+int64(j.Timeout)+120:
@@ -622,7 +568,7 @@ func (s *Server) schedulerTick() {
 			s.st.markDirty()
 		}
 	}
-	// Expire enrollment tokens.
+
 	for h, t := range s.st.st.Tokens {
 		if nowU > t.Expires {
 			delete(s.st.st.Tokens, h)
@@ -631,13 +577,10 @@ func (s *Server) schedulerTick() {
 	}
 }
 
-// retentionCutoff returns the oldest time kept at moment t.
 func retentionCutoff(t time.Time, days int) int64 {
 	return t.Add(-time.Duration(days) * 24 * time.Hour).Unix()
 }
 
-// purgePreview counts what a cleanup at time at with the given retention
-// would remove.
 func (s *Server) purgePreview(days int, at time.Time) (cutoff int64, audit, jobs int) {
 	cutoff = retentionCutoff(at, days)
 	s.st.mu.Lock()
@@ -654,8 +597,6 @@ func (s *Server) purgePreview(days int, at time.Time) (cutoff int64, audit, jobs
 	return cutoff, s.audit.countOlder(cutoff), jobs
 }
 
-// purge removes audit entries, jobs and job output older than the
-// retention period.
 func (s *Server) purge() {
 	s.st.mu.Lock()
 	days := s.st.st.Settings.RetentionDays

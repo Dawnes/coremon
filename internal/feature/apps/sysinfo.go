@@ -1,5 +1,7 @@
 package apps
 
+// Parsers for service, socket and port information.
+
 import (
 	"encoding/hex"
 	"net"
@@ -11,8 +13,6 @@ import (
 // file contents, so they can be tested on any platform; collecting is in
 // sysinfo_linux.go.
 
-// parseListUnits reads `systemctl list-units --all --plain --no-legend`:
-// unit -> active.
 func parseListUnits(out string, into map[string]bool) {
 	for _, line := range strings.Split(out, "\n") {
 		f := strings.Fields(line)
@@ -23,9 +23,6 @@ func parseListUnits(out string, into map[string]bool) {
 	}
 }
 
-// parseUnitFiles reads `systemctl list-unit-files --plain --no-legend`; units
-// that exist but are not loaded are added as inactive. Templates
-// ("foo@.service") are skipped: only their instances are real services.
 func parseUnitFiles(out string, into map[string]bool) {
 	for _, line := range strings.Split(out, "\n") {
 		f := strings.Fields(line)
@@ -38,11 +35,8 @@ func parseUnitFiles(out string, into map[string]bool) {
 	}
 }
 
-// bootStates are is-enabled answers that mean "starts at boot".
 var bootStates = map[string]bool{"enabled": true, "enabled-runtime": true, "alias": true, "indirect": true, "generated": true}
 
-// parseIsEnabled reads `systemctl is-enabled u1 u2 ...` (one line per unit,
-// in order).
 func parseIsEnabled(units []string, out string) map[string]bool {
 	lines := strings.Split(strings.TrimSpace(out), "\n")
 	m := map[string]bool{}
@@ -54,7 +48,6 @@ func parseIsEnabled(units []string, out string) map[string]bool {
 	return m
 }
 
-// sock is a listening socket from /proc/net/{tcp,udp}{,6}.
 type sock struct {
 	inode string
 	port  int
@@ -62,8 +55,6 @@ type sock struct {
 	ip    net.IP
 }
 
-// procIP decodes the kernel's hex address (32-bit words in host order,
-// little endian on every platform Coremon is built for).
 func procIP(h string) net.IP {
 	b, err := hex.DecodeString(h)
 	if err != nil || (len(b) != 4 && len(b) != 16) {
@@ -75,12 +66,10 @@ func procIP(h string) net.IP {
 	return net.IP(b)
 }
 
-// parseNetProc reads one of /proc/net/{tcp,tcp6,udp,udp6}: TCP sockets in
-// LISTEN, UDP sockets that are not connected.
 func parseNetProc(content, proto string) []sock {
-	want := "0A" // TCP_LISTEN
+	want := "0A"
 	if proto == "udp" {
-		want = "07" // unconnected
+		want = "07"
 	}
 	var out []sock
 	for i, line := range strings.Split(content, "\n") {
@@ -98,14 +87,13 @@ func parseNetProc(content, proto string) []sock {
 			continue
 		}
 		if proto == "udp" && !strings.HasSuffix(f[2], ":0000") {
-			continue // connected UDP socket: not a listening service
+			continue
 		}
 		out = append(out, sock{inode: f[9], port: int(port), proto: proto, ip: ip})
 	}
 	return out
 }
 
-// toPort turns a socket into a Port; loopback addresses are local only.
 func (s sock) toPort() Port {
 	addr := s.ip.String()
 	if s.ip.IsUnspecified() {
@@ -118,8 +106,6 @@ func (s sock) toPort() Port {
 	return Port{Port: s.port, Proto: s.proto, Local: s.ip.IsLoopback(), Addr: addr}
 }
 
-// cgroupUnit returns the systemd service a process belongs to, from
-// /proc/<pid>/cgroup ("0::/system.slice/nginx.service" -> nginx.service).
 func cgroupUnit(content string) string {
 	for _, line := range strings.Split(content, "\n") {
 		parts := strings.SplitN(strings.TrimSpace(line), ":", 3)
@@ -136,8 +122,6 @@ func cgroupUnit(content string) string {
 	return ""
 }
 
-// parseListen reads `systemctl show -p Id -p Listen a.socket b.socket`:
-// socket-activated services (the system holds the port, e.g. ssh.socket).
 func parseListen(out string) map[string][]Port {
 	m := map[string][]Port{}
 	id := ""
@@ -149,18 +133,17 @@ func parseListen(out string) map[string][]Port {
 		case strings.HasPrefix(line, "Id="):
 			id = line[3:]
 		case strings.HasPrefix(line, "Listen=") && id != "":
-			// Listen=[::]:22 (Stream) | 0.0.0.0:53 (Datagram)
 			v := strings.TrimPrefix(line, "Listen=")
 			addrPart, kind, _ := strings.Cut(v, " ")
 			proto := "tcp"
 			if strings.Contains(kind, "Datagram") {
 				proto = "udp"
 			} else if !strings.Contains(kind, "Stream") {
-				continue // a file or other kind of socket
+				continue
 			}
 			host, portStr, err := net.SplitHostPort(addrPart)
 			if err != nil {
-				portStr, host = addrPart, "" // just a port: all addresses
+				portStr, host = addrPart, ""
 			}
 			p, err := strconv.Atoi(portStr)
 			if err != nil || p <= 0 || p > 65535 {

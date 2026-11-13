@@ -1,17 +1,6 @@
 package master
 
-// Master keys.
-//
-// The HTTPS certificate (tls.crt/tls.key) only carries traffic; agents do
-// not rely on it (it is replaced in certrotate.go). Agents trust the
-// master's payload key (payload.key), in two slots, which allows rotation:
-//
-//  1. Generate: a new payload key; the master keeps answering with the old.
-//  2. Distribute: every agent is told, in a reply signed with a key it
-//     trusts, to trust [current, new]. Agents report what they stored.
-//  3. Switch: the master answers with the new key and deletes the old one;
-//     agents are told to keep only [new].
-//  Cancel before the switch discards the new key; agents drop it again.
+// The master's payload keys and their rotation (generate, distribute, switch).
 
 import (
 	"crypto/tls"
@@ -30,13 +19,12 @@ import (
 	"coremon/internal/seal"
 )
 
-// keyState holds the HTTPS certificate and the payload keys.
 type keyState struct {
-	cert    *tls.Certificate // HTTPS
-	tlsPin  string           // its fingerprint; agents before 0.3.0 pin it
-	cur     *seal.KeyPair    // payload key in use
+	cert    *tls.Certificate
+	tlsPin  string
+	cur     *seal.KeyPair
 	curStr  string
-	next    *seal.KeyPair // during a rotation
+	next    *seal.KeyPair
 	nextStr string
 	nextAt  int64
 }
@@ -54,21 +42,18 @@ func (s *Server) currentCert(*tls.ClientHelloInfo) (*tls.Certificate, error) {
 	return s.keys.cert, nil
 }
 
-// currentPin is the HTTPS certificate fingerprint (agents before 0.3.0).
 func (s *Server) currentPin() string {
 	s.keyMu.Lock()
 	defer s.keyMu.Unlock()
 	return s.keys.tlsPin
 }
 
-// desiredPins is what every agent should trust: [payload key, new key].
 func (s *Server) desiredPins() [2]string {
 	s.keyMu.Lock()
 	defer s.keyMu.Unlock()
 	return [2]string{s.keys.curStr, s.keys.nextStr}
 }
 
-// payloadKeys are the keys requests may be sealed to.
 func (s *Server) payloadKeys() map[string]*seal.KeyPair {
 	s.keyMu.Lock()
 	defer s.keyMu.Unlock()
@@ -95,8 +80,6 @@ func writePayloadKey(path string, k *seal.KeyPair) error {
 	return os.Rename(tmp, path)
 }
 
-// loadKeys loads (or on first start creates) the payload key, picks up a
-// rotation in progress, and retires files of the old HTTPS-key rotation.
 func (s *Server) loadKeys() error {
 	cur, err := readPayloadKey(s.payloadPath("current"))
 	if os.IsNotExist(err) {
@@ -146,7 +129,6 @@ func (s *Server) cancelKey() error {
 	return nil
 }
 
-// switchKey makes the new payload key current and deletes the old one.
 func (s *Server) switchKey() (old, cur string, err error) {
 	s.keyMu.Lock()
 	defer s.keyMu.Unlock()
@@ -162,8 +144,6 @@ func (s *Server) switchKey() (old, cur string, err error) {
 	return old, s.keys.curStr, nil
 }
 
-// syncPins tells an agent which payload keys to trust, until it reports
-// exactly that. Caller holds s.st.mu.
 func (s *Server) syncPins(a *Agent, actor string) *Job {
 	if a.Removing {
 		return nil
@@ -176,8 +156,6 @@ func (s *Server) syncPins(a *Agent, actor string) *Job {
 	return s.enqueue(a, &Job{Type: proto.CmdSetPins, Params: p, Actor: actor, Timeout: 60})
 }
 
-// ---- UI ----
-
 type agentKeys struct {
 	ID         string    `json:"id"`
 	Name       string    `json:"name"`
@@ -185,12 +163,11 @@ type agentKeys struct {
 	Online     bool      `json:"online"`
 	LastSeen   int64     `json:"last_seen"`
 	Version    string    `json:"core_version"`
-	Slots      [2]string `json:"slots"` // per slot: current | new | unknown | "" (empty); no fingerprints
+	Slots      [2]string `json:"slots"`
 	ReportedAt int64     `json:"reported_at"`
 	HasNext    bool      `json:"has_next"`
 }
 
-// slotStatus says what a key an agent trusts is to this master.
 func slotStatus(k, cur, next string) string {
 	switch {
 	case k == "":
@@ -203,8 +180,6 @@ func slotStatus(k, cur, next string) string {
 	return "unknown"
 }
 
-// identityView is the Identity page. full: with the key fingerprints
-// (administrators); read-only users only see the status per system.
 func (s *Server) identityView(full bool) map[string]any {
 	s.keyMu.Lock()
 	cur, next, nextAt, tlsPin := s.keys.curStr, s.keys.nextStr, s.keys.nextAt, s.keys.tlsPin
@@ -251,7 +226,6 @@ func (s *Server) handleIdentityAction(w http.ResponseWriter, r *http.Request) {
 			s.audit.write(actor(r), clientIP(r), "identity.generate", "", "new payload key "+shortPin(seal.Fingerprint(s.desiredPins()[1])))
 		}
 	case "cert":
-		// A new HTTPS certificate; audited by rotateCert.
 		err = s.rotateCert(actor(r), clientIP(r))
 	case "cancel":
 		if err = s.cancelKey(); err == nil {
@@ -286,10 +260,9 @@ func (s *Server) handleIdentityAction(w http.ResponseWriter, r *http.Request) {
 		s.wake(a.ID)
 	}
 	s.st.mu.Unlock()
-	writeJSON(w, s.identityView(true)) // administrators only
+	writeJSON(w, s.identityView(true))
 }
 
-// missingNextKey lists systems that have not confirmed the new key.
 func (s *Server) missingNextKey() []string {
 	next := s.desiredPins()[1]
 	s.st.mu.Lock()
@@ -307,8 +280,6 @@ func (s *Server) missingNextKey() []string {
 	return out
 }
 
-// shortPin is the short form of a fingerprint shown to people: the first
-// five characters.
 func shortPin(p string) string {
 	if len(p) > 5 {
 		return p[:5] + "…"

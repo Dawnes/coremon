@@ -2,10 +2,7 @@
 
 package updates
 
-// fakeBackend simulates a Debian system with pending updates. Only compiled
-// with `-tags fake` and enabled with COREMON_FAKE=1; used for UI
-// development and end-to-end tests on machines without apt. Release builds
-// never contain it.
+// Simulated apt backend for development builds (-tags fake, COREMON_FAKE=1).
 
 import (
 	"encoding/json"
