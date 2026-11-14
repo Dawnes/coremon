@@ -32,7 +32,7 @@ func icmpPing(ctx context.Context, ip net.IP, timeout time.Duration) (time.Durat
 	c, err := net.ListenPacket(network, laddr)
 	if err != nil {
 		return 0, &pingSetupError{errors.New("the master may not send pings: the system refuses ping sockets for its user " +
-			"(sysctl net.ipv4.ping_group_range) and the service lacks CAP_NET_RAW — re-run the master installer")}
+			"(sysctl net.ipv4.ping_group_range) and the service lacks CAP_NET_RAW. Run the master install command once as root on the master: it updates the service")}
 	}
 	defer c.Close()
 	lastMethod.Store("raw socket")

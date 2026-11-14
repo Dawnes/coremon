@@ -699,6 +699,7 @@ function Dashboard() {
     const state = !L.checked ? 'wait' : L.up ? 'up' : 'down';
     const accent = { wait: 'a-pend', up: 'a-ok', down: 'a-off' }[state];
     const big = { wait: L.fails ? html`<div class="big some">?</div><div class="biglbl">no answer yet<br>${L.fails} of ${L.down_after} tries</div>`
+      : L.last_error ? html`<div class="big sec" title="${L.last_error}">!</div><div class="biglbl">the master cannot<br>send pings</div>`
       : html`<div class="big dim">—</div><div class="biglbl">waiting for<br>first ping</div>`,
       up: html`<div class="big zero">Up</div><div class="biglbl">answers<br>ping</div>`,
       down: html`<div class="big sec">Down</div><div class="biglbl">no answer<br>to ping</div>` }[state];
