@@ -1641,7 +1641,8 @@ function AppList() {
     if (!st.d.apps.length) return setHTML($('#al-list'), html`<div class="panel empty">No application data yet. It arrives with the systems' next update check.</div>`);
     if (!apps.length) return setHTML($('#al-list'), html`<div class="panel empty">Nothing matches.</div>`);
     setHTML($('#al-list'), html`<div class="stack">${apps.map((a) => html`<div class="panel"><div class="panel-pad" style="padding-bottom:6px"><h2 style="margin:0">${a.name}</h2></div>
-      <table class="tbl"><thead><tr><th>Version</th><th class="w1">Systems</th><th>Updates</th><th>Security</th></tr></thead>
+      <table class="tbl apptbl"><colgroup><col><col class="c-sys"><col class="c-upd"><col class="c-sec"></colgroup>
+      <thead><tr><th>Version</th><th>Systems</th><th>Updates</th><th>Security</th></tr></thead>
       <tbody>${a.versions.map((v) => {
         const n = v.systems.filter((s) => s.update).length;
         return html`<tr class="click" data-act="ver" data-k="${verKey(a.name, v.full)}" title="Show the systems running this version">

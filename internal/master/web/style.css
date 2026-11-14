@@ -303,6 +303,10 @@ ul.plainlist { margin: 0; padding-left: 18px; line-height: 1.8; }
 .tbl tr.picked { background: rgba(34, 211, 238, 0.07); }
 .tbl tr.click { cursor: pointer; }
 .tbl .w1 { width: 1%; white-space: nowrap; }
+.apptbl { table-layout: fixed; }
+.apptbl col.c-sys { width: 100px; } .apptbl col.c-upd { width: 220px; } .apptbl col.c-sec { width: 300px; }
+.apptbl td:first-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.apptbl td:last-child { white-space: normal; }
 .tbl tr.dimrow td { color: var(--dim); }
 
 .about { display: flex; justify-content: center; padding: 40px 0; }
