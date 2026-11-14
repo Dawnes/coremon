@@ -22,7 +22,10 @@ func TestStateFileObfuscated(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if bytes.Contains(b, []byte("secret-web-01")) || bytes.Contains(b, []byte("192.168.77.12")) || bytes.Contains(b, []byte("admin")) || bytes.Contains(b, []byte("\x1f\x8b")) {
+	// Plain gzip would start with 1f 8b right after the header; the same two
+	// bytes can turn up anywhere else in scrambled data by chance.
+	body := bytes.TrimPrefix(b, stateMagic)
+	if bytes.Contains(b, []byte("secret-web-01")) || bytes.Contains(b, []byte("192.168.77.12")) || bytes.Contains(b, []byte("admin")) || bytes.HasPrefix(body, []byte("\x1f\x8b")) {
 		t.Fatal("state file is readable or plain gzip")
 	}
 
