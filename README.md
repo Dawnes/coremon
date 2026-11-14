@@ -14,8 +14,9 @@ ports and no SSH are needed on your systems.
 
 * **Dashboard**: all systems at a glance, in your own groups, with filters.
 * **Updates**: check, install selected packages or upgrade all, with live output.
-* **Applications**: 23 common applications (Apache, Docker, MariaDB, Nginx,
-  OpenSSL, PostgreSQL, the SSH server and more) with version, status and ports.
+* **Applications**: 31 common applications (Apache, Docker, Exim, MariaDB, Nginx,
+  OpenSSL, PostgreSQL, the SSH server and more) with version, status and ports,
+  per system and as one list for the whole environment.
 * **Vulnerabilities**: known CVEs of those applications, with severity, fixes
   and actively exploited ones highlighted.
 * **Releases**: update the master and the agents from the website.

@@ -188,6 +188,10 @@ input[type=checkbox] { accent-color: var(--cyan); width: 16px; height: 16px; cur
 .qrbox { margin: 12px 0; width: 220px; padding: 0; border-radius: var(--r-md); overflow: hidden; }
 .qrbox svg { display: block; width: 100%; height: auto; }
 code.tfakey { display: inline-block; margin: 6px 0 4px; padding: 6px 10px; background: var(--accent); border-radius: var(--r-sm); font-size: 14px; letter-spacing: 0.04em; user-select: all; word-break: break-all; }
+.tbl tr.batchrow .fold { display: inline-flex; vertical-align: -3px; color: var(--dim); }
+.tbl tr.batchrow .fold svg { width: 14px; height: 14px; }
+.tbl tr.subrow td { background: rgba(148, 163, 255, 0.03); }
+.tbl tr.subrow td:first-child { padding-left: 34px; }
 ul.plainlist { margin: 0; padding-left: 18px; line-height: 1.8; }
 
 .linkbtn { display: inline-flex; align-items: center; gap: 4px; padding: 2px; margin: -2px; background: none; border: 0; border-radius: var(--r-sm); font: inherit; color: inherit; cursor: pointer; }

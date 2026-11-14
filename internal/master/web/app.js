@@ -447,7 +447,7 @@ const NAV = [
   ['about', 'info', 'About'],
 ];
 const SUBNAV = {
-  dashboard: () => [['overview', 'Overview'], ['list', 'List']],
+  dashboard: () => [['overview', 'Overview'], ['systems', 'System List'], ['apps', 'Application List']],
   about: () => [['about', 'About'], ['license', 'License']],
   history: () => [['jobs', 'Jobs'], ['audit', 'Audit log']],
   settings: () => [['general', 'General'], ['systems', 'Systems'], ['releases', 'Releases'], ...(canChange() ? [['users', 'Users'], ['backups', 'Backups']] : []), ['account', 'My Account'], ['identity', 'Identity']],
@@ -512,7 +512,7 @@ function route() {
   const subViews = {
     settings: { general: SettingsGeneral, systems: Systems, releases: Releases, users: SettingsUsers, backups: SettingsBackups, account: SettingsAccount, identity: SettingsIdentity },
     history: { jobs: Jobs, audit: Audit },
-    dashboard: { overview: Dashboard, list: SystemList },
+    dashboard: { overview: Dashboard, systems: SystemList, apps: AppList },
     about: { about: AboutPage, license: LicensePage },
   };
   const views = { system: AgentPage };
@@ -1032,7 +1032,7 @@ function healthCell(a) {
 const osShort = (f) => (f.os_id && f.os_version ? f.os_id.charAt(0).toUpperCase() + f.os_id.slice(1) + ' ' + f.os_version : osLabel(f));
 
 function SystemList() {
-  lastDashSub = 'list';
+  lastDashSub = 'systems';
   const st = { filter: 'all', q: '', data: null, sort: 'name', dir: 1 };
   const byText = (x, y) => String(x).localeCompare(String(y), undefined, { numeric: true, sensitivity: 'base' });
   const statusText = (a) => (a.status === 'pending' ? 'pending' : a.below_min ? 'update required' : !a.online ? 'offline' : a.status === 'report_only' ? 'report only' : 'online');
@@ -1099,7 +1099,7 @@ function SystemList() {
   return {
     interval: 5000,
     mount(el) {
-      el.innerHTML = r(html`${subTabs('dashboard', 'list')}<div class="page-head"><div><h1>List</h1><div class="sub">All systems at a glance</div></div></div>
+      el.innerHTML = r(html`${subTabs('dashboard', 'systems')}<div class="page-head"><div><h1>System List</h1><div class="sub">All systems at a glance</div></div></div>
         <div class="toolbar"><input type="search" class="search" id="l-q" placeholder="Search name, OS, IP, group…"><div class="chips" id="l-chips"></div></div>
         <div id="l-table"></div>`);
       $('#l-q').addEventListener('input', (e) => { st.q = e.target.value; render(); });
@@ -1202,8 +1202,8 @@ async function pingModal(a) {
   { acts: { close: () => closeModal(), job: () => openJob(p.job_id) } });
 }
 
-function AgentPage([id]) {
-  const st = { tab: 'updates', sel: new Set(), data: null };
+function AgentPage([id, tab]) {
+  const st = { tab: ['updates', 'agent', 'jobs', 'system', 'apps'].includes(tab) ? tab : 'updates', sel: new Set(), data: null };
   const upd = () => st.data?.agent?.state?.updates || null;
   function header(a, groups) {
     const f = a.facts;
@@ -1603,6 +1603,87 @@ function Systems() {
   };
 }
 
+function vulnBadges(v, missing) {
+  const why = { old_agent: 'Needs agent 0.3.6 or later', unsupported: 'No security data for this OS release', pending: 'Being looked up' };
+  if (!v) return html`<span class="dim" title="${why[missing] || 'Not checked'}">—</span>`;
+  switch (v.status) {
+    case 'ok': return html`<span class="badge ok xs">ok</span>`;
+    case 'pending': return html`<span class="dim">…</span>`;
+    case 'not_distro': return html`<span class="dim" title="From ${v.origin}: not covered by the distribution's security data">not checked</span>`;
+    case 'manual': return html`<span class="dim" title="Not installed from a package source">not checked</span>`;
+    case 'old_agent': return html`<span class="dim" title="Needs agent 0.3.6 or later">—</span>`;
+  }
+  return html`${v.fixable ? html`<span class="badge ${v.red ? 'sec' : 'upd'} xs">${v.fixable} fixable</span> ` : ''}${v.open ? html`<span class="badge ${v.kev && !v.fixable ? 'sec' : 'mute'} xs">${v.open} without fix</span>` : ''}${!v.fixable && !v.open && v.kev ? html`<span class="badge sec xs">${v.kev} exploited</span>` : ''}`;
+}
+// The worst of several systems running the same version.
+function worstVulns(systems) {
+  const found = systems.map((s) => s.vulns).filter((v) => v && v.status === 'found');
+  if (found.length) {
+    return { status: 'found', fixable: Math.max(...found.map((v) => v.fixable)), open: Math.max(...found.map((v) => v.open)),
+      kev: Math.max(...found.map((v) => v.kev)), red: found.some((v) => v.red) };
+  }
+  return systems.map((s) => s.vulns).find((v) => v && v.status === 'ok') || systems.map((s) => s.vulns).find(Boolean) || null;
+}
+const hasCVE = (v) => v && v.status === 'found';
+
+function AppList() {
+  const st = { d: null, q: '', f: 'all' };
+  const verKey = (app, full) => app + '|' + full;
+  function render() {
+    if (!st.d) return;
+    const q = st.q.trim().toLowerCase();
+    const keep = (v) => st.f === 'all' || (st.f === 'upd' ? v.systems.some((s) => s.update) : hasCVE(worstVulns(v.systems)));
+    const apps = st.d.apps.filter((a) => !q || a.name.toLowerCase().includes(q))
+      .map((a) => ({ ...a, versions: a.versions.filter(keep) })).filter((a) => a.versions.length);
+    const count = (f) => st.d.apps.reduce((n, a) => n + a.versions.filter(f).length, 0);
+    setHTML($('#al-chips'), html`${[['all', 'All', () => true], ['upd', 'With updates', (v) => v.systems.some((s) => s.update)], ['cve', 'With CVEs', (v) => hasCVE(worstVulns(v.systems))]]
+      .map(([k, l, f]) => html`<button class="chip ${st.f === k ? 'on' : ''}" data-act="f" data-v="${k}">${l}<span class="n">${count(f)}</span></button>`)}`);
+    if (!st.d.apps.length) return setHTML($('#al-list'), html`<div class="panel empty">No application data yet. It arrives with the systems' next update check.</div>`);
+    if (!apps.length) return setHTML($('#al-list'), html`<div class="panel empty">Nothing matches.</div>`);
+    setHTML($('#al-list'), html`<div class="stack">${apps.map((a) => html`<div class="panel"><div class="panel-pad" style="padding-bottom:6px"><h2 style="margin:0">${a.name}</h2></div>
+      <table class="tbl"><thead><tr><th>Version</th><th class="w1">Systems</th><th>Updates</th><th>Security</th></tr></thead>
+      <tbody>${a.versions.map((v) => {
+        const n = v.systems.filter((s) => s.update).length;
+        return html`<tr class="click" data-act="ver" data-k="${verKey(a.name, v.full)}" title="Show the systems running this version">
+          <td><b class="mono">${v.version || v.full}</b> <span class="dim small mono">${v.full}</span></td>
+          <td class="num"><b>${v.systems.length}</b></td>
+          <td>${n ? html`<span class="badge upd xs">update on ${n} of ${v.systems.length}</span>` : html`<span class="dim small">no update</span>`}</td>
+          <td class="nowrap">${vulnBadges(worstVulns(v.systems))}</td></tr>`;
+      })}</tbody></table></div>`)}</div>`);
+  }
+  function openVersion(app, v) {
+    openModal(html`<h3>${app} ${v.version}</h3><div class="muted small mono">${v.full} · ${v.systems.length} system${v.systems.length === 1 ? '' : 's'}</div>
+      <div class="tbl-wrap" style="margin-top:12px;max-height:60vh"><table class="tbl"><thead><tr><th>System</th><th>OS</th><th>Update</th><th>Security</th></tr></thead>
+      <tbody>${v.systems.map((s) => html`<tr class="click" data-act="go" data-id="${s.id}" title="Open ${s.name}">
+        <td class="nowrap"><span class="dot ${s.online ? 'on' : 'off'}"></span> <b>${s.name}</b>${s.online ? '' : html` <span class="small c-red">offline</span>`}${s.status === 'report_only' ? html` <span class="badge info xs">report only</span>` : ''}</td>
+        <td class="small muted">${s.os}</td>
+        <td class="mono small">${s.update ? html`<span class="badge upd xs">${s.update}</span>` : html`<span class="dim">—</span>`}</td>
+        <td class="nowrap">${vulnBadges(s.vulns, s.vuln_status)}</td></tr>`)}</tbody></table></div>
+      <div class="actions"><button class="btn" data-act="cancel">Close</button></div>`, {
+      wide: true,
+      acts: { cancel: () => closeModal(), go: (t) => { closeModal(); location.hash = `#/system/${t.dataset.id}/apps`; } },
+    });
+  }
+  return {
+    interval: 15000,
+    mount(el) {
+      el.innerHTML = r(html`${subTabs('dashboard', 'apps')}<div class="page-head"><div><h1>Application List</h1><div class="sub">Which applications run where, per version</div></div></div>
+        <div class="toolbar"><input type="search" class="search" id="al-q" placeholder="Search applications…"><div class="chips" id="al-chips"></div></div>
+        <div id="al-list"></div>`);
+      $('#al-q').addEventListener('input', (e) => { st.q = e.target.value; render(); });
+    },
+    async refresh() { st.d = await GET('apps'); render(); },
+    acts: {
+      f: (t) => { st.f = t.dataset.v; render(); },
+      ver: (t) => {
+        const i = t.dataset.k.indexOf('|'), app = t.dataset.k.slice(0, i), full = t.dataset.k.slice(i + 1);
+        const v = st.d.apps.find((a) => a.name === app)?.versions.find((x) => x.full === full);
+        if (v) openVersion(app, v);
+      },
+    },
+  };
+}
+
 function endlessList({ load, keyOf, size = 50 }) {
   const p = { items: [], pending: [], more: true, busy: false, gap: false, data: null, obs: null };
   const atTop = () => window.scrollY < 150;
@@ -1666,24 +1747,46 @@ function Jobs() {
       if (st.active) q.set('active', '1');
       if (st.user) q.set('user', st.user);
       if (st.agent) q.set('agent', st.agent);
-      if (last) { q.set('before', last.id); q.set('before_t', String(last.created)); }
+      if (last) {
+        const oldest = last.batch ? last.batch[last.batch.length - 1] : last;
+        q.set('before', oldest.id); q.set('before_t', String(oldest.created));
+      }
       const d = await GET('jobs?' + q);
       return { ...d, items: d.jobs };
     },
   });
+  const open = new Set();
+  const isActive = (j) => j.status === 'queued' || j.status === 'running';
+  function batchStatus(b) {
+    const n = (s) => b.filter((j) => j.status === s).length;
+    const busy = b.filter(isActive).length, bad = n('failed') + n('timeout') + n('cancelled');
+    if (st.active) return html`<span class="badge info"><span class="spin" style="width:10px;height:10px"></span>${busy} of ${b.length} still running</span>`;
+    return html`${busy ? html`<span class="badge info"><span class="spin" style="width:10px;height:10px"></span>${busy} running</span> ` : ''}${n('success') ? html`<span class="badge ok">${n('success')} succeeded</span> ` : ''}${bad ? html`<span class="badge sec">${bad} failed</span>` : ''}`;
+  }
   function render() {
     const d = list.data;
     if (!d) return;
     const names = d.names || {};
+    const sysCell = (j) => (names[j.agent_id] ? html`<a href="#/system/${j.agent_id}">${names[j.agent_id]}</a>` : html`<span class="dim">${j.agent_id}</span>`);
+    const jobRow = (j, sub) => html`<tr class="click ${sub ? 'subrow' : ''}" data-act="open-job" data-id="${j.id}"><td><b>${jobTitle(j)}</b><div class="dim small">${jobParams(j)}${j.error ? html` <span style="color:var(--red)">${j.error}</span>` : ''}</div></td>
+        <td>${sysCell(j)}</td>
+        <td>${statusBadge(j.status)}</td><td class="muted">${j.actor}</td><td class="muted">${when(j.created)}</td>
+        <td class="muted">${j.finished ? dur(j.finished - (j.started || j.created)) : '—'}</td></tr>`;
+    const batchRow = (j) => {
+      const b = j.batch, shut = !open.has(j.id);
+      const end = b.every((x) => x.finished) ? Math.max(...b.map((x) => x.finished)) : 0;
+      const start = Math.min(...b.map((x) => x.created));
+      return html`<tr class="click batchrow" data-act="batch" data-id="${j.id}"><td><span class="fold ${shut ? 'shut' : ''}">${icon('down')}</span> <b>${j.actor === 'scheduler' ? 'Scheduled ' : ''}${jobTitle(j)}</b></td>
+        <td><b>${b.length} systems</b></td><td class="nowrap">${batchStatus(b)}</td><td class="muted">${j.actor}</td><td class="muted">${when(start)}</td>
+        <td class="muted">${end ? dur(end - start) : '—'}</td></tr>
+        ${shut ? '' : b.filter((x) => !st.active || isActive(x)).map((x) => jobRow(x, true))}`;
+    };
     const actors = [...(d.users || []), 'scheduler'];
     setHTML($('#j-user'), html`<option value="">All users</option>${actors.map((n) => html`<option value="${n}" ${st.user === n ? 'selected' : ''}>${n === 'scheduler' ? 'scheduler (automatic)' : n}</option>`)}`);
     const sysOpts = Object.entries(names).sort((a, b) => a[1].localeCompare(b[1]));
     setHTML($('#j-sys'), html`<option value="">All systems</option>${sysOpts.map(([id, n]) => html`<option value="${id}" ${st.agent === id ? 'selected' : ''}>${n}</option>`)}`);
     setHTML($('#j-list'), list.items.length ? html`${list.banner()}<div class="panel"><table class="tbl"><thead><tr><th>Job</th><th>System</th><th>Status</th><th>By</th><th>Created</th><th>Duration</th></tr></thead>
-      <tbody>${list.items.map((j) => html`<tr class="click" data-act="open-job" data-id="${j.id}"><td><b>${jobTitle(j)}</b><div class="dim small">${jobParams(j)}${j.error ? html` <span style="color:var(--red)">${j.error}</span>` : ''}</div></td>
-        <td>${names[j.agent_id] ? html`<a href="#/system/${j.agent_id}">${names[j.agent_id]}</a>` : html`<span class="dim">${j.agent_id}</span>`}</td>
-        <td>${statusBadge(j.status)}</td><td class="muted">${j.actor}</td><td class="muted">${when(j.created)}</td>
-        <td class="muted">${j.finished ? dur(j.finished - (j.started || j.created)) : '—'}</td></tr>`)}</tbody></table></div>${list.footer(d.retention_days)}`
+      <tbody>${list.items.map((j) => (j.batch ? batchRow(j) : jobRow(j)))}</tbody></table></div>${list.footer(d.retention_days)}`
       : html`<div class="panel empty">${st.agent || st.user || st.active ? 'No jobs for this filter.' : 'No jobs.'}</div>`);
   }
   const restart = () => { list.reset(); window.scrollTo({ top: 0 }); view.refresh(); };
@@ -1708,6 +1811,7 @@ function Jobs() {
     acts: {
       f: (t) => { st.active = t.dataset.v === '1'; document.querySelectorAll('.chips .chip').forEach((c) => c.classList.toggle('on', c === t)); restart(); },
       'to-top': async () => { await list.toTop(); render(); },
+      batch: (t) => { const id = t.dataset.id; if (open.has(id)) open.delete(id); else open.add(id); render(); },
     },
   };
 }

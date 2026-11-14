@@ -83,6 +83,14 @@ var defs = []def{
 	{"SSH server", regexp.MustCompile(`^openssh-server$`), false, []string{"ssh.service", "ssh.socket", "sshd.service"}},
 	{"sudo", regexp.MustCompile(`^sudo$`), false, nil},
 	{"WireGuard", regexp.MustCompile(`^wireguard-tools$`), false, []string{"wg-quick@*.service"}},
+	{"Exim", regexp.MustCompile(`^exim4-daemon-(?:light|heavy)$`), false, []string{"exim4.service"}},
+	{"ProFTPD", regexp.MustCompile(`^proftpd-(?:core|basic)$`), false, []string{"proftpd.service"}},
+	{"Tomcat", regexp.MustCompile(`^tomcat(\d+)$`), true, []string{"tomcat{v}.service"}},
+	{"Mosquitto", regexp.MustCompile(`^mosquitto$`), false, []string{"mosquitto.service"}},
+	{"Grafana", regexp.MustCompile(`^grafana(?:-enterprise)?$`), false, []string{"grafana-server.service"}},
+	{"Tailscale", regexp.MustCompile(`^tailscale$`), false, []string{"tailscaled.service"}},
+	{"QEMU", regexp.MustCompile(`^(?:qemu-system-[a-z0-9]+|pve-qemu-kvm)$`), false, nil},
+	{"Unbound", regexp.MustCompile(`^unbound$`), false, []string{"unbound.service"}},
 }
 
 func UnitPatterns() []string {

@@ -373,6 +373,7 @@ func (s *Server) routes() http.Handler {
 	change("POST /api/ui/settings", s.handleSettingsSave)
 	view("GET /api/ui/audit", s.handleAudit)
 	view("GET /api/ui/releases", s.handleReleases)
+	view("GET /api/ui/apps", s.handleAppInventory)
 	view("GET /api/ui/vulns/queue", s.handleVulnQueue)
 	change("POST /api/ui/releases/check", s.handleReleasesCheck)
 	change("POST /api/ui/master/update", s.handleMasterUpdate)

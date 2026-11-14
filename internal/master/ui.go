@@ -461,7 +461,13 @@ func (s *Server) handleJobs(w http.ResponseWriter, r *http.Request) {
 	beforeT, _ := strconv.ParseInt(q.Get("before_t"), 10, 64)
 	s.st.mu.Lock()
 	defer s.st.mu.Unlock()
-	jobs, more := s.jobsPage(q.Get("agent"), q.Get("user"), q.Get("active") == "1", q.Get("before"), beforeT, limit)
+	var jobs any
+	var more bool
+	if q.Get("agent") == "" {
+		jobs, more = s.jobsGrouped(q.Get("user"), q.Get("active") == "1", q.Get("before"), beforeT, limit)
+	} else {
+		jobs, more = s.jobsPage(q.Get("agent"), q.Get("user"), q.Get("active") == "1", q.Get("before"), beforeT, limit)
+	}
 	names := map[string]string{}
 	for _, a := range s.st.st.Agents {
 		names[a.ID] = a.Name
@@ -474,26 +480,86 @@ func (s *Server) handleJobs(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, map[string]any{"jobs": jobs, "names": names, "users": users, "more": more, "retention_days": s.st.st.Settings.RetentionDays})
 }
 
-func (s *Server) jobsPage(agentID, actor string, activeOnly bool, beforeID string, beforeT int64, limit int) ([]*Job, bool) {
-	out := []*Job{}
-	start := len(s.st.st.Jobs) - 1
-	if beforeID != "" {
-		start = -1
-		for i, j := range s.st.st.Jobs {
-			if j.ID == beforeID {
-				start = i - 1
-				break
-			}
+// jobsStart: the index to continue from after the job beforeID (or, if it
+// is gone, the first job created before beforeT). Caller holds s.st.mu.
+func (s *Server) jobsStart(beforeID string, beforeT int64) int {
+	if beforeID == "" {
+		return len(s.st.st.Jobs) - 1
+	}
+	for i, j := range s.st.st.Jobs {
+		if j.ID == beforeID {
+			return i - 1
 		}
-		if start == -1 && beforeT > 0 {
-			for i := len(s.st.st.Jobs) - 1; i >= 0; i-- {
-				if s.st.st.Jobs[i].Created < beforeT {
-					start = i
-					break
-				}
+	}
+	if beforeT > 0 {
+		for i := len(s.st.st.Jobs) - 1; i >= 0; i-- {
+			if s.st.st.Jobs[i].Created < beforeT {
+				return i
 			}
 		}
 	}
+	return -1
+}
+
+// jobEntry is a job, or a batch of jobs started together on several
+// systems (the job itself is the newest of them).
+type jobEntry struct {
+	*Job
+	Batch []*Job `json:"batch,omitempty"`
+}
+
+const batchWindow = 10 // seconds between the first and last job of one batch
+
+func batchKey(j *Job) string { return j.Actor + "|" + j.Type + "|" + j.Feature + "|" + j.Action }
+
+// jobsGrouped lists jobs newest first with batches folded into one entry.
+// With activeOnly, a batch stays (whole) while any of its jobs runs.
+func (s *Server) jobsGrouped(actor string, activeOnly bool, beforeID string, beforeT int64, limit int) ([]jobEntry, bool) {
+	out := []jobEntry{}
+	jobs := s.st.st.Jobs
+	for i := s.jobsStart(beforeID, beforeT); i >= 0; {
+		j := jobs[i]
+		group := []*Job{j}
+		seen := map[string]bool{j.AgentID: true}
+		k := i - 1
+		for ; k >= 0; k-- {
+			o := jobs[k]
+			if batchKey(o) != batchKey(j) || j.Created-o.Created > batchWindow || seen[o.AgentID] {
+				break
+			}
+			seen[o.AgentID] = true
+			group = append(group, o)
+		}
+		i = k
+		if actor != "" && !strings.EqualFold(j.Actor, actor) {
+			continue
+		}
+		if activeOnly {
+			active := false
+			for _, g := range group {
+				if !g.done() {
+					active = true
+				}
+			}
+			if !active {
+				continue
+			}
+		}
+		if len(out) == limit {
+			return out, true
+		}
+		e := jobEntry{Job: j}
+		if len(group) > 1 {
+			e.Batch = group
+		}
+		out = append(out, e)
+	}
+	return out, false
+}
+
+func (s *Server) jobsPage(agentID, actor string, activeOnly bool, beforeID string, beforeT int64, limit int) ([]*Job, bool) {
+	out := []*Job{}
+	start := s.jobsStart(beforeID, beforeT)
 	for i := start; i >= 0; i-- {
 		j := s.st.st.Jobs[i]
 		if (agentID == "" || j.AgentID == agentID) && (actor == "" || strings.EqualFold(j.Actor, actor)) && (!activeOnly || !j.done()) {
