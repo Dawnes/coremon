@@ -1139,7 +1139,7 @@ async function pingModal(a) {
 }
 
 function AgentPage([id, tab]) {
-  const st = { tab: ['updates', 'agent', 'jobs', 'system', 'apps'].includes(tab) ? tab : 'updates', sel: new Set(), data: null };
+  const st = { tab: ['updates', 'jobs', 'system', 'apps'].includes(tab) ? tab : 'system', sel: new Set(), data: null, appsAll: false };
   const upd = () => st.data?.agent?.state?.updates || null;
   function header(a, groups) {
     const f = a.facts;
@@ -1230,12 +1230,14 @@ function AgentPage([id, tab]) {
     return html`<div class="panel empty"><div class="big">✨</div>Everything is up to date.${o?.status === 'soon'
       ? html`<div class="c-amber small" style="margin-top:10px">Support for ${os} ends on ${ymd(o.end)}.</div>` : ''}</div>`;
   }
-  function agentTab(a) {
+  function agentPanel(a) {
+    const kv = [['Agent ID', a.id], ['Enrolled', fmtDate(a.enrolled_at)], ['Last seen', fmtDate(a.last_seen, true)]];
     return html`
       <div class="panel panel-pad">
-        <h2>Agent version</h2>
+        <h2>Agent</h2>
         <div class="row">${verPill(a)}${a.core_latest ? html`<span class="muted small">latest available: <span class="ver">${a.core_latest}</span></span>` : ''}</div>
         ${a.desired_core ? html`<div class="notice blue" style="margin:14px 0 0">Change to ${a.desired_core} requested${a.online ? ' — the agent downloads the signed binary and restarts.' : ' — applies as soon as the system is online.'}</div>` : ''}
+        <div class="facts" style="margin-top:14px">${kv.map(([k, v]) => html`<div><div class="k">${k}</div><div class="v">${v || '—'}</div></div>`)}</div>
         <div class="row" style="margin-top:14px"><span class="muted small">Functions:</span>${(a.features || []).map((n) => html`<span class="tag mono">${n}</span>`)}</div>
         <div style="margin-top:14px"><a href="#/settings/releases">${canChange() ? 'Change the agent version in Releases' : 'Agent versions in Releases'}</a></div>
       </div>`;
@@ -1253,7 +1255,9 @@ function AgentPage([id, tab]) {
     const btn = ifChange(html`<button class="btn sm" data-act="apps-scan" ${a.online && !busy ? '' : 'disabled'} title="${a.online ? 'Scan the installed applications now' : 'The system is offline'}">
       ${busy ? html`<span class="spin"></span>` : icon('refresh')} Refresh now</button>`);
     const vul = a.vulns;
-    const head = html`<div class="row" style="margin-bottom:12px"><span class="muted small">${s?.scanned_at ? html`Scanned ${when(s.scanned_at)} · from the package manager` : 'Not scanned yet'}${vul?.checked_at ? html` · CVEs looked up ${when(vul.checked_at)}` : ''}</span><span class="spacer"></span>${btn}</div>
+    const all = s?.apps || [], nInst = all.filter((x) => x.installed).length;
+    const sw = all.length ? html`<div class="chips"><button class="chip ${st.appsAll ? '' : 'on'}" data-act="apps-view" data-v="0">Installed<span class="n">${nInst}</span></button><button class="chip ${st.appsAll ? 'on' : ''}" data-act="apps-view" data-v="1">All<span class="n">${all.length}</span></button></div>` : '';
+    const head = html`<div class="row" style="margin-bottom:12px">${sw}<span class="muted small">${s?.scanned_at ? html`Scanned ${when(s.scanned_at)} · from the package manager` : 'Not scanned yet'}${vul?.checked_at ? html` · CVEs looked up ${when(vul.checked_at)}` : ''}</span><span class="spacer"></span>${btn}</div>
       ${vul?.status === 'old_agent' ? html`<div class="notice blue">The CVE check needs agent 0.3.6 or later on this system. <a href="#/settings/releases">Update the agent</a>.</div>` : ''}
       ${vul?.status === 'unsupported' ? html`<div class="notice">${a.os_support?.status === 'expired'
         ? `${osLabel(a.facts)} is no longer supported: no security data and no fixes are published, so it can't be checked. Upgrade to a supported release.`
@@ -1285,8 +1289,13 @@ function AgentPage([id, tab]) {
     const ports = (x) => (x.ports?.length
       ? html`<span title="${x.ports.map((p) => `${p.port}/${p.proto} on ${p.addr}`).join('\n')}">${x.ports.map((p, i) => html`${i ? ', ' : ''}${p.port}/${p.proto}${p.local ? html` <span class="dim">(local)</span>` : ''}`)}</span>`
       : html`<span class="dim">—</span>`);
+    const rows = st.appsAll ? all : all.filter((x) => x.installed);
+    if (!rows.length) {
+      return html`${head}<div class="panel empty"><div>None of the ${all.length} monitored applications were found on this system.</div>
+        <div style="margin-top:10px"><button type="button" class="linkbtn" data-act="apps-view" data-v="1">Show all</button></div></div>`;
+    }
     return html`${head}<div class="panel scrollx"><table class="tbl"><thead><tr><th>Application</th><th>Installed</th><th>Version</th><th title="Known vulnerabilities (CVEs) of the installed version">Security</th><th>Running</th><th>Listening on</th></tr></thead>
-      <tbody>${s.apps.map((x) => x.installed
+      <tbody>${rows.map((x) => x.installed
         ? html`<tr><td><b>${x.name}</b></td><td><span class="badge ok xs">yes</span></td><td class="mono small" title="${x.full}${x.package ? ' (' + x.package + ')' : ''}${x.origin ? ' from ' + x.origin : ''}">${x.version || '—'}</td>
             <td class="nowrap">${security(x)}</td><td>${running(x)}</td><td class="mono small">${ports(x)}</td></tr>`
         : html`<tr class="dimrow"><td>${x.name}</td><td><span class="dim small">not detected</span></td><td></td><td></td><td></td><td></td></tr>`)}</tbody></table></div>`;
@@ -1304,19 +1313,18 @@ function AgentPage([id, tab]) {
         : html`<span class="badge sec xs">${h.failed_count} failed</span> ${(h.failed || []).join(', ')}${h.failed_count > (h.failed || []).length ? ', …' : ''}`],
       ['Automatic updates', ({ on: html`<span class="badge info xs">on</span> unattended-upgrades`, off: 'off', not_installed: 'not installed' })[h?.auto_updates] || '—'],
       ['Last upgrade', h?.last_upgrade ? `${fmtDate(h.last_upgrade.time)} (${ago(h.last_upgrade.time)}, ${h.last_upgrade.packages} package${h.last_upgrade.packages === 1 ? '' : 's'}) · by ${upgradedBy(h.last_upgrade.by)}` : h ? 'none recorded' : '—'],
-      ['Agent ID', a.id], ['Agent version', a.core_version], ['Enrolled', fmtDate(a.enrolled_at)], ['Last seen', fmtDate(a.last_seen, true)],
     ];
-    return html`<div class="panel panel-pad"><div class="facts">${kv.map(([k, v]) => html`<div><div class="k">${k}</div><div class="v">${v ?? '—'}</div></div>`)}</div></div>`;
+    return html`<div class="panel panel-pad" style="margin-bottom:16px"><div class="facts">${kv.map(([k, v]) => html`<div><div class="k">${k}</div><div class="v">${v ?? '—'}</div></div>`)}</div></div>${agentPanel(a)}`;
   }
   function render() {
     const d = st.data;
     if (!d) return;
     const a = d.agent;
     setHTML($('#a-head'), header(a, d.groups));
-    const tabs = a.below_min ? [['agent', 'Agent']] : [['updates', 'Updates'], ['agent', 'Agent'], ['jobs', 'Jobs'], ['system', 'System'], ['apps', 'Applications']];
+    const tabs = a.below_min ? [['system', 'System']] : [['system', 'System'], ['updates', 'Updates'], ['jobs', 'Jobs'], ['apps', 'Applications']];
     if (!tabs.some(([k]) => k === st.tab)) st.tab = tabs[0][0];
-    setHTML($('#a-tabs'), tabs.map(([k, l]) => html`<button class="${st.tab === k ? 'on' : ''}" data-act="tab" data-t="${k}">${l}${k === 'updates' && a.updates?.total ? html` <span class="badge upd">${a.updates.total}</span>` : ''}${k === 'agent' && !a.core_is_latest && a.core_latest ? html` <span class="badge upd">↑</span>` : ''}</button>`));
-    const body = { updates: updatesTab, agent: agentTab, jobs: jobsTab, system: systemTab, apps: appsTab }[st.tab](a);
+    setHTML($('#a-tabs'), tabs.map(([k, l]) => html`<button class="${st.tab === k ? 'on' : ''}" data-act="tab" data-t="${k}">${l}${k === 'updates' && a.updates?.total ? html` <span class="badge upd">${a.updates.total}</span>` : ''}${k === 'system' && !a.core_is_latest && a.core_latest ? html` <span class="badge upd" title="A newer agent version is available">↑</span>` : ''}</button>`));
+    const body = a.below_min ? agentPanel(a) : { updates: updatesTab, jobs: jobsTab, system: systemTab, apps: appsTab }[st.tab](a);
     setHTML($('#a-body'), body);
   }
   const a = () => st.data.agent;
@@ -1332,6 +1340,7 @@ function AgentPage([id, tab]) {
     },
     acts: {
       tab: (t) => { st.tab = t.dataset.t; render(); },
+      'apps-view': (t) => { st.appsAll = t.dataset.v === '1'; render(); },
       'agent-update': async () => {
         const res = await POST(`agents/${id}/core`, {});
         if (res.job) openJob(res.job); else toast('Update requested — it runs when the system is online', 'ok');
@@ -2154,7 +2163,7 @@ function SettingsUsers() {
       },
       lock: async (t) => {
         const u = userBy(t.dataset.id);
-        if (!(await confirmBox(`Lock ${u.name}?`, `${u.name} is signed out at once and cannot sign in until an administrator unlocks the account. Nothing else changes.`, { okText: 'Lock account', danger: true }))) return;
+        if (!(await confirmBox(`Lock ${u.name}?`, `${u.name} is signed out at once and cannot sign in until an administrator unlocks the account.`, { okText: 'Lock account', danger: true }))) return;
         await POST('users/' + u.id, { locked: true });
         toast(`${u.name} locked (signed out)`, 'ok');
         view.refresh();
