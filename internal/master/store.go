@@ -239,6 +239,8 @@ type State struct {
 	Jobs        []*Job                  `json:"jobs"`
 
 	NVDKey string `json:"nvd_key,omitempty"`
+
+	CheckRoundAt int64 `json:"check_round_at,omitempty"`
 }
 
 const maxJobs = 2000

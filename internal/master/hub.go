@@ -519,6 +519,17 @@ func (s *Server) schedulerTick() {
 	defer s.st.mu.Unlock()
 	nowU := time.Now().Unix()
 	interval := int64(s.st.st.Settings.CheckIntervalHours) * 3600
+	// Update checks run for all systems at once, one round per interval.
+	round := nowU-s.st.st.CheckRoundAt >= interval
+	if round {
+		s.st.st.CheckRoundAt = nowU
+		s.st.markDirty()
+	}
+	type roundCheck struct {
+		a *Agent
+		j *Job
+	}
+	var checks []roundCheck
 
 	for _, a := range s.st.st.Agents {
 		if a.Removing || !s.online(a, nowU) {
@@ -548,14 +559,17 @@ func (s *Server) schedulerTick() {
 		for i := range a.Features {
 			f := &a.Features[i]
 			spec := f.Action("check")
-			if spec == nil || nowU-a.StateAt[f.Name] < interval {
+			if spec == nil || !round {
 				continue
 			}
 			if s.openJob(a.ID, proto.CmdAction, f.Name) || s.recentFailure(a.ID, proto.CmdAction, f.Name, 15*time.Minute) {
 				continue
 			}
-			s.enqueue(a, &Job{Type: proto.CmdAction, Feature: f.Name, Action: "check", Params: json.RawMessage("{}"), Actor: "scheduler", Timeout: spec.Timeout})
+			checks = append(checks, roundCheck{a, &Job{Type: proto.CmdAction, Feature: f.Name, Action: "check", Params: json.RawMessage("{}"), Actor: "scheduler", Timeout: spec.Timeout}})
 		}
+	}
+	for _, c := range checks { // queued together: one row on the Jobs page
+		s.enqueue(c.a, c.j)
 	}
 
 	for _, j := range s.st.st.Jobs {
