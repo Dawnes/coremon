@@ -43,7 +43,9 @@ func TestTwoFA(t *testing.T) {
 		t.Fatalf("wrong code accepted when turning on: %d", code)
 	}
 	bobOther, _, _ := login("bob", "secret1")
-	if code, body := bob.do("POST", "/api/ui/account/2fa/enable", `{"code":"`+totpCode(st.Secret, now())+`"}`); code != 200 {
+	// Remember the step used: the 30-second window may roll over during the test.
+	used := now()
+	if code, body := bob.do("POST", "/api/ui/account/2fa/enable", `{"code":"`+totpCode(st.Secret, used)+`"}`); code != 200 {
 		t.Fatalf("enable: %d %s", code, body)
 	}
 	if code, _ := bobOther.do("GET", "/api/ui/overview", ""); code != 401 {
@@ -77,16 +79,16 @@ func TestTwoFA(t *testing.T) {
 		t.Fatal("wrong code accepted")
 	}
 	// The code used to turn 2FA on cannot be used again; the next one works.
-	if code, _ := c2.do("POST", "/api/ui/login/code", `{"ticket":"`+tk.Ticket+`","code":"`+totpCode(st.Secret, now())+`"}`); code != 401 {
+	if code, _ := c2.do("POST", "/api/ui/login/code", `{"ticket":"`+tk.Ticket+`","code":"`+totpCode(st.Secret, used)+`"}`); code != 401 {
 		t.Fatal("used code accepted again")
 	}
-	if code, body := c2.do("POST", "/api/ui/login/code", `{"ticket":"`+tk.Ticket+`","code":"`+totpCode(st.Secret, now()+1)+`"}`); code != 200 {
+	if code, body := c2.do("POST", "/api/ui/login/code", `{"ticket":"`+tk.Ticket+`","code":"`+totpCode(st.Secret, used+1)+`"}`); code != 200 {
 		t.Fatalf("code step: %d %s", code, body)
 	}
 	if code, _ := c2.do("GET", "/api/ui/overview", ""); code != 200 {
 		t.Fatal("not signed in after the code")
 	}
-	if code, _ := c2.do("POST", "/api/ui/login/code", `{"ticket":"`+tk.Ticket+`","code":"`+totpCode(st.Secret, now()+1)+`"}`); code != 401 {
+	if code, _ := c2.do("POST", "/api/ui/login/code", `{"ticket":"`+tk.Ticket+`","code":"`+totpCode(st.Secret, used+1)+`"}`); code != 401 {
 		t.Error("ticket reusable after sign-in")
 	}
 
