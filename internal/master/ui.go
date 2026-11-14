@@ -430,7 +430,7 @@ func (s *Server) handleActions(w http.ResponseWriter, r *http.Request) {
 	for _, id := range req.AgentIDs {
 		a := s.st.st.Agents[id]
 		if d := s.st.st.Locals[id]; d != nil {
-			errs = append(errs, d.Name+": monitored locally by the master; agent actions do not apply")
+			errs = append(errs, d.Name+": agentless, monitored by the master; agent actions do not apply")
 			continue
 		}
 		if a == nil {

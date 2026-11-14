@@ -384,7 +384,7 @@ const SUBNAV = {
   dashboard: () => [['overview', 'Overview'], ['devices', 'Device List'], ['apps', 'Application List']],
   about: () => [['about', 'About'], ['license', 'License']],
   history: () => [['jobs', 'Jobs'], ['audit', 'Audit log']],
-  settings: () => [['general', 'General'], ['devices', 'Devices'], ['local', 'Local'], ['releases', 'Releases'], ...(canChange() ? [['users', 'Users']] : []), ['account', 'My Account'], ['identity', 'Identity'], ...(canChange() ? [['backups', 'Backups']] : [])],
+  settings: () => [['general', 'General'], ['devices', 'Devices'], ['agentless', 'Agentless'], ['releases', 'Releases'], ...(canChange() ? [['users', 'Users']] : []), ['account', 'My Account'], ['identity', 'Identity'], ...(canChange() ? [['backups', 'Backups']] : [])],
 };
 function currentRoute() {
   const p = location.hash.replace(/^#\/?/, '').split('/');
@@ -444,7 +444,7 @@ function route() {
   const parts = location.hash.replace(/^#\/?/, '').split('/');
   const [section, sub] = currentRoute();
   const subViews = {
-    settings: { general: SettingsGeneral, devices: Devices, local: SettingsLocal, releases: Releases, users: SettingsUsers, backups: SettingsBackups, account: SettingsAccount, identity: SettingsIdentity },
+    settings: { general: SettingsGeneral, devices: Devices, agentless: SettingsLocal, releases: Releases, users: SettingsUsers, backups: SettingsBackups, account: SettingsAccount, identity: SettingsIdentity },
     history: { jobs: Jobs, audit: Audit },
     dashboard: { overview: Dashboard, devices: DeviceList, apps: AppList },
     about: { about: AboutPage, license: LicensePage },
@@ -679,7 +679,7 @@ function agentMatches(a, f, q, groups) {
   if (f === 'agent' && (a.core_is_latest || !a.core_version)) return false;
   if (q) {
     const g = groups.find((x) => x.id === a.group_id);
-    const hay = `${a.name} ${isLocal(a) ? 'local ping' : osLabel(a.facts)} ${(a.facts.ips || []).join(' ')} ${g ? g.name : ''} ${a.core_version}`.toLowerCase();
+    const hay = `${a.name} ${isLocal(a) ? 'agentless ping' : osLabel(a.facts)} ${(a.facts.ips || []).join(' ')} ${g ? g.name : ''} ${a.core_version}`.toLowerCase();
     if (!hay.includes(q.toLowerCase())) return false;
   }
   return true;
@@ -707,7 +707,7 @@ function Dashboard() {
     return html`
       <div class="card ${accent}" data-act="open-agent" data-id="${a.id}" ${canChange() ? raw('data-drag="agent" draggable="true"') : ''}>
         <div class="top">${ifChange(html`<span class="grip" title="Drag to reorder or move to another group">${icon('grip')}</span>`)}${agentDot(a)}
-          <div style="min-width:0"><div class="name">${a.name}</div><div class="os">Local device · ping</div><div class="os"><span class="ip">${L.address}</span></div></div></div>
+          <div style="min-width:0"><div class="name">${a.name}</div><div class="os">Agentless · ping</div><div class="os"><span class="ip">${L.address}</span></div></div></div>
         <div class="mid">${big}<div class="badges">${uptime}</div></div>
         <div class="inforow"><span class="uptime">${icon('clock')}${state === 'wait' ? (L.fails ? 'not decided yet' : 'not checked yet') : `${L.up ? 'up' : 'down'} ${dur(now() - L.since)}`}</span><span class="spacer"></span>${state === 'up' ? html`<span class="tag mono">${rttText(L.rtt_us)}</span>` : ''}</div>
         <div class="foot"><span>${L.last_check ? when(L.last_check, 'pinged ') : 'waiting'}</span></div>
@@ -1043,7 +1043,7 @@ function DeviceList() {
       <td class="nowrap"><a href="#/device/${a.id}"><b>${a.name}</b></a></td>
       <td class="opt muted">${groupName(a.group_id)}</td>
       <td class="opt small nowrap">${(f.ips || [])[0] || ''}</td>
-      <td class="opt nowrap" title="${a.below_min || isLocal(a) ? '' : osLabel(f)}">${isLocal(a) ? html`<span class="dim" title="Monitored by the master with a ping; no agent">local · ping</span>` : a.below_min ? html`<span class="dim">—</span>` : clipText(osShort(f), 14)}${o?.status === 'expired' ? html` <span class="badge sec xs" title="${osSupportText(o, f.os_id)}">EOL</span>` : o?.status === 'soon' ? html` <span class="badge upd xs" title="${osSupportText(o, f.os_id)}">EOL soon</span>` : ''}</td>
+      <td class="opt nowrap" title="${a.below_min || isLocal(a) ? '' : osLabel(f)}">${isLocal(a) ? html`<span class="dim" title="Monitored by the master with a ping; no agent">agentless · ping</span>` : a.below_min ? html`<span class="dim">—</span>` : clipText(osShort(f), 14)}${o?.status === 'expired' ? html` <span class="badge sec xs" title="${osSupportText(o, f.os_id)}">EOL</span>` : o?.status === 'soon' ? html` <span class="badge upd xs" title="${osSupportText(o, f.os_id)}">EOL soon</span>` : ''}</td>
       <td class="num"><b class="${u?.security ? 'c-red' : u?.total ? 'c-amber' : 'dim'}">${u ? u.total : '—'}</b></td>
       <td class="num">${!a.vulns ? html`<span class="dim">—</span>` : a.vulns.badge ? html`<b class="c-red" title="${CVE_RED}">${a.vulns.badge}</b>` : html`<span class="dim">0</span>`}</td>
       <td>${!u ? html`<span class="dim">—</span>` : u.reboot_required ? html`<span class="badge reboot xs">required</span>` : html`<span class="badge ok xs">no</span>`}</td>
@@ -1436,7 +1436,7 @@ function conflictNotice(a) {
 }
 function localEditModal(a, groups, done) {
   const isNew = !a;
-  openModal(html`<h3>${isNew ? 'Add a local device' : `Edit ${a.name}`}</h3>
+  openModal(html`<h3>${isNew ? 'Add an agentless device' : `Edit ${a.name}`}</h3>
     <form class="form" data-submit="save">
       <label class="field">Name<input type="text" name="name" value="${a?.name || ''}" maxlength="64" placeholder="e.g. printer-hall" required ${isNew ? raw('autofocus') : ''}></label>
       <label class="field">IP address<input type="text" name="address" value="${a?.local.address || ''}" placeholder="e.g. 192.168.5.20" required spellcheck="false" autocomplete="off"></label>
@@ -1485,7 +1485,7 @@ function LocalPage([id]) {
     setHTML($('#a-head'), html`
       <div class="page-head syshead">
         <div class="headinfo"><div class="row"><a href="#/dashboard/${lastDashSub}" class="btn ghost sm iconbtn" title="Back">${icon('back')}</a>${agentDot(a)}<h1>${a.name}</h1>
-          <span class="tag">${icon('folder')} ${g ? g.name : 'Ungrouped'}</span><span class="verpill loc" title="Monitored by the master itself; no agent is installed">local · ping</span></div>
+          <span class="tag">${icon('folder')} ${g ? g.name : 'Ungrouped'}</span><span class="verpill loc" title="Monitored by the master itself; no agent is installed">agentless · ping</span></div>
           <div class="sub">${L.address} · ${state}</div></div>
         <span class="spacer"></span>
         <button class="btn sm" data-act="ping" ${st.pinging ? 'disabled' : ''} title="Ping the device now">${st.pinging ? html`<span class="spin"></span>` : icon('pulse')} Ping now</button>
@@ -1502,7 +1502,7 @@ function LocalPage([id]) {
       ['Last answer', L.last_up ? html`${fmtDate(L.last_up, true)}` : 'never'],
       ['Unanswered in a row', L.fails ? html`<span class="c-red">${L.fails}</span>` : '0'],
       ['Last error', L.last_error ? html`<span class="c-red">${L.last_error}</span>` : '—'],
-      ['Monitoring', html`Local: the master pings it every ${L.interval} s (<a href="#/settings/local">Settings → Local</a>)`],
+      ['Monitoring', html`Agentless: the master pings it every ${L.interval} s (<a href="#/settings/agentless">Settings → Agentless</a>)`],
       ['Added', fmtDate(a.enrolled_at)],
     ];
     setHTML($('#a-body'), html`
@@ -1570,7 +1570,7 @@ function Devices() {
       : a.online ? 'online' : when(a.last_seen));
     setHTML($('#s-all'), act.length ? html`<div class="panel scrollx"><table class="tbl"><thead><tr><th>Device</th><th>Type</th><th>IP address</th><th>Group</th><th>OS</th><th>Agent</th><th>Last seen</th><th class="w1"></th></tr></thead>
       <tbody>${act.map((a) => html`<tr><td class="nowrap">${agentDot(a)} <a href="#/device/${a.id}"><b>${a.name}</b></a> ${a.status === 'report_only' ? html`<span class="badge info">report only</span>` : ''}${a.below_min ? html`<span class="badge upd xs">update required</span>` : ''}${a.ip_conflicts?.length ? html` <span class="badge sec xs" title="${a.ip_conflicts.map((c) => `IP ${c.ip} is also used by ${c.name}`).join('\n')}">IP also used</span>` : ''}</td>
-        <td class="muted nowrap">${isLocal(a) ? 'Local · ping' : 'Agent'}</td>
+        <td class="muted nowrap">${isLocal(a) ? 'Agentless · ping' : 'Agent'}</td>
         <td class="mono small">${ipLabel(a.facts)}</td>
         <td>${canChange() ? html`<select class="sm" data-change="set-group" data-id="${a.id}" title="Group">${groupOptions(d.groups, a.group_id)}</select>` : html`<span class="muted">${d.groups.find((g) => g.id === a.group_id)?.name || 'Ungrouped'}</span>`}</td>
         <td class="muted">${isLocal(a) ? html`<span class="dim">—</span>` : osLabel(a.facts)}</td><td>${isLocal(a) ? html`<span class="dim">—</span>` : verPill(a)}</td>
@@ -1585,7 +1585,7 @@ function Devices() {
     if (!box || !canChange()) return;
     const groups = st.data?.groups || [];
     setHTML(box, html`
-      <div class="tabs" style="margin:12px 0 4px"><button type="button" class="${st.type === 'agent' ? 'on' : ''}" data-act="add-type" data-t="agent">Agent</button><button type="button" class="${st.type === 'local' ? 'on' : ''}" data-act="add-type" data-t="local">Local</button></div>
+      <div class="tabs" style="margin:12px 0 4px"><button type="button" class="${st.type === 'agent' ? 'on' : ''}" data-act="add-type" data-t="agent">Agent</button><button type="button" class="${st.type === 'local' ? 'on' : ''}" data-act="add-type" data-t="local">Agentless</button></div>
       ${st.type === 'agent' ? html`
         <div class="muted small">An agent on the device does all checks: updates, applications, CVEs and system details. Generates a single-use install command. Run it as <b>root</b> on the device (VM, container, bare metal — including this master container). The agent connects out to the master; no SSH or open ports needed.</div>
         <form class="row" style="margin-top:14px" data-submit="gen">
@@ -1595,14 +1595,14 @@ function Devices() {
         </form>
         <div id="s-cmd"></div>
         <div id="s-tokens"></div>` : html`
-        <div class="muted small">The master checks the device itself; nothing is installed on it. For now the check is a ping, which shows whether the device is up (<a href="#/settings/local">Settings → Local</a>). Use it for routers, switches, printers and other devices without an agent.</div>
+        <div class="muted small">The master checks the device itself; nothing is installed on it.</div>
         <form class="row" style="margin-top:14px" data-submit="l-add">
           <input type="text" name="name" placeholder="Name, e.g. printer-hall" maxlength="64" style="width:220px" required>
           <input type="text" name="address" placeholder="IP address, e.g. 192.168.5.20" style="width:220px" required spellcheck="false" autocomplete="off">
           <select name="group" title="Group">${groupOptions(groups, '')}</select>
           <button class="btn primary">${icon('plus')} Add device</button>
         </form>
-        <div class="dim small" style="margin-top:8px">IPv4 or IPv6 only, no host names. An address can belong to one device only, whether agent or local.</div>`}`);
+        <div class="dim small" style="margin-top:8px">IPv4 or IPv6 only, no host names. An address can belong to one device only, whether agent or agentless.</div>`}`);
     if (st.type === 'agent') renderTokens();
   }
   function renderTokens() {
@@ -2130,12 +2130,12 @@ function SettingsLocal() {
     async mount(el) {
       const d = await GET('local');
       const s = d.settings, L = d.limits, p = d.ping || {};
-      el.innerHTML = r(html`${settingsHead('local', 'Local', 'How the master checks local devices (devices without an agent)')}
+      el.innerHTML = r(html`${settingsHead('agentless', 'Agentless', 'How the master checks devices without an agent')}
         ${canChange() ? '' : html`<div class="notice blue">Your account is read-only: you can see these settings but not change them.</div>`}
         ${p.error ? html`<div class="notice red" style="max-width:720px"><b>The master cannot send pings.</b> ${p.error}</div>` : ''}
         <div class="panel panel-pad" style="max-width:720px">
           <h2>Ping</h2>
-          <div class="muted small">For now a ping is the only check on a local device: it shows whether the device is up. These values apply to all ${d.devices} local device${d.devices === 1 ? '' : 's'}.</div>
+          <div class="muted small">For now a ping is the only check on an agentless device: it shows whether the device is up. These values apply to all ${d.devices} agentless device${d.devices === 1 ? '' : 's'}.</div>
           <form class="form" data-submit="save"><fieldset class="plain" ${canChange() ? '' : 'disabled'}>
             <label class="field">Ping every (seconds)<input type="number" name="interval" min="${L.interval_min}" max="${L.interval_max}" value="${s.interval_sec}" required></label>
             <div class="dim small">${L.interval_min}–${L.interval_max} seconds. Default 60.</div>

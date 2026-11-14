@@ -82,7 +82,7 @@ func TestLocalDevices(t *testing.T) {
 	}
 
 	// Agent actions never apply to a local device.
-	if _, body := c.do("POST", "/api/ui/actions", `{"agent_ids":["`+id+`"],"feature":"updates","action":"check"}`); !strings.Contains(body, "monitored locally") {
+	if _, body := c.do("POST", "/api/ui/actions", `{"agent_ids":["`+id+`"],"feature":"updates","action":"check"}`); !strings.Contains(body, "agentless, monitored by the master") {
 		t.Errorf("action on a local device: %s", body)
 	}
 

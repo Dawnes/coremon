@@ -322,7 +322,7 @@ func (s *Server) pingOne(id string) {
 	s.loc.mu.Lock()
 	if errors.As(err, &se) {
 		if s.loc.setup == "" {
-			log.Printf("local devices: cannot send pings: %v", err)
+			log.Printf("agentless devices: cannot send pings: %v", err)
 		}
 		s.loc.setup, s.loc.setupAt = err.Error(), time.Now().Unix()
 	} else {
@@ -441,7 +441,7 @@ func (s *Server) handleLocalCreate(w http.ResponseWriter, r *http.Request) {
 	s.st.mu.Lock()
 	defer s.st.mu.Unlock()
 	if len(s.st.st.Locals) >= maxLocalDevices {
-		http.Error(w, fmt.Sprintf("at most %d local devices", maxLocalDevices), http.StatusBadRequest)
+		http.Error(w, fmt.Sprintf("at most %d agentless devices", maxLocalDevices), http.StatusBadRequest)
 		return
 	}
 	ip, code, err := s.checkAddress(req.Address, "")

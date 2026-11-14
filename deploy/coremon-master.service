@@ -17,7 +17,7 @@ ProtectHome=yes
 PrivateTmp=yes
 PrivateDevices=yes
 ReadWritePaths=/var/lib/coremon-master
-# NET_BIND_SERVICE: the website on port 443. NET_RAW: pinging local devices
+# NET_BIND_SERVICE: the website on port 443. NET_RAW: pinging agentless devices
 # where the system does not allow ping sockets (net.ipv4.ping_group_range).
 CapabilityBoundingSet=CAP_NET_BIND_SERVICE CAP_NET_RAW
 AmbientCapabilities=CAP_NET_BIND_SERVICE CAP_NET_RAW
