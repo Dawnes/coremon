@@ -92,7 +92,7 @@ systemctl enable coremon-agent.service >/dev/null 2>&1
 systemctl restart coremon-agent.service
 echo "coremon: agent installed and started."
 if [ "$ENROLLED" = 0 ]; then
-  echo "coremon: approve this system in the master UI (Settings > Systems): $MASTER"
+  echo "coremon: approve this device in the master UI (Settings > Devices): $MASTER"
 fi
 `))
 

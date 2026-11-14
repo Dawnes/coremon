@@ -37,7 +37,7 @@ func (s *Server) handlePing(w http.ResponseWriter, r *http.Request) {
 	}
 	if a.Removing {
 		s.st.mu.Unlock()
-		http.Error(w, "this system is being removed", http.StatusConflict)
+		http.Error(w, "this device is being removed", http.StatusConflict)
 		return
 	}
 	if s.belowMin(a) {
@@ -47,7 +47,7 @@ func (s *Server) handlePing(w http.ResponseWriter, r *http.Request) {
 	}
 	if s.openJob(a.ID, proto.CmdPing, "") {
 		s.st.mu.Unlock()
-		http.Error(w, "a ping to this system is already running", http.StatusConflict)
+		http.Error(w, "a ping to this device is already running", http.StatusConflict)
 		return
 	}
 	j := s.enqueue(a, &Job{Type: proto.CmdPing, Actor: actor(r), Timeout: int(pingWait / time.Second)})

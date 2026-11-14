@@ -98,7 +98,7 @@ func (s *Server) snapshot() (map[string][]byte, backupManifest, error) {
 	files := map[string][]byte{}
 	s.st.mu.Lock()
 	js, err := json.Marshal(&s.st.st)
-	users, systems := len(s.st.st.Users), len(s.st.st.Agents)
+	users, systems := len(s.st.st.Users), len(s.st.st.Agents)+len(s.st.st.Locals)
 	s.st.mu.Unlock()
 	if err != nil {
 		return nil, backupManifest{}, err
@@ -481,6 +481,6 @@ func (s *Server) backupTick(now time.Time) {
 	if m, err := s.runBackup(true); err != nil {
 		s.audit.write("scheduler", "", "backup.failed", "", err.Error())
 	} else {
-		s.audit.write("scheduler", "", "backup.created", "", fmt.Sprintf("%s backup into slot 1 (%d users, %d systems)", sched, m.Users, m.Systems))
+		s.audit.write("scheduler", "", "backup.created", "", fmt.Sprintf("%s backup into slot 1 (%d users, %d devices)", sched, m.Users, m.Systems))
 	}
 }

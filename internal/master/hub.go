@@ -167,7 +167,7 @@ func (s *Server) enrollCore(req proto.EnrollRequest, ip, agentKey string) (*prot
 					s.audit.write("agent", ip, "enroll.waiting", cleanText(req.Facts.Hostname, 64),
 						"refused for now: "+p.Name+" from the same address is waiting for approval (approve or remove it first)")
 				}
-				return nil, &apiError{http.StatusTooManyRequests, "another system from this address is waiting for approval"}
+				return nil, &apiError{http.StatusTooManyRequests, "another device from this address is waiting for approval"}
 			}
 		}
 		s.enrolls.clearWaiting(ip)

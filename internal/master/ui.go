@@ -58,6 +58,9 @@ type agentView struct {
 	Removing     bool                       `json:"removing"`
 	State        map[string]json.RawMessage `json:"state,omitempty"`
 	StateAt      map[string]int64           `json:"state_at,omitempty"`
+	Monitor      string                     `json:"monitor"` // "agent" or "local"
+	Local        *localView                 `json:"local,omitempty"`
+	Conflicts    []ipConflict               `json:"ip_conflicts,omitempty"`
 }
 
 func (s *Server) view(a *Agent, full bool) agentView {
@@ -65,8 +68,9 @@ func (s *Server) view(a *Agent, full bool) agentView {
 	v := agentView{
 		ID: a.ID, Name: a.Name, GroupID: a.GroupID, Order: a.Order, Status: a.Status, Online: s.online(a, now),
 		LastSeen: a.LastSeen, EnrolledAt: a.EnrolledAt, CoreVersion: a.CoreVersion,
-		Facts: a.Facts, Removing: a.Removing, DesiredCore: a.DesiredCore, Features: []string{},
+		Facts: a.Facts, Removing: a.Removing, DesiredCore: a.DesiredCore, Features: []string{}, Monitor: "agent",
 	}
+	v.Conflicts = s.agentConflicts(a)
 	v.CoreLatest = s.repo.coreLatest()
 	v.CoreIsLatest = v.CoreLatest != "" && a.CoreVersion == v.CoreLatest
 	v.AgentReport = a.ReportOnly
@@ -130,9 +134,13 @@ func (s *Server) handleOverview(w http.ResponseWriter, r *http.Request) {
 	s.st.mu.Lock()
 	defer s.st.mu.Unlock()
 	agents := []agentView{}
-	for _, a := range s.orderedAgents() {
+	for _, a := range s.st.st.Agents {
 		agents = append(agents, s.view(a, false))
 	}
+	for _, d := range s.st.st.Locals {
+		agents = append(agents, s.localDeviceView(d, false))
+	}
+	s.sortViews(agents)
 	active := 0
 	for _, j := range s.st.st.Jobs {
 		if !j.done() {
@@ -171,6 +179,10 @@ func (s *Server) jobsFiltered(agentID, actor string, limit int, activeOnly bool)
 func (s *Server) handleAgentGet(w http.ResponseWriter, r *http.Request) {
 	s.st.mu.Lock()
 	defer s.st.mu.Unlock()
+	if d := s.st.st.Locals[r.PathValue("id")]; d != nil {
+		writeJSON(w, map[string]any{"agent": s.localDeviceView(d, true), "jobs": []*Job{}, "repo": s.repo.summary(), "groups": s.st.st.Groups})
+		return
+	}
 	a := s.agentOr404(w, r)
 	if a == nil {
 		return
@@ -235,7 +247,7 @@ func (s *Server) handleAgentUpdate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if req.Name != nil {
-		n, err := checkName("system name", *req.Name, maxSystemName)
+		n, err := checkName("device name", *req.Name, maxSystemName)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
@@ -260,7 +272,7 @@ func (s *Server) handleAgentUpdate(w http.ResponseWriter, r *http.Request) {
 		case *req.ReportOnly && a.Status != StatusReportOnly:
 			a.Status = StatusReportOnly
 
-			n := s.cancelQueued(a, "system set to report only")
+			n := s.cancelQueued(a, "device set to report only")
 			j = s.syncMode(a, actor(r))
 			s.audit.writeJob(actor(r), clientIP(r), "agent.report_only", a, fmt.Sprintf("%d queued job(s) cancelled", n), j)
 		case !*req.ReportOnly && a.Status != StatusActive:
@@ -292,7 +304,7 @@ func (s *Server) handleApprove(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "agent is not pending", http.StatusConflict)
 		return
 	}
-	n, err := checkName("system name", req.Name, maxSystemName)
+	n, err := checkName("device name", req.Name, maxSystemName)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
@@ -408,7 +420,7 @@ func (s *Server) handleActions(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if len(req.AgentIDs) > 10000 {
-		http.Error(w, "too many systems", http.StatusBadRequest)
+		http.Error(w, "too many devices", http.StatusBadRequest)
 		return
 	}
 	s.st.mu.Lock()
@@ -417,6 +429,10 @@ func (s *Server) handleActions(w http.ResponseWriter, r *http.Request) {
 	errs := []string{}
 	for _, id := range req.AgentIDs {
 		a := s.st.st.Agents[id]
+		if d := s.st.st.Locals[id]; d != nil {
+			errs = append(errs, d.Name+": monitored locally by the master; agent actions do not apply")
+			continue
+		}
 		if a == nil {
 			errs = append(errs, cleanText(id, 32)+": not found")
 			continue
@@ -781,6 +797,9 @@ func (s *Server) handleAudit(w http.ResponseWriter, r *http.Request) {
 	for _, a := range s.st.st.Agents {
 		names[a.ID] = a.Name
 	}
+	for _, d := range s.st.st.Locals {
+		names[d.ID] = d.Name
+	}
 	users := []string{}
 	for _, u := range s.st.st.Users {
 		users = append(users, u.Name)
@@ -872,6 +891,14 @@ func (s *Server) handleGroupDelete(w http.ResponseWriter, r *http.Request) {
 		a.GroupID, a.Order = "", next
 		next++
 	}
+	moved := len(members)
+	for _, d := range s.st.st.Locals {
+		if d.GroupID == id {
+			d.GroupID, d.Order = "", next
+			next++
+			moved++
+		}
+	}
 	groups := s.st.st.Groups[:0]
 	for _, x := range s.st.st.Groups {
 		if x.ID != id {
@@ -880,7 +907,7 @@ func (s *Server) handleGroupDelete(w http.ResponseWriter, r *http.Request) {
 	}
 	s.st.st.Groups = groups
 	s.st.markDirty()
-	s.audit.write(actor(r), clientIP(r), "group.deleted", g.Name, fmt.Sprintf("%d system(s) moved to Ungrouped", len(members)))
+	s.audit.write(actor(r), clientIP(r), "group.deleted", g.Name, fmt.Sprintf("%d device(s) moved to Ungrouped", moved))
 	writeJSON(w, map[string]bool{"ok": true})
 }
 
@@ -914,8 +941,8 @@ func (s *Server) handleLayout(w http.ResponseWriter, r *http.Request) {
 			order = append(order, g)
 		}
 		for _, id := range gl.Agents {
-			if s.st.st.Agents[id] == nil || seenA[id] {
-				http.Error(w, "unknown or duplicate system "+id, http.StatusBadRequest)
+			if (s.st.st.Agents[id] == nil && s.st.st.Locals[id] == nil) || seenA[id] {
+				http.Error(w, "unknown or duplicate device "+cleanText(id, 32), http.StatusBadRequest)
 				return
 			}
 			seenA[id] = true
@@ -930,14 +957,22 @@ func (s *Server) handleLayout(w http.ResponseWriter, r *http.Request) {
 	s.st.st.Groups = order
 	for _, gl := range req.Groups {
 		for i, id := range gl.Agents {
-			a := s.st.st.Agents[id]
-			a.GroupID, a.Order = gl.ID, i
+			if a := s.st.st.Agents[id]; a != nil {
+				a.GroupID, a.Order = gl.ID, i
+			} else if d := s.st.st.Locals[id]; d != nil {
+				d.GroupID, d.Order = gl.ID, i
+			}
 		}
 	}
 
 	for _, a := range s.st.st.Agents {
 		if !seenA[a.ID] {
 			a.Order += 100000
+		}
+	}
+	for _, d := range s.st.st.Locals {
+		if !seenA[d.ID] {
+			d.Order += 100000
 		}
 	}
 	s.st.markDirty()

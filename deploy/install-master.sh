@@ -108,5 +108,5 @@ echo "  forgot a password? as root: coremon-reset   (or: coremon-reset -user <na
 [ -s /etc/coremon-master/master.env ] && echo "  releases: version index of https://github.com/$REPO"
 echo
 echo "The master downloads the agent versions within a minute (see Releases)."
-echo "To monitor this container too, open Settings > Systems > Add a system and"
+echo "To monitor this container too, open Settings > Devices > Add a device and"
 echo "run the generated command here as root."

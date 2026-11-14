@@ -1,24 +1,29 @@
 # Coremon
 
-Self-hosted update monitoring for a fleet of Debian and Ubuntu systems: VMs,
-LXC containers or bare metal. A web dashboard shows which systems have
+Self-hosted update monitoring for a fleet of Debian and Ubuntu devices: VMs,
+LXC containers or bare metal. A web dashboard shows which devices have
 updates, security updates, pending reboots and known vulnerabilities in their
 applications. You choose what to install and when; nothing is ever upgraded
 automatically.
 
 Coremon has two parts: the **master** (the website, one per environment) and
-the **agent** (one per system). Agents connect out to the master, so no open
-ports and no SSH are needed on your systems.
+the **agent** (one per device). Agents connect out to the master, so no open
+ports and no SSH are needed on your devices.
+
+Devices without an agent, such as routers, switches and printers, can be added
+as **local** devices: the master itself pings them to show whether they are up.
 
 ## Features
 
-* **Dashboard**: all systems at a glance, in your own groups, with filters.
+* **Dashboard**: all devices at a glance, in your own groups, with filters.
 * **Updates**: check, install selected packages or upgrade all, with live output.
 * **Applications**: 31 common applications (Apache, Docker, Exim, MariaDB, Nginx,
   OpenSSL, PostgreSQL, the SSH server and more) with version, status and ports,
-  per system and as one list for the whole environment.
+  per device and as one list for the whole environment.
 * **Vulnerabilities**: known CVEs of those applications, with severity, fixes
   and actively exploited ones highlighted.
+* **Local devices**: devices without an agent, checked by the master with a
+  ping, with a 24-hour history.
 * **Releases**: update the master and the agents from the website.
 * **Users**: administrators and read-only users, optional two-factor sign-in
   with an authenticator app, and accounts can be locked.
@@ -28,7 +33,7 @@ ports and no SSH are needed on your systems.
 
 * Every master and agent release is signed; unsigned or changed binaries are refused.
 * All traffic between master and agents is encrypted and signed.
-* For normal use you never need to log in to the server or your systems:
+* For normal use you never need to log in to the server or your devices:
   everything is done from the website.
 
 ## Install the master
@@ -49,16 +54,19 @@ the master and keeps its data.
 The master needs outbound HTTPS to GitHub (releases), Debian (support dates)
 and OSV.dev, NVD, CISA and FIRST (vulnerability data).
 
-## Add a system
+## Add a device
 
-1. **Settings → Systems → Add a system → Generate install command.**
-2. Run the command as root on the system (it needs `curl`).
-3. **Approve** the new system in the website and pick its group.
+1. **Settings → Devices → Add a device → Agent → Generate install command.**
+2. Run the command as root on the device (it needs `curl`).
+3. **Approve** the new device in the website and pick its group.
+
+For a device without an agent choose **Local** instead and enter its name and IP
+address. Settings → Local sets how often it is pinged.
 
 ## Updating
 
 **Settings → Releases** shows the available versions. Update the master with
-one button, and the agents per system or per group.
+one button, and the agents per device or per group.
 
 ## Forgot a password?
 

@@ -234,7 +234,7 @@ func (s *Server) handleIdentityAction(w http.ResponseWriter, r *http.Request) {
 	case "switch":
 		missing := s.missingNextKey()
 		if len(missing) > 0 && !req.Force {
-			http.Error(w, "not all systems have the new key: "+strings.Join(missing, ", "), http.StatusConflict)
+			http.Error(w, "not all devices have the new key: "+strings.Join(missing, ", "), http.StatusConflict)
 			return
 		}
 		var old, cur string

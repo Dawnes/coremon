@@ -287,6 +287,17 @@ ul.plainlist { margin: 0; padding-left: 18px; line-height: 1.8; }
 .verpill.ok { color: #86efac; background: rgba(74, 222, 128, 0.1); border-color: rgba(74, 222, 128, 0.28); }
 .verpill.old { color: #fdba74; background: rgba(251, 146, 60, 0.1); border-color: rgba(251, 146, 60, 0.32); }
 .verpill.busy { color: #93c5fd; background: rgba(96, 165, 250, 0.1); border-color: rgba(96, 165, 250, 0.28); }
+.verpill.loc { color: #67e8f9; background: rgba(34, 211, 238, 0.1); border-color: rgba(34, 211, 238, 0.28); }
+
+/* Local devices: the 24-hour ping bar (96 quarters of an hour). */
+.upbar { display: flex; gap: 2px; height: 30px; }
+.upbar span { flex: 1; min-width: 2px; border-radius: 2px; background: rgba(255, 255, 255, 0.06); }
+.upbar span.ok, .lg.ok { background: rgba(74, 222, 128, 0.7); }
+.upbar span.part, .lg.part { background: rgba(251, 191, 36, 0.8); }
+.upbar span.bad, .lg.bad { background: rgba(248, 113, 113, 0.85); }
+.upbar span:hover { filter: brightness(1.4); }
+.upaxis { display: flex; justify-content: space-between; margin-top: 6px; font-size: 11.5px; color: var(--dim); }
+.lg { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 6px; vertical-align: -1px; background: rgba(255, 255, 255, 0.06); }
 
 .gsec { margin-bottom: 22px; border-radius: var(--radius); transition: box-shadow .1s; }
 .ghead { display: flex; align-items: center; gap: 8px; padding: 4px 4px 10px; border-bottom: 1px solid var(--line); margin-bottom: 14px; }

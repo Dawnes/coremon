@@ -77,6 +77,8 @@ type Server struct {
 	nonces        nonceCache
 	osi           osInfo
 	vul           vulnStore
+	loc           localState
+	pinger        pingFunc
 
 	handler http.Handler
 
@@ -188,7 +190,8 @@ func New(cfg Config) (*Server, error) {
 	}
 	s := &Server{cfg: cfg, st: st, sess: newSessions(), keys: keyState{cert: &cert, tlsPin: pin}, exit: os.Exit,
 		audit: &auditLog{path: filepath.Join(cfg.DataDir, "audit.jsonl")}, wakes: map[string]chan struct{}{},
-		hashSem: make(chan struct{}, hashAtOnce)}
+		hashSem: make(chan struct{}, hashAtOnce), pinger: icmpPing}
+	s.loc.next, s.loc.busy = map[string]time.Time{}, map[string]bool{}
 
 	pubPath := cfg.SigningKeyPath
 	if pubPath == "" {
@@ -358,6 +361,12 @@ func (s *Server) routes() http.Handler {
 	change("POST /api/ui/agents/{id}/remove", s.handleRemove)
 	change("POST /api/ui/agents/{id}/core", s.handleCoreUpdate)
 	change("POST /api/ui/actions", s.handleActions)
+	change("POST /api/ui/locals", s.handleLocalCreate)
+	change("POST /api/ui/locals/{id}", s.handleLocalUpdate)
+	change("POST /api/ui/locals/{id}/delete", s.handleLocalDelete)
+	view("POST /api/ui/locals/{id}/ping", s.handleLocalPing)
+	view("GET /api/ui/local", s.handleLocalSettingsGet)
+	change("POST /api/ui/local", s.handleLocalSettingsSave)
 	view("GET /api/ui/jobs", s.handleJobs)
 	view("GET /api/ui/jobs/{id}", s.handleJob)
 	change("GET /api/ui/tokens", s.handleTokens)
@@ -465,6 +474,7 @@ func (s *Server) Run(ctx context.Context) error {
 	go s.vulnLoop(stop)
 	go s.nvdLoop(stop)
 	go s.backupLoop(stop)
+	go s.localLoop(stop)
 	handler := s.routes()
 	s.handler = handler
 	s.applyUIPort(handler)

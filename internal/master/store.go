@@ -240,6 +240,8 @@ type State struct {
 	Settings    Settings                `json:"settings"`
 	Groups      []*Group                `json:"groups"`
 	Agents      map[string]*Agent       `json:"agents"`
+	Locals      map[string]*LocalDevice `json:"locals,omitempty"`
+	Local       LocalSettings           `json:"local"`
 	Tokens      map[string]*EnrollToken `json:"tokens"`
 	Jobs        []*Job                  `json:"jobs"`
 
@@ -282,6 +284,15 @@ func openStore(dir string) (*store, error) {
 		s.st.Groups = []*Group{}
 	}
 
+	if s.st.Locals == nil {
+		s.st.Locals = map[string]*LocalDevice{}
+	}
+	s.st.Local.normalize()
+	for _, d := range s.st.Locals {
+		if d.GroupID != "" && s.group(d.GroupID) == nil {
+			d.GroupID = ""
+		}
+	}
 	s.st.Settings.normalize()
 	for _, a := range s.st.Agents {
 		if a.State == nil {
@@ -317,6 +328,11 @@ func (s *store) nextOrder(groupID string) int {
 	for _, a := range s.st.Agents {
 		if a.GroupID == groupID && a.Order >= n {
 			n = a.Order + 1
+		}
+	}
+	for _, d := range s.st.Locals {
+		if d.GroupID == groupID && d.Order >= n {
+			n = d.Order + 1
 		}
 	}
 	return n

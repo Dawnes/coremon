@@ -50,7 +50,7 @@ func (s *Server) handleBackupRun(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "backup failed: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
-	s.audit.write(actor(r), clientIP(r), "backup.created", "", fmt.Sprintf("manual backup into slot 1 (%d users, %d systems)", m.Users, m.Systems))
+	s.audit.write(actor(r), clientIP(r), "backup.created", "", fmt.Sprintf("manual backup into slot 1 (%d users, %d devices)", m.Users, m.Systems))
 	s.handleBackups(w, r)
 }
 
@@ -132,7 +132,7 @@ func (s *Server) handleBackupDownload(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "backup failed: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
-	s.audit.write(me.Name, clientIP(r), "backup.downloaded", "", fmt.Sprintf("encrypted backup (%d users, %d systems)", m.Users, m.Systems))
+	s.audit.write(me.Name, clientIP(r), "backup.downloaded", "", fmt.Sprintf("encrypted backup (%d users, %d devices)", m.Users, m.Systems))
 	name := "coremon-backup-" + time.Unix(m.Created, 0).Local().Format("2006-01-02-1504") + ".cmbak"
 	w.Header().Set("Content-Type", "application/octet-stream")
 	w.Header().Set("Content-Disposition", `attachment; filename="`+name+`"`)
