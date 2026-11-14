@@ -168,6 +168,15 @@ input[type=text], input[type=password], input[type=number], input[type=search], 
 textarea { height: auto; padding: 8px 12px; }
 select { padding-right: 8px; }
 select.grpsel { min-width: 160px; max-width: 240px; }
+.lastin { white-space: nowrap; }
+.previn { display: flex; align-items: center; gap: 16px; }
+.previn-ic { flex: none; display: inline-flex; align-items: center; justify-content: center; width: 44px; height: 44px; border-radius: 12px; color: var(--cyan);
+  background: rgba(34, 211, 238, 0.1); border: 1px solid rgba(34, 211, 238, 0.25); box-shadow: 0 0 24px -6px rgba(34, 211, 238, 0.45); }
+.previn-ic svg { width: 22px; height: 22px; }
+.previn-lbl { font-size: 12px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.06em; font-weight: 500; }
+.previn-when { font-family: var(--display); font-size: 18px; font-weight: 600; letter-spacing: -0.01em; margin-top: 2px; }
+.previn-ago { font-family: var(--sans); font-size: 12.5px; font-weight: 400; color: var(--dim); margin-left: 6px; }
+.previn-ip { font-size: 13px; color: var(--muted); margin-top: 2px; }
 select option { background: var(--popover); }
 input::placeholder, textarea::placeholder { color: var(--dim); }
 input:focus, select:focus, textarea:focus { border-color: rgba(34, 211, 238, 0.5); box-shadow: 0 0 0 3px var(--ring); }

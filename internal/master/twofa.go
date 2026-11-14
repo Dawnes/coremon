@@ -192,6 +192,7 @@ func (s *Server) handleLoginCode(w http.ResponseWriter, r *http.Request) {
 	s.tfa.dropTicket(req.Ticket)
 	s.sess.forgiveLogin(ip)
 	s.setCookie(w, s.sess.create(uid))
+	s.signedInNow(uid, ip)
 	s.audit.write(name, ip, "login", "", "with 2FA")
 	writeJSON(w, map[string]bool{"ok": true})
 }

@@ -185,6 +185,11 @@ type User struct {
 	TOTPSecret string `json:"totp_secret,omitempty"`
 	TOTPLast   int64  `json:"totp_last,omitempty"`
 	TOTPSince  int64  `json:"totp_since,omitempty"`
+
+	LastLogin int64  `json:"last_login,omitempty"`
+	LastIP    string `json:"last_ip,omitempty"`
+	PrevLogin int64  `json:"prev_login,omitempty"`
+	PrevIP    string `json:"prev_ip,omitempty"`
 }
 
 const adminName = "admin"
@@ -241,6 +246,8 @@ type State struct {
 	NVDKey string `json:"nvd_key,omitempty"`
 
 	CheckRoundAt int64 `json:"check_round_at,omitempty"`
+
+	LoginsFilled bool `json:"logins_filled,omitempty"`
 }
 
 const maxJobs = 2000

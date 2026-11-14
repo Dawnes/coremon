@@ -384,7 +384,7 @@ const SUBNAV = {
   dashboard: () => [['overview', 'Overview'], ['systems', 'System List'], ['apps', 'Application List']],
   about: () => [['about', 'About'], ['license', 'License']],
   history: () => [['jobs', 'Jobs'], ['audit', 'Audit log']],
-  settings: () => [['general', 'General'], ['systems', 'Systems'], ['releases', 'Releases'], ...(canChange() ? [['users', 'Users'], ['backups', 'Backups']] : []), ['account', 'My Account'], ['identity', 'Identity']],
+  settings: () => [['general', 'General'], ['systems', 'Systems'], ['releases', 'Releases'], ...(canChange() ? [['users', 'Users']] : []), ['account', 'My Account'], ['identity', 'Identity'], ...(canChange() ? [['backups', 'Backups']] : [])],
 };
 function currentRoute() {
   const p = location.hash.replace(/^#\/?/, '').split('/');
@@ -2096,14 +2096,14 @@ function SettingsUsers() {
   const roleOpts = (sel) => html`<option value="admin" ${sel === 'admin' ? 'selected' : ''}>Administrator</option><option value="viewer" ${sel === 'viewer' ? 'selected' : ''}>Read-only</option>`;
   function render() {
     const me = session.user?.id;
-    setHTML($('#u-list'), html`<div class="panel"><table class="tbl"><thead><tr><th>User</th><th>Role</th><th>Created</th><th class="w1"></th></tr></thead>
+    setHTML($('#u-list'), html`<div class="panel"><table class="tbl"><thead><tr><th>User</th><th>Role</th><th>Last sign-in</th><th class="w1"></th></tr></thead>
       <tbody>${st.users.map((u) => html`<tr><td><b>${u.name}</b>${u.id === me ? html` <span class="dim small">(you)</span>` : ''}
           ${u.permanent ? html` <span class="badge mute xs" title="The admin account cannot be removed or demoted">permanent</span>` : ''}
           ${u.must_change ? html` <span class="badge upd xs" title="Signs in with a generated password that must be changed first">must change password</span>` : ''}
           ${u.locked ? html` <span class="badge sec xs" title="Cannot sign in until an administrator unlocks the account">locked</span>` : ''}
           ${u.two_fa ? html` <span class="badge ok xs" title="Signs in with a code from an authenticator app${u.two_fa_since ? ' (since ' + fmtDate(u.two_fa_since) + ')' : ''}">2FA</span>` : ''}</td>
         <td>${u.id === me || u.permanent ? html`<span class="muted">${roleLabel(u.role)}</span>` : html`<select class="sm" data-change="role" data-id="${u.id}">${roleOpts(u.role)}</select>`}</td>
-        <td class="muted">${fmtDate(u.created)}</td>
+        <td title="Created ${fmtDate(u.created)}">${u.last_login ? html`<div class="lastin">${fmtDate(u.last_login)}</div><div class="dim small mono">${u.last_ip || '—'}</div>` : html`<span class="dim">never</span>`}</td>
         <td class="w1"><div class="row" style="flex-wrap:nowrap">${u.id === me ? html`<a class="btn ghost sm" href="#/settings/account">My Account</a>`
           : html`${u.locked ? html`<button class="btn primary sm" data-act="unlock" data-id="${u.id}">Unlock</button>` : html`<button class="btn warn sm" data-act="lock" data-id="${u.id}">Lock</button>`}
             ${u.two_fa ? html`<button class="btn warn sm" data-act="tfa-off" data-id="${u.id}">Turn off 2FA</button>` : ''}
@@ -2348,6 +2348,11 @@ function SettingsAccount() {
       el.innerHTML = r(html`${settingsHead('account', 'My Account', `Signed in as ${session.user?.name} (${roleLabel(session.user?.role)})`)}
         ${session.initial_password ? html`<div class="notice">You are still using the generated initial password — please change it.</div>` : ''}
         <div class="stack" style="max-width:480px">
+        <div class="panel panel-pad previn"><span class="previn-ic">${icon('clock')}</span>
+          <div><div class="previn-lbl">Previous sign-in</div>
+          ${session.prev_login ? html`<div class="previn-when">${fmtDate(session.prev_login)} <span class="previn-ago">${ago(session.prev_login)}</span></div>
+            <div class="previn-ip">from <span class="mono">${session.prev_ip || 'an unknown address'}</span></div>`
+    : html`<div class="previn-when">This is your first sign-in</div><div class="previn-ip">Next time, your previous sign-in shows here.</div>`}</div></div>
         <div class="panel panel-pad"><h2>Change password</h2>
           <form class="form" data-submit="pw" style="margin-top:0">
             <label class="field">Current password<input type="password" name="cur" autocomplete="current-password" required></label>

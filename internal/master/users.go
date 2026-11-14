@@ -88,11 +88,13 @@ type userView struct {
 	Locked     bool   `json:"locked"`
 	TwoFA      bool   `json:"two_fa"`
 	TwoFASince int64  `json:"two_fa_since,omitempty"`
+	LastLogin  int64  `json:"last_login,omitempty"`
+	LastIP     string `json:"last_ip,omitempty"`
 }
 
 func viewUser(u *User) userView {
 	return userView{ID: u.ID, Name: u.Name, Role: u.Role, Created: u.Created, Permanent: u.Name == adminName, MustChange: u.MustChange, Locked: u.Locked,
-		TwoFA: u.TOTPSecret != "", TwoFASince: u.TOTPSince}
+		TwoFA: u.TOTPSecret != "", TwoFASince: u.TOTPSince, LastLogin: u.LastLogin, LastIP: u.LastIP}
 }
 
 func (s *Server) setCookie(w http.ResponseWriter, tok string) {
@@ -120,6 +122,7 @@ func (s *Server) handleSession(w http.ResponseWriter, r *http.Request) {
 				if !u.Locked {
 					out["app"] = s.appName()
 				}
+				out["prev_login"], out["prev_ip"] = u.PrevLogin, u.PrevIP
 			}
 			s.st.mu.Unlock()
 		}
@@ -193,6 +196,7 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.setCookie(w, s.sess.create(uid))
+	s.signedInNow(uid, ip)
 	s.audit.write(name, ip, "login", "", "")
 	writeJSON(w, map[string]bool{"ok": true})
 }
