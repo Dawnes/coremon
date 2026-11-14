@@ -238,7 +238,7 @@ func TestNothingForStrangers(t *testing.T) {
 			t.Errorf("%s: %d %q", p, code, body)
 		}
 	}
-	for _, p := range []string{"/", "/app.js", "/style.css", "/legal/LICENSE.txt", "/favicon.svg", "/fonts/geist.woff2"} {
+	for _, p := range []string{"/", "/login.js", "/style.css", "/legal/LICENSE.txt", "/favicon.svg", "/fonts/geist.woff2"} {
 		if code, _ := get(p); code != 200 {
 			t.Errorf("%s: %d", p, code)
 		}

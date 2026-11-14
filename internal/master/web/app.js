@@ -318,7 +318,7 @@ function openJob(id) {
 let view = null;
 const globalActs = {
   'open-job': (t) => openJob(t.dataset.id),
-  logout: async () => { await POST('logout').catch(() => {}); navOpen.reset(); await boot().catch(() => showLogin()); },
+  logout: async () => { await POST('logout').catch(() => {}); navOpen.reset(); showLogin(); },
   'nav-fold': (t) => {
     const sec = t.dataset.sec;
     if (matchMedia('(max-width: 860px)').matches || !SUBNAV[sec]) { location.hash = '#/' + sec; return; }
@@ -367,77 +367,11 @@ const ifChange = (x) => (canChange() ? x : '');
 let refreshTimer = null;
 let pendingCount = 0;
 
+// Back to the sign-in page: a full reload, which also clears the application code from memory.
 function showLogin() {
   clearInterval(refreshTimer);
   view = null;
-  closeAllModals();
-  setHTML($('#app'), html`
-    <div class="login"><div class="panel">
-      <div class="brand"><img src="favicon.svg" alt=""><span>Coremon</span></div>
-      <div class="muted">Fleet update control</div>
-      <form data-submit="login" id="login-form">
-        <label class="field">User name<input type="text" name="username" autocomplete="username" autocapitalize="none" spellcheck="false" autofocus required></label>
-        <label class="field">Password<input type="password" name="password" autocomplete="current-password" required></label>
-        <div class="loginerr" id="login-err" role="alert"></div>
-        <button class="btn primary" type="submit">Sign in</button>
-      </form>
-      ${session.initial_setup ? html`<div class="hint">First start? Sign in as <code>admin</code>; the initial password is in <code>/var/lib/coremon-master/initial-password.txt</code> on the master.</div>` : ''}
-    </div></div>`);
-  const signedIn = async () => {
-    navOpen.reset();
-    if (location.hash && location.hash !== '#/') history.replaceState(null, '', location.pathname + location.search + '#/');
-    await boot();
-  };
-  const loginMsg = (m) => (/wrong code/i.test(m) ? 'Wrong code' : /wrong/i.test(m) ? 'Wrong user name or password'
-    : /too many wrong codes/i.test(m) ? 'Too many wrong codes for this account, try again in 15 minutes'
-      : /too many/i.test(m) ? 'Too many attempts, try again in a few minutes' : m);
-  // Second step: the code from the authenticator app.
-  const codeStep = (ticket) => {
-    setHTML($('#login-form'), html`
-      <div class="muted small">Enter the 6-digit code from your authenticator app.</div>
-      <label class="field">Code<input type="text" name="code" inputmode="numeric" autocomplete="one-time-code" pattern="[0-9 ]{6,7}" maxlength="7" required></label>
-      <input type="hidden" name="ticket" value="${ticket}">
-      <div class="loginerr" id="login-err" role="alert"></div>
-      <button class="btn primary" type="submit">Sign in</button>
-      <button class="btn ghost sm" type="button" data-act="login-back">Back</button>`);
-    $('#login-form').dataset.submit = 'code';
-    $('#login-form input[name=code]').focus();
-  };
-  view = {
-    acts: {
-      login: async (f) => {
-        const err = $('#login-err');
-        err.textContent = '';
-        f.password.classList.remove('bad');
-        try {
-          const res = await POST('login', { username: f.username.value, password: f.password.value });
-          if (res?.code_required) return codeStep(res.ticket);
-          await signedIn();
-        } catch (e) {
-          err.textContent = loginMsg(e.message || '');
-          f.password.classList.add('bad');
-          f.password.select();
-        }
-      },
-      code: async (f) => {
-        const err = $('#login-err');
-        err.textContent = '';
-        f.code.classList.remove('bad');
-        try {
-          await POST('login/code', { ticket: f.ticket.value, code: f.code.value.replace(/\s/g, '') });
-          await signedIn();
-        } catch (e) {
-          const m = e.message || '';
-          if (/expired/i.test(m)) return showLogin();
-          err.textContent = loginMsg(m);
-          f.code.classList.add('bad');
-          f.code.select();
-        }
-      },
-      'login-back': () => showLogin(),
-    },
-  };
-  $('#login-form input[name=username]').focus();
+  location.reload();
 }
 
 const NAV = [
@@ -534,7 +468,9 @@ window.addEventListener('hashchange', () => { if (view && $('#view')) route(); }
 
 async function boot() {
   session = await fetch('/api/ui/session', { headers: { 'X-Coremon': '1' } }).then((r) => r.json());
-  if (!session.authenticated) return showLogin();
+  if (!session.authenticated || !session.app) return showLogin();
+  // The master was updated while this page was open: load the new website.
+  if (!import.meta.url.endsWith('/' + session.app)) return location.reload();
   if (session.must_change) return showMustChange();
   route();
 }
@@ -1871,8 +1807,8 @@ function Releases() {
         : html`<span class="dim small">${repo.core_latest && list.every((a) => a.core_is_latest) ? 'all on the latest version' : ''}</span>`;
     };
     setHTML($('#r-rollout'), agents.length ? html`
-      <h2 style="font-size:15px;margin:6px 0 12px">Agents per system</h2>
-      <div class="panel"><table class="tbl syslist"><thead><tr><th>System</th><th>Agent</th>${ifChange(html`<th>Change to</th>`)}</tr></thead>
+      <div class="panel"><div class="panel-pad" style="padding-bottom:8px"><h2 style="margin:0">Agents per system</h2></div>
+      <table class="tbl syslist"><thead><tr><th>System</th><th>Agent</th>${ifChange(html`<th>Change to</th>`)}</tr></thead>
       ${secs.map(([gid, name, list]) => html`<tbody><tr class="grow"><td colspan="${canChange() ? 3 : 2}"><div class="row" style="flex-wrap:nowrap">${name} <span class="dim small">${list.length}</span><span class="spacer"></span>${groupBtn(gid, name, list)}</div></td></tr>
         ${[...list].sort(byName).map(row)}</tbody>`)}</table></div>` : '');
     renderQueue();
@@ -2169,9 +2105,9 @@ function SettingsUsers() {
         <td>${u.id === me || u.permanent ? html`<span class="muted">${roleLabel(u.role)}</span>` : html`<select class="sm" data-change="role" data-id="${u.id}">${roleOpts(u.role)}</select>`}</td>
         <td class="muted">${fmtDate(u.created)}</td>
         <td class="w1"><div class="row" style="flex-wrap:nowrap">${u.id === me ? html`<a class="btn ghost sm" href="#/settings/account">My Account</a>`
-          : html`${u.locked ? html`<button class="btn sm" data-act="unlock" data-id="${u.id}">Unlock</button>` : html`<button class="btn warn sm" data-act="lock" data-id="${u.id}">Lock</button>`}
-            ${u.two_fa ? html`<button class="btn ghost sm" data-act="tfa-off" data-id="${u.id}">Turn off 2FA</button>` : ''}
-            <button class="btn ghost sm" data-act="reset" data-id="${u.id}">Reset password</button>${u.permanent ? '' : html`<button class="btn danger sm" data-act="del" data-id="${u.id}" title="Remove">${icon('trash')}</button>`}`}</div></td></tr>`)}</tbody></table></div>`);
+          : html`${u.locked ? html`<button class="btn primary sm" data-act="unlock" data-id="${u.id}">Unlock</button>` : html`<button class="btn warn sm" data-act="lock" data-id="${u.id}">Lock</button>`}
+            ${u.two_fa ? html`<button class="btn warn sm" data-act="tfa-off" data-id="${u.id}">Turn off 2FA</button>` : ''}
+            <button class="btn warn sm" data-act="reset" data-id="${u.id}">Reset password</button>${u.permanent ? '' : html`<button class="btn danger sm" data-act="del" data-id="${u.id}" title="Remove">${icon('trash')}</button>`}`}</div></td></tr>`)}</tbody></table></div>`);
   }
   const userBy = (id) => st.users.find((u) => u.id === id);
   return {

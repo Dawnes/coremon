@@ -117,6 +117,9 @@ func (s *Server) handleSession(w http.ResponseWriter, r *http.Request) {
 				out["can_change"] = can(u, permChange)
 				out["initial_password"] = statErr == nil && u.ID == s.st.st.InitialUser
 				out["must_change"] = u.MustChange
+				if !u.Locked {
+					out["app"] = s.appName()
+				}
 			}
 			s.st.mu.Unlock()
 		}

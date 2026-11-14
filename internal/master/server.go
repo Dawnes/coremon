@@ -396,13 +396,30 @@ func (s *Server) routes() http.Handler {
 	sub, _ := fs.Sub(webFS, "web")
 	files := http.FileServer(http.FS(sub))
 	mux.HandleFunc("GET /", func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == "/" || r.URL.Path == "/index.html" {
+		if r.URL.Path == "/" || r.URL.Path == "/index.html" || r.URL.Path == "/login.js" {
 			w.Header().Set("Cache-Control", "no-cache")
 			files.ServeHTTP(w, r)
 			return
 		}
 
 		name := strings.TrimPrefix(path.Clean(r.URL.Path), "/")
+		// The application code: signed-in users only, under a name that changes with every version.
+		if name == appScript {
+			http.NotFound(w, r)
+			return
+		}
+		if name == s.appName() {
+			if s.signedIn(r) == nil {
+				http.NotFound(w, r)
+				return
+			}
+			b, _ := fs.ReadFile(sub, appScript)
+			w.Header().Set("Content-Type", "text/javascript; charset=utf-8")
+			// Not stored, so it is gone from the browser after signing out.
+			w.Header().Set("Cache-Control", "no-store")
+			w.Write(b)
+			return
+		}
 		// Files only: no directory listings.
 		if st, err := fs.Stat(sub, name); err != nil || !st.Mode().IsRegular() || strings.HasSuffix(r.URL.Path, "/") {
 			http.NotFound(w, r)
