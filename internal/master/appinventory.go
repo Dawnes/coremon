@@ -16,6 +16,7 @@ import (
 type invSystem struct {
 	ID      string    `json:"id"`
 	Name    string    `json:"name"`
+	GroupID string    `json:"group_id,omitempty"`
 	OS      string    `json:"os"`
 	Online  bool      `json:"online"`
 	Status  string    `json:"status"`
@@ -69,7 +70,7 @@ func (s *Server) handleAppInventory(w http.ResponseWriter, r *http.Request) {
 				v = &invVersion{Version: ap.Version, Full: ap.Full}
 				byApp[ap.Name][ap.Full] = v
 			}
-			sys := invSystem{ID: a.ID, Name: a.Name, OS: releaseName(a.Facts), Online: s.online(a, now), Status: a.Status, Update: upd[ap.Package]}
+			sys := invSystem{ID: a.ID, Name: a.Name, GroupID: a.GroupID, OS: releaseName(a.Facts), Online: s.online(a, now), Status: a.Status, Update: upd[ap.Package]}
 			if vv != nil {
 				if x := vv.Apps[ap.Name]; x != nil {
 					c := *x
@@ -82,7 +83,12 @@ func (s *Server) handleAppInventory(w http.ResponseWriter, r *http.Request) {
 			v.Systems = append(v.Systems, sys)
 		}
 	}
+	groups := []Group{}
+	for _, g := range s.st.st.Groups {
+		groups = append(groups, *g)
+	}
 	s.st.mu.Unlock()
+	sort.Slice(groups, func(i, j int) bool { return naturalLess(strings.ToLower(groups[i].Name), strings.ToLower(groups[j].Name)) })
 	out := []*invApp{}
 	for name, vers := range byApp {
 		app := &invApp{Name: name}
@@ -94,7 +100,7 @@ func (s *Server) handleAppInventory(w http.ResponseWriter, r *http.Request) {
 		out = append(out, app)
 	}
 	sort.Slice(out, func(i, j int) bool { return naturalLess(strings.ToLower(out[i].Name), strings.ToLower(out[j].Name)) })
-	writeJSON(w, map[string]any{"apps": out})
+	writeJSON(w, map[string]any{"apps": out, "groups": groups})
 }
 
 // naturalLess sorts "php 7.4" before "php 8.2" and "tomcat 9" before "tomcat 10".

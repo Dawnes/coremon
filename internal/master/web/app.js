@@ -1627,18 +1627,29 @@ function worstVulns(systems) {
 const hasCVE = (v) => v && v.status === 'found';
 
 function AppList() {
-  const st = { d: null, q: '', f: 'all' };
+  const st = { d: null, q: '', f: 'all', g: '', view: [] };
   const verKey = (app, full) => app + '|' + full;
+  function groupMenu() {
+    const groups = st.d.groups || [];
+    const ungrouped = st.d.apps.some((a) => a.versions.some((v) => v.systems.some((s) => !s.group_id)));
+    if (st.g && !(st.g === '-' ? ungrouped : groups.some((g) => g.id === st.g))) st.g = '';
+    setHTML($('#al-g'), html`<option value="">All systems</option>${groups.map((g) => html`<option value="${g.id}" ${st.g === g.id ? raw('selected') : ''}>${g.name}</option>`)}${ungrouped ? html`<option value="-" ${st.g === '-' ? raw('selected') : ''}>Ungrouped</option>` : ''}`);
+    $('#al-g').value = st.g;
+  }
   function render() {
     if (!st.d) return;
     const q = st.q.trim().toLowerCase();
+    const inGroup = (s) => !st.g || (st.g === '-' ? !s.group_id : s.group_id === st.g);
+    st.view = st.d.apps.map((a) => ({ ...a, versions: a.versions.map((v) => ({ ...v, systems: v.systems.filter(inGroup) })).filter((v) => v.systems.length) }))
+      .filter((a) => a.versions.length);
     const keep = (v) => st.f === 'all' || (st.f === 'upd' ? v.systems.some((s) => s.update) : hasCVE(worstVulns(v.systems)));
-    const apps = st.d.apps.filter((a) => !q || a.name.toLowerCase().includes(q))
+    const apps = st.view.filter((a) => !q || a.name.toLowerCase().includes(q))
       .map((a) => ({ ...a, versions: a.versions.filter(keep) })).filter((a) => a.versions.length);
-    const count = (f) => st.d.apps.reduce((n, a) => n + a.versions.filter(f).length, 0);
+    const count = (f) => st.view.reduce((n, a) => n + a.versions.filter(f).length, 0);
     setHTML($('#al-chips'), html`${[['all', 'All', () => true], ['upd', 'With updates', (v) => v.systems.some((s) => s.update)], ['cve', 'With CVEs', (v) => hasCVE(worstVulns(v.systems))]]
       .map(([k, l, f]) => html`<button class="chip ${st.f === k ? 'on' : ''}" data-act="f" data-v="${k}">${l}<span class="n">${count(f)}</span></button>`)}`);
     if (!st.d.apps.length) return setHTML($('#al-list'), html`<div class="panel empty">No application data yet. It arrives with the systems' next update check.</div>`);
+    if (!st.view.length) return setHTML($('#al-list'), html`<div class="panel empty">No applications found on the systems in this group.</div>`);
     if (!apps.length) return setHTML($('#al-list'), html`<div class="panel empty">Nothing matches.</div>`);
     setHTML($('#al-list'), html`<div class="stack">${apps.map((a) => html`<div class="panel"><div class="panel-pad" style="padding-bottom:6px"><h2 style="margin:0">${a.name}</h2></div>
       <table class="tbl apptbl"><colgroup><col><col class="c-sys"><col class="c-upd"><col class="c-sec"></colgroup>
@@ -1669,16 +1680,17 @@ function AppList() {
     interval: 15000,
     mount(el) {
       el.innerHTML = r(html`${subTabs('dashboard', 'apps')}<div class="page-head"><div><h1>Application List</h1><div class="sub">Which applications run where, per version</div></div></div>
-        <div class="toolbar"><input type="search" class="search" id="al-q" placeholder="Search applications…"><div class="chips" id="al-chips"></div></div>
+        <div class="toolbar"><input type="search" class="search" id="al-q" placeholder="Search applications…"><select id="al-g" class="grpsel" title="Show the applications of one group"><option value="">All systems</option></select><div class="chips" id="al-chips"></div></div>
         <div id="al-list"></div>`);
       $('#al-q').addEventListener('input', (e) => { st.q = e.target.value; render(); });
+      $('#al-g').addEventListener('change', (e) => { st.g = e.target.value; render(); });
     },
-    async refresh() { st.d = await GET('apps'); render(); },
+    async refresh() { st.d = await GET('apps'); groupMenu(); render(); },
     acts: {
       f: (t) => { st.f = t.dataset.v; render(); },
       ver: (t) => {
         const i = t.dataset.k.indexOf('|'), app = t.dataset.k.slice(0, i), full = t.dataset.k.slice(i + 1);
-        const v = st.d.apps.find((a) => a.name === app)?.versions.find((x) => x.full === full);
+        const v = st.view.find((a) => a.name === app)?.versions.find((x) => x.full === full);
         if (v) openVersion(app, v);
       },
     },

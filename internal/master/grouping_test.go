@@ -75,7 +75,8 @@ func TestAppInventory(t *testing.T) {
 	}
 	upd, _ := json.Marshal(updates.Snapshot{Packages: []updates.Package{{Name: "libssl3", Available: "3.0.17-1~deb12u3"}}})
 	s.st.mu.Lock()
-	s.st.st.Agents["a1"] = &Agent{ID: "a1", Name: "web-02", Status: StatusActive, Facts: proto.Facts{OSName: "Debian 12"}, State: map[string]json.RawMessage{"apps": state("3.0.15-1~deb12u1"), "updates": upd}}
+	s.st.st.Groups = []*Group{{ID: "g_web", Name: "Web"}, {ID: "g_db", Name: "Databases"}}
+	s.st.st.Agents["a1"] = &Agent{ID: "a1", Name: "web-02", GroupID: "g_web", Status: StatusActive, Facts: proto.Facts{OSName: "Debian 12"}, State: map[string]json.RawMessage{"apps": state("3.0.15-1~deb12u1"), "updates": upd}}
 	s.st.st.Agents["a2"] = &Agent{ID: "a2", Name: "web-01", Status: StatusReportOnly, State: map[string]json.RawMessage{"apps": state("3.0.15-1~deb12u1")}}
 	s.st.st.Agents["a3"] = &Agent{ID: "a3", Name: "db", Status: StatusActive, State: map[string]json.RawMessage{"apps": state("3.0.17-1~deb12u3")}}
 	s.st.st.Agents["a4"] = &Agent{ID: "a4", Name: "new", Status: StatusPending, State: map[string]json.RawMessage{"apps": state("1.0-1")}}
@@ -83,9 +84,13 @@ func TestAppInventory(t *testing.T) {
 	w := httptest.NewRecorder()
 	s.handleAppInventory(w, httptest.NewRequest("GET", "/api/ui/apps", nil))
 	var out struct {
-		Apps []invApp `json:"apps"`
+		Apps   []invApp `json:"apps"`
+		Groups []Group  `json:"groups"`
 	}
 	json.Unmarshal(w.Body.Bytes(), &out)
+	if len(out.Groups) != 2 || out.Groups[0].Name != "Databases" {
+		t.Errorf("groups for the filter, A-Z: %+v", out.Groups)
+	}
 	if len(out.Apps) != 2 || out.Apps[0].Name != "OpenSSL" || out.Apps[1].Name != "Tomcat 10" {
 		t.Fatalf("apps: %s", w.Body.String())
 	}
@@ -94,7 +99,7 @@ func TestAppInventory(t *testing.T) {
 		t.Fatalf("OpenSSL versions: %+v", v)
 	}
 	old := v[1].Systems
-	if old[0].Name != "web-01" || old[1].Name != "web-02" || old[1].Update != "3.0.17-1~deb12u3" || old[0].Update != "" || old[1].OS != "Debian 12" {
+	if old[0].Name != "web-01" || old[1].Name != "web-02" || old[1].Update != "3.0.17-1~deb12u3" || old[0].Update != "" || old[1].OS != "Debian 12" || old[1].GroupID != "g_web" || old[0].GroupID != "" {
 		t.Errorf("systems of 3.0.15: %+v", old)
 	}
 	if strings.Contains(w.Body.String(), `"new"`) {
