@@ -88,7 +88,9 @@ func (s *Server) handleAppInventory(w http.ResponseWriter, r *http.Request) {
 		groups = append(groups, *g)
 	}
 	s.st.mu.Unlock()
-	sort.Slice(groups, func(i, j int) bool { return naturalLess(strings.ToLower(groups[i].Name), strings.ToLower(groups[j].Name)) })
+	sort.Slice(groups, func(i, j int) bool {
+		return naturalLess(strings.ToLower(groups[i].Name), strings.ToLower(groups[j].Name))
+	})
 	out := []*invApp{}
 	for name, vers := range byApp {
 		app := &invApp{Name: name}
