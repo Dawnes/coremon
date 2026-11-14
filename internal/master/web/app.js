@@ -698,19 +698,19 @@ function Dashboard() {
     const L = a.local;
     const state = !L.checked ? 'wait' : L.up ? 'up' : 'down';
     const accent = { wait: 'a-pend', up: 'a-ok', down: 'a-off' }[state];
-    const big = { wait: L.fails ? html`<div class="big some">?</div><div class="biglbl">no answer yet<br>${L.fails} of ${L.down_after} tries</div>`
-      : L.last_error ? html`<div class="big sec" title="${L.last_error}">!</div><div class="biglbl">the master cannot<br>send pings</div>`
-      : html`<div class="big dim">—</div><div class="biglbl">waiting for<br>first ping</div>`,
-      up: html`<div class="big zero">Up</div><div class="biglbl">answers<br>ping</div>`,
-      down: html`<div class="big sec">Down</div><div class="biglbl">no answer<br>to ping</div>` }[state];
-    const uptime = L.uptime >= 0 ? html`<span class="badge ${L.uptime >= 0.999 ? 'ok' : L.uptime >= 0.9 ? 'upd' : 'sec'} xs" title="Share of answered pings in the last 24 hours">${pctText(L.uptime)} 24 h</span>` : '';
+    const big = { wait: L.fails ? html`<div class="big some">?</div><div class="biglbl">no answer yet<br>${L.fails} of ${L.down_after} checks</div>`
+      : L.last_error ? html`<div class="big sec" title="${L.last_error}">!</div><div class="biglbl">the master cannot<br>check it</div>`
+      : html`<div class="big dim">—</div><div class="biglbl">waiting for<br>first check</div>`,
+      up: html`<div class="big zero">Up</div>`,
+      down: html`<div class="big sec">Down</div><div class="biglbl">not<br>reachable</div>` }[state];
+    const uptime = L.uptime >= 0 ? html`<span class="badge ${L.uptime >= 0.999 ? 'ok' : L.uptime >= 0.9 ? 'upd' : 'sec'} xs" title="Share of successful checks in the last 24 hours">${pctText(L.uptime)} 24 h</span>` : '';
     return html`
       <div class="card ${accent}" data-act="open-agent" data-id="${a.id}" ${canChange() ? raw('data-drag="agent" draggable="true"') : ''}>
         <div class="top">${ifChange(html`<span class="grip" title="Drag to reorder or move to another group">${icon('grip')}</span>`)}${agentDot(a)}
-          <div style="min-width:0"><div class="name">${a.name}</div><div class="os">Agentless · ping</div><div class="os"><span class="ip">${L.address}</span></div></div></div>
+          <div style="min-width:0"><div class="name">${a.name}</div><div class="os">Agentless</div><div class="os"><span class="ip">${L.address}</span></div></div></div>
         <div class="mid">${big}<div class="badges">${uptime}</div></div>
         <div class="inforow"><span class="uptime">${icon('clock')}${state === 'wait' ? (L.fails ? 'not decided yet' : 'not checked yet') : `${L.up ? 'up' : 'down'} ${dur(now() - L.since)}`}</span><span class="spacer"></span>${state === 'up' ? html`<span class="tag mono">${rttText(L.rtt_us)}</span>` : ''}</div>
-        <div class="foot"><span>${L.last_check ? when(L.last_check, 'pinged ') : 'waiting'}</span></div>
+        <div class="foot"><span>${L.last_check ? when(L.last_check, 'checked ') : 'waiting'}</span></div>
       </div>`;
   }
   function card(a) {
