@@ -238,9 +238,17 @@ func TestNothingForStrangers(t *testing.T) {
 			t.Errorf("%s: %d %q", p, code, body)
 		}
 	}
-	for _, p := range []string{"/", "/app.js", "/style.css", "/legal/LICENSE.txt", "/favicon.svg"} {
+	for _, p := range []string{"/", "/app.js", "/style.css", "/legal/LICENSE.txt", "/favicon.svg", "/fonts/geist.woff2"} {
 		if code, _ := get(p); code != 200 {
 			t.Errorf("%s: %d", p, code)
+		}
+	}
+	if resp, err := srv.Client().Get(srv.URL + "/fonts/poppins-600.woff2"); err != nil {
+		t.Error(err)
+	} else {
+		resp.Body.Close()
+		if ct := resp.Header.Get("Content-Type"); ct != "font/woff2" {
+			t.Errorf("font content type %q", ct)
 		}
 	}
 	// No version or date before signing in; both after.

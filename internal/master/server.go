@@ -408,6 +408,10 @@ func (s *Server) routes() http.Handler {
 			http.NotFound(w, r)
 			return
 		}
+		if strings.HasSuffix(name, ".woff2") {
+			w.Header().Set("Content-Type", "font/woff2")
+			w.Header().Set("Cache-Control", "public, max-age=2592000")
+		}
 		files.ServeHTTP(w, r)
 	})
 	return securityHeaders(mux)

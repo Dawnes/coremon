@@ -1137,7 +1137,7 @@ function LicensePage() {
   return {
     async mount(el) {
       el.innerHTML = r(html`${subTabs('about', 'license')}<div class="page-head"><div><h1>License</h1><div class="sub">How Coremon may be used</div></div></div>
-        <div class="stack" style="max-width:860px">
+        <div class="stack licpage" style="max-width:860px">
           <div class="notice blue">Coremon is licensed under the <b>PolyForm Noncommercial License 1.0.0</b>: free for personal, hobby,
             educational and non-profit use. Commercial use requires permission from Dawnes, the Developer
             (<a href="https://github.com/Dawnes" target="_blank" rel="noopener noreferrer">github.com/Dawnes</a>).</div>

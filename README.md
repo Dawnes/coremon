@@ -87,6 +87,7 @@ Coremon is licensed under the [PolyForm Noncommercial License 1.0.0](LICENSE):
 free for personal, hobby, educational and non-profit use. Commercial use
 requires permission from Dawnes, the Developer ([github.com/Dawnes](https://github.com/Dawnes)).
 
-Coremon includes the Go standard library; see [THIRD-PARTY-NOTICES](THIRD-PARTY-NOTICES).
+Coremon includes the Go standard library and the fonts Poppins, Geist and
+Geist Mono; see [THIRD-PARTY-NOTICES](THIRD-PARTY-NOTICES).
 
 © 2026 Dawnes, the Developer
