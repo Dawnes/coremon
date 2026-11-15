@@ -18,21 +18,22 @@ import (
 )
 
 type LocalDevice struct {
-	ID        string     `json:"id"`
-	Name      string     `json:"name"`
-	GroupID   string     `json:"group_id"`
-	Order     int        `json:"order"`
-	Address   string     `json:"address"`
-	AddedAt   int64      `json:"added_at"`
-	Checked   bool       `json:"checked,omitempty"` // up or down has been decided
-	Up        bool       `json:"up,omitempty"`
-	Since     int64      `json:"since,omitempty"` // when it went up or down
-	LastCheck int64      `json:"last_check,omitempty"`
-	LastUp    int64      `json:"last_up,omitempty"` // last answered ping
-	RTTUs     int64      `json:"rtt_us,omitempty"`
-	Fails     int        `json:"fails,omitempty"` // unanswered pings in a row
-	LastError string     `json:"last_error,omitempty"`
-	Hist      []histSlot `json:"hist,omitempty"`
+	ID      string `json:"id"`
+	Name    string `json:"name"`
+	GroupID string `json:"group_id"`
+	Order   int    `json:"order"`
+	Address string `json:"address"`
+	AddedAt int64  `json:"added_at"`
+	// The ping's results: kept in checks.dat, not in state.dat.
+	Checked   bool       `json:"-"` // up or down has been decided
+	Up        bool       `json:"-"`
+	Since     int64      `json:"-"` // when it went up or down
+	LastCheck int64      `json:"-"`
+	LastUp    int64      `json:"-"` // last answered ping
+	RTTUs     int64      `json:"-"`
+	Fails     int        `json:"-"` // unanswered pings in a row
+	LastError string     `json:"-"`
+	Hist      []histSlot `json:"-"`
 	NoPing    bool       `json:"no_ping,omitempty"`   // before 0.3.42: ping turned off; read once as PingMode "paused"
 	PingMode  string     `json:"ping_mode,omitempty"` // "" pinged, "paused" or "removed"
 	Services  []*Service `json:"services,omitempty"`
@@ -410,7 +411,7 @@ func (s *Server) record(d *LocalDevice, rtt time.Duration, err error, now time.T
 		}
 	}
 	d.Hist = addHist(d.Hist, ok, t)
-	s.st.markDirty()
+	s.markChecks()
 }
 
 // addHist counts one result in its quarter of an hour and drops what is
@@ -488,7 +489,7 @@ func (s *Server) pingOne(id string) {
 		if se != nil {
 			// The master's own problem, not the device's: no result.
 			d.LastCheck, d.LastError = time.Now().Unix(), se.Error()
-			s.st.markDirty()
+			s.markChecks()
 		} else {
 			s.record(d, rtt, err, time.Now())
 		}
@@ -681,6 +682,7 @@ func (s *Server) handleLocalUpdate(w http.ResponseWriter, r *http.Request) {
 		d.GroupID = *req.GroupID
 	}
 	s.st.markDirty()
+	s.markChecks()
 	if len(changes) > 0 {
 		s.writeLocalAudit(r, "device.local_changed", d, strings.Join(changes, "; "))
 	}
@@ -696,6 +698,7 @@ func (s *Server) handleLocalDelete(w http.ResponseWriter, r *http.Request) {
 	}
 	delete(s.st.st.Locals, d.ID)
 	s.st.markDirty()
+	s.markChecks()
 	s.writeLocalAudit(r, "device.local_removed", d, "address "+d.Address)
 	writeJSON(w, map[string]bool{"removed": true})
 }
@@ -778,6 +781,7 @@ func (s *Server) handlePingState(w http.ResponseWriter, r *http.Request) {
 	delete(s.loc.next, d.ID)
 	s.loc.mu.Unlock()
 	s.st.markDirty()
+	s.markChecks()
 	s.writeLocalAudit(r, action, d, "")
 	writeJSON(w, s.localDeviceView(d, true))
 }

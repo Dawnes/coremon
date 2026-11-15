@@ -54,6 +54,7 @@ var backupFiles = []struct {
 	{"tls-next.crt", false},
 	{"tls-next.key", false},
 	{"audit.jsonl", false},
+	{"checks.dat", false}, // results of the agentless checks (since 0.3.43)
 }
 
 var backupSchedules = []string{"off", "daily", "weekly", "monthly"}
@@ -99,6 +100,10 @@ func (s *Server) snapshot() (map[string][]byte, backupManifest, error) {
 	s.st.mu.Lock()
 	js, err := json.Marshal(&s.st.st)
 	users, systems := len(s.st.st.Users), len(s.st.st.Agents)+len(s.st.st.Locals)
+	var cjs []byte
+	if err == nil {
+		cjs, err = s.checksJSON()
+	}
 	s.st.mu.Unlock()
 	if err != nil {
 		return nil, backupManifest{}, err
@@ -108,6 +113,9 @@ func (s *Server) snapshot() (map[string][]byte, backupManifest, error) {
 		return nil, backupManifest{}, err
 	}
 	files["state.dat"] = enc
+	if files["checks.dat"], err = encodeState(cjs); err != nil {
+		return nil, backupManifest{}, err
+	}
 	s.keyMu.Lock()
 	for _, f := range backupFiles[1:7] {
 		if b, err := os.ReadFile(filepath.Join(s.cfg.DataDir, f.name)); err == nil {

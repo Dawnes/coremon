@@ -285,9 +285,23 @@ func mergeAudit(a, b []byte) []byte {
 	return out.Bytes()
 }
 
+// writeAtomic replaces a file safely: the new content is written to a
+// temporary file and flushed to disk first, then swapped in with one rename,
+// so a crash or power cut leaves either the old or the new file, never half.
 func writeAtomic(path string, b []byte) error {
 	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, b, 0o600); err != nil {
+	f, err := os.OpenFile(tmp, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o600)
+	if err != nil {
+		return err
+	}
+	if _, err = f.Write(b); err == nil {
+		err = f.Sync()
+	}
+	if cerr := f.Close(); err == nil {
+		err = cerr
+	}
+	if err != nil {
+		os.Remove(tmp)
 		return err
 	}
 	return os.Rename(tmp, path)
@@ -358,7 +372,7 @@ func (s *Server) restore(p *preparedRestore, who, ip string) error {
 			if err := writeAtomic(path, b); err != nil {
 				return err
 			}
-		case f.name == "payload-next.key" || f.name == "tls-next.crt" || f.name == "tls-next.key":
+		case f.name == "payload-next.key" || f.name == "tls-next.crt" || f.name == "tls-next.key" || f.name == "checks.dat":
 			os.Remove(path)
 		}
 	}

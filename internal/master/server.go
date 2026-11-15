@@ -80,6 +80,8 @@ type Server struct {
 	loc           localState
 	pinger        pingFunc
 	svcCheck      svcCheckFunc
+	checksDirty   bool       // check results changed; guarded by st.mu
+	checksMu      sync.Mutex // one write of checks.dat at a time
 
 	handler http.Handler
 
@@ -193,6 +195,7 @@ func New(cfg Config) (*Server, error) {
 		audit: &auditLog{path: filepath.Join(cfg.DataDir, "audit.jsonl")}, wakes: map[string]chan struct{}{},
 		hashSem: make(chan struct{}, hashAtOnce), pinger: icmpPing, svcCheck: tcpCheck}
 	s.loc.next, s.loc.busy = map[string]time.Time{}, map[string]bool{}
+	s.loadChecks()
 
 	pubPath := cfg.SigningKeyPath
 	if pubPath == "" {
@@ -482,6 +485,7 @@ func (s *Server) Run(ctx context.Context) error {
 	go s.nvdLoop(stop)
 	go s.backupLoop(stop)
 	go s.localLoop(stop)
+	go s.checksLoop(stop)
 	handler := s.routes()
 	s.handler = handler
 	s.applyUIPort(handler)
@@ -518,6 +522,7 @@ func (s *Server) Run(ctx context.Context) error {
 	case err = <-errc:
 	}
 	close(stop)
+	s.saveChecks()
 	time.Sleep(200 * time.Millisecond)
 	if errors.Is(err, http.ErrServerClosed) {
 		err = nil

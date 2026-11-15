@@ -30,16 +30,17 @@ type Service struct {
 	Reverse  bool   `json:"reverse,omitempty"` // reachable counts as down
 	Paused   bool   `json:"paused,omitempty"`  // not checked until resumed
 
-	Checked   bool       `json:"checked,omitempty"`
-	Up        bool       `json:"up,omitempty"`
-	Since     int64      `json:"since,omitempty"`
-	LastCheck int64      `json:"last_check,omitempty"`
-	LastOK    int64      `json:"last_ok,omitempty"`
-	RTTUs     int64      `json:"rtt_us,omitempty"`
-	Fails     int        `json:"fails,omitempty"`
-	LastError string     `json:"last_error,omitempty"`
-	Banner    string     `json:"banner,omitempty"`
-	Hist      []histSlot `json:"hist,omitempty"`
+	// Results: kept in checks.dat, not in state.dat.
+	Checked   bool       `json:"-"`
+	Up        bool       `json:"-"`
+	Since     int64      `json:"-"`
+	LastCheck int64      `json:"-"`
+	LastOK    int64      `json:"-"`
+	RTTUs     int64      `json:"-"`
+	Fails     int        `json:"-"`
+	LastError string     `json:"-"`
+	Banner    string     `json:"-"`
+	Hist      []histSlot `json:"-"`
 }
 
 const (
@@ -227,7 +228,7 @@ func (s *Server) recordService(sv *Service, rtt time.Duration, banner string, re
 		s.loc.next[sv.ID] = now.Add(svcRetryEvery)
 	}
 	sv.Hist = addHist(sv.Hist, ok, t)
-	s.st.markDirty()
+	s.markChecks()
 }
 
 type svcKey struct{ dev, svc string }
@@ -457,6 +458,7 @@ func (s *Server) handleServiceUpdate(w http.ResponseWriter, r *http.Request) {
 		s.loc.mu.Unlock()
 	}
 	s.st.markDirty()
+	s.markChecks()
 	if after := sv.describe(); after != before {
 		s.writeLocalAudit(r, "device.service_changed", d, before+" → "+after)
 	}
@@ -490,6 +492,7 @@ func (s *Server) handleServiceDelete(w http.ResponseWriter, r *http.Request) {
 	}
 	d.Services = keep
 	s.st.markDirty()
+	s.markChecks()
 	s.writeLocalAudit(r, "device.service_removed", d, gone.describe())
 	writeJSON(w, s.localDeviceView(d, true))
 }
@@ -566,6 +569,7 @@ func (s *Server) handleServicePause(w http.ResponseWriter, r *http.Request) {
 	delete(s.loc.next, sv.ID)
 	s.loc.mu.Unlock()
 	s.st.markDirty()
+	s.markChecks()
 	s.writeLocalAudit(r, map[bool]string{true: "device.service_paused", false: "device.service_resumed"}[sv.Paused], d, sv.describe())
 	writeJSON(w, s.localDeviceView(d, true))
 }
