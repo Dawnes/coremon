@@ -79,6 +79,7 @@ type Server struct {
 	vul           vulnStore
 	loc           localState
 	pinger        pingFunc
+	svcCheck      svcCheckFunc
 
 	handler http.Handler
 
@@ -190,7 +191,7 @@ func New(cfg Config) (*Server, error) {
 	}
 	s := &Server{cfg: cfg, st: st, sess: newSessions(), keys: keyState{cert: &cert, tlsPin: pin}, exit: os.Exit,
 		audit: &auditLog{path: filepath.Join(cfg.DataDir, "audit.jsonl")}, wakes: map[string]chan struct{}{},
-		hashSem: make(chan struct{}, hashAtOnce), pinger: icmpPing}
+		hashSem: make(chan struct{}, hashAtOnce), pinger: icmpPing, svcCheck: tcpCheck}
 	s.loc.next, s.loc.busy = map[string]time.Time{}, map[string]bool{}
 
 	pubPath := cfg.SigningKeyPath
@@ -365,6 +366,10 @@ func (s *Server) routes() http.Handler {
 	change("POST /api/ui/locals/{id}", s.handleLocalUpdate)
 	change("POST /api/ui/locals/{id}/delete", s.handleLocalDelete)
 	view("POST /api/ui/locals/{id}/ping", s.handleLocalPing)
+	change("POST /api/ui/locals/{id}/services", s.handleServiceCreate)
+	change("POST /api/ui/locals/{id}/services/{sid}", s.handleServiceUpdate)
+	change("POST /api/ui/locals/{id}/services/{sid}/delete", s.handleServiceDelete)
+	view("POST /api/ui/locals/{id}/services/{sid}/check", s.handleServiceCheck)
 	view("GET /api/ui/local", s.handleLocalSettingsGet)
 	change("POST /api/ui/local", s.handleLocalSettingsSave)
 	view("GET /api/ui/jobs", s.handleJobs)

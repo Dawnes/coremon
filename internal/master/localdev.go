@@ -33,6 +33,8 @@ type LocalDevice struct {
 	Fails     int        `json:"fails,omitempty"` // unanswered pings in a row
 	LastError string     `json:"last_error,omitempty"`
 	Hist      []histSlot `json:"hist,omitempty"`
+	NoPing    bool       `json:"no_ping,omitempty"` // ping turned off by an admin
+	Services  []*Service `json:"services,omitempty"`
 }
 
 // histSlot: the pings of one quarter of an hour, for the 24-hour bar.
@@ -210,37 +212,100 @@ type localView struct {
 	Hist      []histSlot `json:"hist,omitempty"`
 	Interval  int        `json:"interval"`
 	DownAfter int        `json:"down_after"`
+
+	// Ping off: the status above comes from the services; the ping fields are empty.
+	Ping     bool          `json:"ping"`
+	SvcTotal int           `json:"svc_total"`
+	SvcDown  int           `json:"svc_down"`
+	Services []serviceView `json:"services,omitempty"` // device page only
 }
 
 func (s *Server) localDeviceView(d *LocalDevice, full bool) agentView {
 	now := time.Now().Unix()
-	v := agentView{
-		ID: d.ID, Name: d.Name, GroupID: d.GroupID, Order: d.Order, Status: StatusActive, Monitor: "local",
-		Online: d.Checked && d.Up, LastSeen: d.LastUp, EnrolledAt: d.AddedAt, Features: []string{},
-	}
-	v.Facts.IPs = []string{d.Address}
-	lv := &localView{Address: d.Address, Checked: d.Checked, Up: d.Up, Since: d.Since, LastCheck: d.LastCheck,
-		LastUp: d.LastUp, RTTUs: d.RTTUs, Fails: d.Fails, LastError: d.LastError, Uptime: -1, Interval: s.st.st.Local.IntervalSec, DownAfter: s.st.st.Local.DownAfter}
-	ok, n := 0, 0
-	for _, h := range d.Hist {
-		if h.T > now-histSpan {
-			ok, n = ok+h.OK, n+h.N
+	lv := &localView{Address: d.Address, Interval: s.st.st.Local.IntervalSec, DownAfter: s.st.st.Local.DownAfter, Ping: !d.NoPing, Uptime: -1}
+	if !d.NoPing {
+		lv.Checked, lv.Up, lv.Since, lv.LastCheck, lv.LastUp, lv.RTTUs, lv.Fails, lv.LastError =
+			d.Checked, d.Up, d.Since, d.LastCheck, d.LastUp, d.RTTUs, d.Fails, d.LastError
+		var h []histSlot
+		h, lv.Uptime = recentHist(d.Hist, now)
+		if full {
+			lv.Hist = h
 		}
 	}
-	if n > 0 {
-		lv.Uptime = float64(ok) / float64(n)
+	svcs := []serviceView{}
+	for _, sv := range d.Services {
+		svcs = append(svcs, s.serviceView(sv, now, full))
+	}
+	lv.SvcTotal = len(svcs)
+	for _, sv := range svcs {
+		if sv.Checked && !sv.Up {
+			lv.SvcDown++
+		}
+	}
+	if d.NoPing {
+		servicesStatus(lv, svcs)
 	}
 	if full {
-		lv.Hist = []histSlot{}
-		for _, h := range d.Hist {
-			if h.T > now-histSpan {
-				lv.Hist = append(lv.Hist, h)
-			}
-		}
+		lv.Services = svcs
 	}
+	v := agentView{
+		ID: d.ID, Name: d.Name, GroupID: d.GroupID, Order: d.Order, Status: StatusActive, Monitor: "local",
+		Online: lv.Checked && lv.Up, LastSeen: lv.LastUp, EnrolledAt: d.AddedAt, Features: []string{},
+	}
+	v.Facts.IPs = []string{d.Address}
 	v.Local = lv
 	v.Conflicts = s.localConflicts(d)
 	return v
+}
+
+// servicesStatus: with ping off, the device is up while at least one
+// service is up and down when all are down. Reversed services count only
+// when there are no others.
+func servicesStatus(lv *localView, svcs []serviceView) {
+	use := []serviceView{}
+	for _, sv := range svcs {
+		if !sv.Reverse {
+			use = append(use, sv)
+		}
+	}
+	if len(use) == 0 {
+		use = svcs
+	}
+	up, down := 0, 0
+	var upSince, downSince int64
+	sum, n := 0.0, 0
+	for _, sv := range use {
+		if sv.LastCheck > lv.LastCheck {
+			lv.LastCheck = sv.LastCheck
+		}
+		if sv.LastOK > lv.LastUp {
+			lv.LastUp = sv.LastOK
+		}
+		if sv.Uptime >= 0 {
+			sum, n = sum+sv.Uptime, n+1
+		}
+		switch {
+		case sv.Checked && sv.Up:
+			up++
+			if upSince == 0 || sv.Since < upSince {
+				upSince = sv.Since
+			}
+		case sv.Checked:
+			down++
+			if sv.Since > downSince {
+				downSince = sv.Since
+			}
+		}
+	}
+	if n > 0 {
+		lv.Uptime = sum / float64(n)
+	}
+	switch {
+	case up > 0:
+		lv.Checked, lv.Up, lv.Since = true, true, upSince
+	case down > 0 && down == len(use):
+		lv.Checked, lv.Up, lv.Since = true, false, downSince
+	}
 }
 
 // sortViews: by group (in group order, ungrouped last), then position, then name.
@@ -281,27 +346,50 @@ func (s *Server) record(d *LocalDevice, rtt time.Duration, err error, now time.T
 			d.Checked, d.Up, d.Since = true, false, t
 		}
 	}
+	d.Hist = addHist(d.Hist, ok, t)
+	s.st.markDirty()
+}
+
+// addHist counts one result in its quarter of an hour and drops what is
+// older than 24 hours.
+func addHist(hist []histSlot, ok bool, t int64) []histSlot {
 	slot := t - t%histSlotSec
-	if n := len(d.Hist); n > 0 && d.Hist[n-1].T == slot {
-		d.Hist[n-1].N++
+	if n := len(hist); n > 0 && hist[n-1].T == slot {
+		hist[n-1].N++
 		if ok {
-			d.Hist[n-1].OK++
+			hist[n-1].OK++
 		}
 	} else {
 		h := histSlot{T: slot, N: 1}
 		if ok {
 			h.OK = 1
 		}
-		d.Hist = append(d.Hist, h)
+		hist = append(hist, h)
 	}
 	cut := 0
-	for cut < len(d.Hist) && d.Hist[cut].T <= t-histSpan {
+	for cut < len(hist) && hist[cut].T <= t-histSpan {
 		cut++
 	}
 	if cut > 0 {
-		d.Hist = append([]histSlot(nil), d.Hist[cut:]...)
+		hist = append([]histSlot(nil), hist[cut:]...)
 	}
-	s.st.markDirty()
+	return hist
+}
+
+// recentHist: the slots of the last 24 hours, and the share that was ok (-1: none).
+func recentHist(hist []histSlot, now int64) ([]histSlot, float64) {
+	out := []histSlot{}
+	ok, n := 0, 0
+	for _, h := range hist {
+		if h.T > now-histSpan {
+			out = append(out, h)
+			ok, n = ok+h.OK, n+h.N
+		}
+	}
+	if n == 0 {
+		return out, -1
+	}
+	return out, float64(ok) / float64(n)
 }
 
 // pingOne pings a device and records the result. Without the lock held.
@@ -356,7 +444,11 @@ func (s *Server) localLoop(stop <-chan struct{}) {
 		interval := time.Duration(s.st.st.Local.IntervalSec) * time.Second
 		var due []string
 		s.loc.mu.Lock()
-		for id := range s.st.st.Locals {
+		dueSvc := s.dueServices(now)
+		for id, d := range s.st.st.Locals {
+			if d.NoPing {
+				continue
+			}
 			next, seen := s.loc.next[id]
 			if !seen {
 				// First check soon, spread a little so not all start at once.
@@ -370,7 +462,7 @@ func (s *Server) localLoop(stop <-chan struct{}) {
 			}
 		}
 		for id := range s.loc.next {
-			if s.st.st.Locals[id] == nil {
+			if d := s.st.st.Locals[id]; strings.HasPrefix(id, "l_") && (d == nil || d.NoPing) {
 				delete(s.loc.next, id)
 			}
 		}
@@ -385,6 +477,16 @@ func (s *Server) localLoop(stop <-chan struct{}) {
 				delete(s.loc.busy, id)
 				s.loc.mu.Unlock()
 			}(id)
+		}
+		for _, k := range dueSvc {
+			go func(k svcKey) {
+				sem <- struct{}{}
+				defer func() { <-sem }()
+				s.checkService(k.dev, k.svc)
+				s.loc.mu.Lock()
+				delete(s.loc.busy, k.svc)
+				s.loc.mu.Unlock()
+			}(k)
 		}
 		select {
 		case <-stop:
@@ -466,6 +568,7 @@ func (s *Server) handleLocalUpdate(w http.ResponseWriter, r *http.Request) {
 		Name    *string `json:"name"`
 		Address *string `json:"address"`
 		GroupID *string `json:"group_id"`
+		Ping    *bool   `json:"ping"`
 	}
 	if !readJSON(w, r, &req, 4096) {
 		return
@@ -476,7 +579,20 @@ func (s *Server) handleLocalUpdate(w http.ResponseWriter, r *http.Request) {
 	if d == nil {
 		return
 	}
+	if req.Ping != nil && !*req.Ping && len(d.Services) == 0 {
+		http.Error(w, noCheckMsg, http.StatusConflict)
+		return
+	}
 	var changes []string
+	if req.Ping != nil && *req.Ping == d.NoPing {
+		d.NoPing = !*req.Ping
+		// Ping starts over when it is turned on again.
+		d.Checked, d.Up, d.Since, d.LastCheck, d.LastUp, d.RTTUs, d.Fails, d.LastError, d.Hist = false, false, 0, 0, 0, 0, 0, "", nil
+		s.loc.mu.Lock()
+		delete(s.loc.next, d.ID)
+		s.loc.mu.Unlock()
+		changes = append(changes, map[bool]string{true: "ping on", false: "ping off"}[*req.Ping])
+	}
 	if req.Name != nil {
 		n, err := checkName("device name", *req.Name, maxSystemName)
 		if err != nil {
@@ -502,6 +618,9 @@ func (s *Server) handleLocalUpdate(w http.ResponseWriter, r *http.Request) {
 			s.loc.mu.Lock()
 			delete(s.loc.next, d.ID)
 			s.loc.mu.Unlock()
+			for _, sv := range d.Services {
+				s.resetService(sv)
+			}
 		}
 	}
 	if req.GroupID != nil && *req.GroupID != d.GroupID {
@@ -539,8 +658,12 @@ func (s *Server) handleLocalPing(w http.ResponseWriter, r *http.Request) {
 		s.st.mu.Unlock()
 		return
 	}
-	id := d.ID
+	id, noPing := d.ID, d.NoPing
 	s.st.mu.Unlock()
+	if noPing {
+		http.Error(w, "ping is turned off for this device", http.StatusConflict)
+		return
+	}
 	s.loc.mu.Lock()
 	if s.loc.busy[id] {
 		s.loc.mu.Unlock()

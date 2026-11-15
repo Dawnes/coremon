@@ -11,7 +11,8 @@ the **agent** (one per device). Agents connect out to the master, so no open
 ports and no SSH are needed on your devices.
 
 Devices without an agent, such as routers, switches and printers, can be added
-as **agentless** devices: the master itself pings them to show whether they are up.
+as **agentless** devices: the master itself pings them and checks their services
+(TCP ports such as SSH, HTTPS or SMTP) to show whether they are up.
 
 ## Features
 
@@ -23,7 +24,8 @@ as **agentless** devices: the master itself pings them to show whether they are 
 * **Vulnerabilities**: known CVEs of those applications, with severity, fixes
   and actively exploited ones highlighted.
 * **Agentless devices**: devices without an agent, checked by the master with a
-  ping, with a 24-hour history.
+  ping and per-service TCP checks (heartbeat, retries, timeout, reverse mode),
+  with a 24-hour history.
 * **Releases**: update the master and the agents from the website.
 * **Users**: administrators and read-only users, optional two-factor sign-in
   with an authenticator app, and accounts can be locked.
@@ -61,7 +63,8 @@ and OSV.dev, NVD, CISA and FIRST (vulnerability data).
 3. **Approve** the new device in the website and pick its group.
 
 For a device without an agent choose **Agentless** instead and enter its name and IP
-address. Settings → Agentless sets how often it is pinged.
+address. Settings → Agentless sets how often it is pinged; its services are added
+on the device's Services tab.
 
 ## Updating
 
