@@ -1618,7 +1618,6 @@ function LocalPage([id, tab]) {
       ['Last error', on && L.last_error ? html`<span class="c-red">${L.last_error}</span>` : '—'],
       ['Services', svcs.length ? html`<a href="#" data-act="tab" data-t="services">${svcs.length} service${svcs.length === 1 ? '' : 's'}</a>${L.svc_down ? html` · <span class="c-red">${L.svc_down} down</span>` : ''}${L.svc_paused ? html` · <span class="dim">${L.svc_paused} paused</span>` : ''}` : html`<span class="dim">none</span>`],
       ['Monitoring', 'Agentless'],
-      ['Added', fmtDate(a.enrolled_at)],
     ];
     return html`
       ${on ? '' : html`<div class="notice blue">${pingNote(L)} Its status comes from its running services: up while at least one is up.${canChange() ? html` ${L.ping_mode === 'paused' ? 'Resume' : 'Add'} the ping on the <a href="#" data-act="tab" data-t="services">Services</a> tab.` : ''}</div>`}
