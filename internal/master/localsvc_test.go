@@ -38,9 +38,11 @@ func TestServices(t *testing.T) {
 	id := dv.ID
 	base := "/api/ui/locals/" + id
 
-	// Ping cannot be turned off while nothing else would be checked.
-	if code, _ := c.do("POST", base, `{"ping":false}`); code != 409 {
-		t.Error("ping turned off without services")
+	// The ping cannot be paused or removed while nothing else would be checked.
+	for _, st := range []string{"paused", "removed"} {
+		if code, _ := c.do("POST", base+"/pingstate", `{"state":"`+st+`"}`); code != 409 {
+			t.Errorf("ping %s without services", st)
+		}
 	}
 
 	// A default service keeps its own port and greeting; a custom one needs a port.
@@ -120,12 +122,12 @@ func TestServices(t *testing.T) {
 		t.Errorf("view: %+v", L)
 	}
 
-	// Ping off: the status comes from the services (reversed ones only count when there are no others).
-	if code, b := c.do("POST", base, `{"ping":false}`); code != 200 {
-		t.Fatalf("ping off: %d %s", code, b)
+	// Ping paused: the status comes from the services (reversed ones only count when there are no others).
+	if code, b := c.do("POST", base+"/pingstate", `{"state":"paused"}`); code != 200 || !strings.Contains(b, `"ping_mode":"paused"`) {
+		t.Fatalf("ping paused: %d %s", code, b)
 	}
 	if code, _ := c.do("POST", base+"/ping", ""); code != 409 {
-		t.Error("ping now while ping is off")
+		t.Error("ping now while the ping is paused")
 	}
 	_, body = c.do("GET", "/api/ui/overview", "")
 	if !strings.Contains(body, `"ping":false`) || !strings.Contains(body, `"online":true`) {
@@ -144,10 +146,38 @@ func TestServices(t *testing.T) {
 	c.do("POST", base+"/services/"+web.ID+"/delete", "")
 	c.do("POST", base+"/services/"+tel.ID+"/delete", "")
 	if code, _ := c.do("POST", base+"/services/"+ssh.ID+"/delete", ""); code != 409 || len(d.Services) != 1 {
-		t.Error("last service deleted while ping is off")
+		t.Error("last service deleted while the ping is paused")
+	}
+	if code, _ := c.do("POST", base+"/services/"+ssh.ID+"/pause", `{"paused":true}`); code != 409 {
+		t.Error("last running check paused")
+	}
+
+	// Removed and added again: the ping starts over. A paused service is not checked and does not count.
+	c.do("POST", base+"/pingstate", `{"state":"on"}`)
+	if code, _ := c.do("POST", base+"/pingstate", `{"state":"removed"}`); code != 200 {
+		t.Errorf("removing the ping while SSH runs: %d", code)
+	}
+	if d.PingMode != pingRemoved || d.Hist != nil {
+		t.Errorf("ping removed: mode %q hist %v", d.PingMode, d.Hist)
+	}
+	c.do("POST", base+"/pingstate", `{"state":"on"}`)
+	if code, _ := c.do("POST", base+"/services/"+ssh.ID+"/pause", `{"paused":true}`); code != 200 || !ssh.Paused {
+		t.Error("pause with the ping running")
+	}
+	s.st.mu.Lock()
+	s.loc.mu.Lock()
+	due := s.dueServices(time.Now().Add(time.Hour))
+	s.loc.mu.Unlock()
+	s.st.mu.Unlock()
+	if len(due) != 0 {
+		t.Errorf("a paused service is due: %v", due)
+	}
+	_, body = c.do("GET", "/api/ui/agents/"+id, "")
+	if !strings.Contains(body, `"svc_total":0`) || !strings.Contains(body, `"svc_paused":1`) || !strings.Contains(body, `"paused":true`) {
+		t.Errorf("paused service in the view: %s", body)
 	}
 	_, body = c.do("GET", "/api/ui/audit", "")
-	for _, a := range []string{"device.service_added", "device.service_changed", "device.service_removed", "ping off"} {
+	for _, a := range []string{"device.service_added", "device.service_changed", "device.service_removed", "device.ping_paused", "device.ping_removed", "device.ping_added", "device.service_paused"} {
 		if !strings.Contains(body, a) {
 			t.Errorf("audit log lacks %s", a)
 		}

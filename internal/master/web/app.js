@@ -710,7 +710,7 @@ function Dashboard() {
         <div class="top">${ifChange(html`<span class="grip" title="Drag to reorder or move to another group">${icon('grip')}</span>`)}${agentDot(a)}
           <div style="min-width:0"><div class="name">${a.name}</div><div class="os">Agentless</div><div class="os"><span class="ip">${L.address}</span></div></div></div>
         <div class="mid">${big}<div class="badges">${uptime}</div></div>
-        <div class="inforow"><span class="uptime">${icon('clock')}${state === 'wait' ? (L.fails ? 'not decided yet' : 'not checked yet') : `${L.up ? 'up' : 'down'} ${dur(now() - L.since)}`}</span><span class="spacer"></span>${state === 'up' ? html`<span class="tag mono">${rttText(L.rtt_us)}</span>` : ''}</div>
+        <div class="inforow"><span class="uptime">${icon('clock')}${state === 'wait' ? (L.fails ? 'not decided yet' : 'not checked yet') : `${L.up ? 'up' : 'down'} ${dur(now() - L.since)}`}</span><span class="spacer"></span>${state === 'up' && L.ping && L.rtt_us ? html`<span class="tag mono">${rttText(L.rtt_us)}</span>` : ''}</div>
         <div class="foot"><span>${L.last_check ? when(L.last_check, 'checked ') : 'waiting'}</span></div>
       </div>`;
   }
@@ -1443,15 +1443,12 @@ function localEditModal(a, groups, done) {
       <label class="field">IP address<input type="text" name="address" value="${a?.local.address || ''}" placeholder="e.g. 192.168.5.20" required spellcheck="false" autocomplete="off"></label>
       <div class="dim small">IPv4 or IPv6. No host names: Coremon does not rely on DNS. Each address can belong to one device only.${isNew ? '' : ' A new address starts all checks over.'}</div>
       <label class="field">Group<select name="group">${groupOptions(groups, a?.group_id || '')}</select></label>
-      ${isNew ? '' : html`<label class="checkrow"><input type="checkbox" name="ping" ${a.local.ping ? 'checked' : ''}> Ping this device</label>
-        <div class="dim small">Turn ping off for devices that do not answer ping. The device's status then comes from its services: up while at least one is up.</div>`}
       <div class="actions"><button type="button" class="btn ghost" data-act="cancel">Cancel</button><button class="btn primary">${isNew ? html`${icon('plus')} Add device` : 'Save'}</button></div>
     </form>`, {
     acts: {
       cancel: () => closeModal(),
       save: async (f) => {
         const body = { name: f.name.value, address: f.address.value.trim(), group_id: f.group.value };
-        if (!isNew) body.ping = f.ping.checked;
         const res = await POST(isNew ? 'locals' : `locals/${a.id}`, body);
         closeModal();
         toast(isNew ? `${res.name} added` : 'Saved', 'ok');
@@ -1480,33 +1477,50 @@ function uptimeBar(hist, { word = 'ping', compact = false } = {}) {
   return compact ? html`<div class="upbar mini">${cells}</div>` : html`<div class="upbar">${cells}</div><div class="upaxis"><span>24 hours ago</span><span>now</span></div>`;
 }
 function svcState(s) {
+  if (s.paused) return html`<span class="badge mute xs">paused</span>`;
   if (!s.checked) return s.fails ? html`<span class="badge upd xs" title="${s.last_error || ''}">retry ${s.fails} of ${s.retries}</span>` : html`<span class="badge mute xs">waiting</span>`;
   if (s.up) return s.fails ? html`<span class="badge upd xs" title="${s.last_error || ''}">up · retry ${s.fails} of ${s.retries}</span>` : html`<span class="badge ok xs">up</span>`;
   return html`<span class="badge sec xs" title="${s.last_error || ''}">down</span>`;
 }
+function pingState(P) {
+  if (P.mode === 'paused') return html`<span class="badge mute xs">paused</span>`;
+  if (!P.checked) return P.fails ? html`<span class="badge upd xs" title="${P.last_error || ''}">no answer ${P.fails} of ${P.down_after}</span>` : html`<span class="badge mute xs">waiting</span>`;
+  if (P.up) return P.fails ? html`<span class="badge upd xs" title="${P.last_error || ''}">up · no answer ${P.fails} of ${P.down_after}</span>` : html`<span class="badge ok xs">up</span>`;
+  return html`<span class="badge sec xs" title="${P.last_error || ''}">down</span>`;
+}
 function serviceModal(dev, svc, presets, lim, done) {
   const isNew = !svc;
-  const s = svc || { preset: presets[0].key, name: presets[0].name, port: presets[0].port, greeting: presets[0].greeting, interval: lim.interval, retries: lim.retries, timeout: lim.timeout, reverse: false };
+  const canPing = isNew && dev.local.ping_mode === 'removed';
+  const s = svc || (canPing ? { preset: 'ping', name: 'Ping', port: '', greeting: false, interval: lim.interval, retries: lim.retries, timeout: lim.timeout, reverse: false }
+    : { preset: presets[0].key, name: presets[0].name, port: presets[0].port, greeting: presets[0].greeting, interval: lim.interval, retries: lim.retries, timeout: lim.timeout, reverse: false });
   const groups = [...new Set(presets.map((p) => p.group))];
-  let lastPresetName = (presets.find((p) => p.key === s.preset) || {}).name || '';
+  let lastPresetName = s.preset === 'ping' ? '' : (presets.find((p) => p.key === s.preset) || {}).name || '';
   const fill = (f) => {
+    const ping = f.preset.value === 'ping';
+    for (const n of ['name', 'port', 'greeting', 'interval', 'retries', 'timeout', 'reverse']) f[n].disabled = ping;
+    $('#svc-tcp').style.display = ping ? 'none' : '';
+    $('#svc-ping').style.display = ping ? '' : 'none';
+    if (ping) return;
     const p = presets.find((x) => x.key === f.preset.value);
     f.port.disabled = f.greeting.disabled = !!p;
     if (p) {
       f.port.value = p.port; f.greeting.checked = p.greeting;
-      if (!f.name.value || f.name.value === lastPresetName) f.name.value = p.name;
+      if (!f.name.value || f.name.value === lastPresetName || f.name.value === 'Ping') f.name.value = p.name;
       lastPresetName = p.name;
-    } else if (lastPresetName) {
+    } else if (lastPresetName || f.name.value === 'Ping') {
       // From a default service to Custom: the admin fills in everything.
-      if (f.name.value === lastPresetName) f.name.value = '';
+      if (f.name.value === lastPresetName || f.name.value === 'Ping') f.name.value = '';
       f.port.value = ''; f.greeting.checked = false; lastPresetName = '';
     }
   };
   openModal(html`<h3>${isNew ? `Add a service to ${dev.name}` : `Edit ${s.name}`}</h3>
     <form class="form" data-submit="save">
       <label class="field">Service<select name="preset" data-change="preset">
+        ${canPing ? html`<option value="ping" selected>Ping (ICMP)</option>` : ''}
         ${groups.map((g) => presets.filter((p) => p.group === g).map((p) => html`<option value="${p.key}" ${s.preset === p.key ? 'selected' : ''}>${p.name} (${p.port})</option>`))}
         <option value="" ${!s.preset ? 'selected' : ''}>Custom TCP port…</option></select></label>
+      <div class="notice blue" id="svc-ping" style="margin:0;display:none">The ping uses the same settings for every agentless device: every ${dev.local.interval} s, down after ${dev.local.down_after} unanswered pings (Settings → Agentless).</div>
+      <div id="svc-tcp" class="stack" style="gap:12px">
       <div class="row" style="gap:12px;align-items:flex-end">
         <label class="field" style="flex:2">Name<input type="text" name="name" value="${s.name}" maxlength="48" required></label>
         <label class="field" style="flex:1">Port<input type="number" name="port" min="1" max="65535" value="${s.port}" required></label></div>
@@ -1519,6 +1533,7 @@ function serviceModal(dev, svc, presets, lim, done) {
       <div class="dim small">Checked every ${lim.interval_min}–${lim.interval_max} s (default ${lim.interval}). After a failed check up to ${lim.retries_max} retries follow, 30 s apart, before the service is marked down. The timeout limits connecting and waiting for the greeting.</div>
       <label class="checkrow"><input type="checkbox" name="reverse" ${s.reverse ? 'checked' : ''}> Reverse mode</label>
       <div class="dim small">The status is turned upside down: reachable counts as down. For example for a port that must stay closed.</div>
+      </div>
       <div class="actions"><button type="button" class="btn ghost" data-act="cancel">Cancel</button><button class="btn primary">${isNew ? html`${icon('plus')} Add service` : 'Save'}</button></div>
     </form>`, {
     wide: true,
@@ -1526,6 +1541,12 @@ function serviceModal(dev, svc, presets, lim, done) {
       cancel: () => closeModal(),
       preset: (t) => fill(t.form),
       save: async (f) => {
+        if (f.preset.value === 'ping') {
+          const res = await POST(`locals/${dev.id}/pingstate`, { state: 'on' });
+          closeModal();
+          toast('Ping added — the first ping follows within seconds', 'ok');
+          return done?.(res);
+        }
         const body = { preset: f.preset.value, name: f.name.value, interval: +f.interval.value, retries: +f.retries.value, timeout: +f.timeout.value, reverse: f.reverse.checked };
         if (!f.preset.value) { body.port = +f.port.value; body.greeting = f.greeting.checked; }
         const res = await POST(isNew ? `locals/${dev.id}/services` : `locals/${dev.id}/services/${svc.id}`, body);
@@ -1539,53 +1560,71 @@ function serviceModal(dev, svc, presets, lim, done) {
 }
 function LocalPage([id, tab]) {
   const st = { data: null, pinging: false, tab: tab === 'services' ? 'services' : 'system', checking: new Set() };
+  const pingNote = (L) => (L.ping_mode === 'paused' ? 'Ping is paused for this device.' : 'This device is not pinged.');
   function systemTab(a, L) {
+    const P = L.ping_info, on = L.ping;
     const status = !L.checked ? html`<span class="badge mute xs">waiting</span>` : L.up ? html`<span class="badge ok xs">up</span>` : html`<span class="badge sec xs">down</span>`;
+    const svcs = L.services || [];
     const kv = [
       ['Status', html`${status} ${L.checked ? `since ${fmtDate(L.since)}` : ''}`],
       ['IP address', html`<span class="mono">${L.address}</span>`],
-      ['Ping', L.ping ? 'on' : html`<span class="badge mute xs">off</span>`],
-      ['Round-trip time', L.ping && L.up && L.rtt_us ? rttText(L.rtt_us) : '—'],
-      ['Last ping', L.ping && L.last_check ? html`${fmtDate(L.last_check, true)}` : '—'],
-      ['Last answer', !L.ping ? '—' : L.last_up ? html`${fmtDate(L.last_up, true)}` : 'never'],
-      ['Unanswered in a row', !L.ping ? '—' : L.fails ? html`<span class="c-red">${L.fails}</span>` : '0'],
-      ['Last error', L.ping && L.last_error ? html`<span class="c-red">${L.last_error}</span>` : '—'],
-      ['Services', L.svc_total ? html`<a href="#" data-act="tab" data-t="services">${L.svc_total} service${L.svc_total === 1 ? '' : 's'}</a>${L.svc_down ? html` · <span class="c-red">${L.svc_down} down</span>` : ''}` : html`<span class="dim">none</span>`],
+      ['Ping', on ? 'on' : html`<span class="badge mute xs">${L.ping_mode === 'paused' ? 'paused' : 'not pinged'}</span>`],
+      ['Round-trip time', on && L.up && L.rtt_us ? rttText(L.rtt_us) : '—'],
+      ['Last ping', P?.last_check ? html`${fmtDate(P.last_check, true)}` : '—'],
+      ['Last answer', !P ? '—' : P.last_up ? html`${fmtDate(P.last_up, true)}` : 'never'],
+      ['Unanswered in a row', !on ? '—' : L.fails ? html`<span class="c-red">${L.fails}</span>` : '0'],
+      ['Last error', on && L.last_error ? html`<span class="c-red">${L.last_error}</span>` : '—'],
+      ['Services', svcs.length ? html`<a href="#" data-act="tab" data-t="services">${svcs.length} service${svcs.length === 1 ? '' : 's'}</a>${L.svc_down ? html` · <span class="c-red">${L.svc_down} down</span>` : ''}${L.svc_paused ? html` · <span class="dim">${L.svc_paused} paused</span>` : ''}` : html`<span class="dim">none</span>`],
       ['Monitoring', 'Agentless'],
       ['Added', fmtDate(a.enrolled_at)],
     ];
     return html`
-      ${L.ping ? '' : html`<div class="notice blue">Ping is turned off for this device. Its status comes from its services: up while at least one service is up.${canChange() ? html` Turn ping on again with <a href="#" data-act="edit">Edit</a>.` : ''}</div>`}
+      ${on ? '' : html`<div class="notice blue">${pingNote(L)} Its status comes from its running services: up while at least one is up.${canChange() ? html` ${L.ping_mode === 'paused' ? 'Resume' : 'Add'} the ping on the <a href="#" data-act="tab" data-t="services">Services</a> tab.` : ''}</div>`}
       <div class="panel panel-pad" style="margin-bottom:16px"><div class="facts">${kv.map(([k, v]) => html`<div><div class="k">${k}</div><div class="v">${v}</div></div>`)}</div></div>
       <div class="panel panel-pad"><div class="row" style="margin-bottom:12px"><h2 style="margin:0">Ping, last 24 hours</h2><span class="spacer"></span>
-        ${!L.ping ? html`<span class="dim small">ping is turned off</span>` : L.uptime >= 0 ? html`<span class="muted small">${pctText(L.uptime)} of the pings answered</span>` : html`<span class="dim small">no pings yet</span>`}</div>
-        ${uptimeBar(L.ping ? L.hist : [])}
+        ${!P ? html`<span class="dim small">not pinged</span>` : P.uptime >= 0 ? html`<span class="muted small">${pctText(P.uptime)} of the pings answered${on ? '' : ' (paused)'}</span>` : html`<span class="dim small">${on ? 'no pings yet' : 'paused'}</span>`}</div>
+        ${uptimeBar(P ? P.hist : [])}
         <div class="row dim small" style="margin-top:10px;gap:14px"><span><i class="lg ok"></i>all answered</span><span><i class="lg part"></i>some answered</span><span><i class="lg bad"></i>none answered</span><span><i class="lg none"></i>no pings</span></div></div>
       <div class="panel panel-pad" style="margin-top:16px"><div class="row" style="margin-bottom:12px"><h2 style="margin:0">Services, last 24 hours</h2><span class="spacer"></span>
         <a href="#" class="small" data-act="tab" data-t="services">${canChange() ? 'Details, add or remove' : 'Details'}</a></div>
-        ${(L.services || []).length ? html`<div class="svcsum">${L.services.map((s) => html`
-          <div class="svcsum-row"><div class="svcsum-name">${svcState(s)} <b>${s.name}</b> <span class="dim small mono">TCP ${s.port}</span>${s.reverse ? html` <span class="badge info xs" title="Reverse mode: reachable counts as down">reverse</span>` : ''}</div>
+        ${svcs.length ? html`<div class="svcsum">${svcs.map((s) => html`
+          <div class="svcsum-row ${s.paused ? 'paused' : ''}"><div class="svcsum-name">${svcState(s)} <b>${s.name}</b> <span class="dim small mono">TCP ${s.port}</span>${s.reverse ? html` <span class="badge info xs" title="Reverse mode: reachable counts as down">reverse</span>` : ''}</div>
             <div class="svcsum-bar">${uptimeBar(s.hist, { word: 'check', compact: true })}</div>
             <div class="svcsum-pct dim small">${s.uptime >= 0 ? `${pctText(s.uptime)} up` : 'no checks yet'}</div></div>`)}</div>`
           : html`<div class="dim small">No services yet.</div>`}</div>`;
   }
+  function pauseBtn(paused, act, extra) {
+    return html`<button class="btn ghost sm iconbtn" data-act="${act}" ${raw(extra)} title="${paused ? 'Resume: check it again' : 'Pause: stop checking it for now'}">${icon(paused ? 'play' : 'pause')}</button>`;
+  }
   function servicesTab(a, L) {
-    const svcs = L.services || [];
-    const head = html`<div class="row" style="margin-bottom:12px"><span class="muted small">Each service is checked by connecting to its TCP port from the master. Nothing is sent and nothing is logged in to.</span>
+    const svcs = L.services || [], P = L.ping_info;
+    const head = html`<div class="row" style="margin-bottom:12px"><span class="muted small">The ping and the TCP services are checked from the master. For a TCP service it only connects: nothing is sent and nothing is logged in to.</span>
       <span class="spacer"></span>${ifChange(html`<button class="btn primary sm" data-act="svc-add">${icon('plus')} Add service</button>`)}</div>`;
-    if (!svcs.length) return html`${head}<div class="panel empty">No services yet.${canChange() ? ' Add one to check that it is reachable.' : ''}</div>`;
+    if (!svcs.length && !P) return html`${head}<div class="panel empty">No services yet.</div>`;
+    const pingRow = P ? html`<tr class="${P.mode === 'paused' ? 'dimrow' : ''}">
+        <td class="nowrap">${pingState(P)}${P.checked && P.mode !== 'paused' ? html`<div class="dim small">${dur(now() - P.since)}</div>` : ''}</td>
+        <td class="nowrap"><b>Ping</b><div class="dim small mono">ICMP</div></td>
+        <td class="small"><span class="dim">—</span></td>
+        <td class="small nowrap">${P.up && P.rtt_us && P.mode !== 'paused' ? rttText(P.rtt_us) : html`<span class="dim">—</span>`}</td>
+        <td class="small nowrap">${P.last_check ? when(P.last_check) : html`<span class="dim">waiting</span>`}${P.last_error && P.mode !== 'paused' && !(P.up && !P.fails) ? html`<div class="c-red small" style="font-weight:400">${P.last_error}</div>` : ''}</td>
+        <td style="min-width:150px">${uptimeBar(P.hist, { compact: true })}<div class="dim small">${P.uptime >= 0 ? `${pctText(P.uptime)} answered` : 'no pings yet'}</div></td>
+        <td class="dim small nowrap" title="The same for all agentless devices: Settings → Agentless">every ${P.interval} s<br>down after ${P.down_after} · ${P.timeout} s</td>
+        <td class="w1"><div class="row" style="flex-wrap:nowrap;gap:6px">
+          <button class="btn ghost sm iconbtn" data-act="ping" title="Ping now" ${st.pinging || P.mode === 'paused' ? 'disabled' : ''}>${st.pinging ? html`<span class="spin"></span>` : icon('refresh')}</button>
+          ${ifChange(html`${pauseBtn(P.mode === 'paused', 'ping-pause', '')}<button class="btn danger sm iconbtn" data-act="ping-remove" title="Delete">${icon('trash')}</button>`)}</div></td>
+      </tr>` : '';
     return html`${head}<div class="panel scrollx"><table class="tbl svctbl"><thead><tr><th>Status</th><th>Service</th><th>Greeting</th><th>Response</th><th>Checked</th><th>Last 24 hours</th><th>Check</th><th class="w1"></th></tr></thead>
-      <tbody>${svcs.map((s) => html`<tr>
-        <td class="nowrap">${svcState(s)}${s.checked ? html`<div class="dim small">${dur(now() - s.since)}</div>` : ''}</td>
+      <tbody>${pingRow}${svcs.map((s) => html`<tr class="${s.paused ? 'dimrow' : ''}">
+        <td class="nowrap">${svcState(s)}${s.checked && !s.paused ? html`<div class="dim small">${dur(now() - s.since)}</div>` : ''}</td>
         <td class="nowrap"><b>${s.name}</b> ${s.reverse ? html`<span class="badge info xs" title="Reverse mode: reachable counts as down">reverse</span>` : ''}<div class="dim small mono">TCP ${s.port}</div></td>
         <td class="small mono banner">${s.banner ? html`<span title="${s.banner}">${s.banner}</span>` : html`<span class="dim">${s.greeting ? '—' : 'not waited for'}</span>`}</td>
-        <td class="small nowrap">${s.rtt_us && s.up && !s.reverse ? rttText(s.rtt_us) : html`<span class="dim">—</span>`}</td>
-        <td class="small nowrap">${s.last_check ? when(s.last_check) : html`<span class="dim">waiting</span>`}${s.last_error && !(s.up && !s.fails) ? html`<div class="c-red small" style="font-weight:400">${s.last_error}</div>` : ''}</td>
+        <td class="small nowrap">${s.rtt_us && s.up && !s.reverse && !s.paused ? rttText(s.rtt_us) : html`<span class="dim">—</span>`}</td>
+        <td class="small nowrap">${s.last_check ? when(s.last_check) : html`<span class="dim">waiting</span>`}${s.last_error && !s.paused && !(s.up && !s.fails) ? html`<div class="c-red small" style="font-weight:400">${s.last_error}</div>` : ''}</td>
         <td style="min-width:150px">${uptimeBar(s.hist, { word: 'check', compact: true })}<div class="dim small">${s.uptime >= 0 ? `${pctText(s.uptime)} up` : 'no checks yet'}</div></td>
         <td class="dim small nowrap">every ${s.interval} s<br>${s.retries} retr${s.retries === 1 ? 'y' : 'ies'} · ${s.timeout} s${s.greeting ? html`<br>greeting` : ''}</td>
         <td class="w1"><div class="row" style="flex-wrap:nowrap;gap:6px">
-          <button class="btn ghost sm iconbtn" data-act="svc-check" data-sid="${s.id}" title="Check now" ${st.checking.has(s.id) ? 'disabled' : ''}>${st.checking.has(s.id) ? html`<span class="spin"></span>` : icon('refresh')}</button>
-          ${ifChange(html`<button class="btn ghost sm iconbtn" data-act="svc-edit" data-sid="${s.id}" title="Edit">${icon('edit')}</button><button class="btn danger sm iconbtn" data-act="svc-delete" data-sid="${s.id}" title="Delete">${icon('trash')}</button>`)}</div></td>
+          <button class="btn ghost sm iconbtn" data-act="svc-check" data-sid="${s.id}" title="Check now" ${st.checking.has(s.id) || s.paused ? 'disabled' : ''}>${st.checking.has(s.id) ? html`<span class="spin"></span>` : icon('refresh')}</button>
+          ${ifChange(html`${pauseBtn(s.paused, 'svc-pause', `data-sid="${esc(s.id)}"`)}<button class="btn ghost sm iconbtn" data-act="svc-edit" data-sid="${s.id}" title="Edit">${icon('edit')}</button><button class="btn danger sm iconbtn" data-act="svc-delete" data-sid="${s.id}" title="Delete">${icon('trash')}</button>`)}</div></td>
       </tr>`)}</tbody></table></div>`;
   }
   function render() {
@@ -1594,21 +1633,23 @@ function LocalPage([id, tab]) {
     const a = d.agent, L = a.local;
     const g = d.groups.find((x) => x.id === a.group_id);
     const state = !L.checked ? (L.fails ? `no answer yet (${L.fails} of ${L.down_after} checks before down)` : 'waiting for the first check') : L.up ? `up for ${dur(now() - L.since)}` : `down for ${dur(now() - L.since)}`;
+    const total = (L.services || []).length + (L.ping_info ? 1 : 0);
     setHTML($('#a-head'), html`
       <div class="page-head syshead">
         <div class="headinfo"><div class="row"><a href="#/dashboard/${lastDashSub}" class="btn ghost sm iconbtn" title="Back">${icon('back')}</a>${agentDot(a)}<h1>${a.name}</h1>
           <span class="tag">${icon('folder')} ${g ? g.name : 'Ungrouped'}</span><span class="verpill loc" title="Monitored by the master itself; no agent is installed">agentless</span></div>
           <div class="sub">${L.address} · ${state}${L.up && L.svc_down ? ` · ${L.svc_down} of ${L.svc_total} services down` : ''}</div></div>
         <span class="spacer"></span>
-        <button class="btn sm" data-act="ping" ${st.pinging || !L.ping ? 'disabled' : ''} title="${L.ping ? 'Ping the device now' : 'Ping is turned off for this device'}">${st.pinging ? html`<span class="spin"></span>` : icon('pulse')} Ping now</button>
+        <button class="btn sm" data-act="ping" ${st.pinging || !L.ping ? 'disabled' : ''} title="${L.ping ? 'Ping the device now' : pingNote(L)}">${st.pinging ? html`<span class="spin"></span>` : icon('pulse')} Ping now</button>
         ${ifChange(html`<button class="btn sm" data-act="edit">${icon('edit')} Edit</button><button class="btn danger sm" data-act="delete" title="Delete">${icon('trash')}</button>`)}
       </div>
       ${conflictNotice(a)}`);
-    setHTML($('#a-tabs'), html`<button class="${st.tab === 'system' ? 'on' : ''}" data-act="tab" data-t="system">System</button><button class="${st.tab === 'services' ? 'on' : ''}" data-act="tab" data-t="services">Services${L.svc_down ? html` <span class="badge sec">${L.svc_down}</span>` : L.svc_total ? html` <span class="dim small">${L.svc_total}</span>` : ''}</button>`);
+    setHTML($('#a-tabs'), html`<button class="${st.tab === 'system' ? 'on' : ''}" data-act="tab" data-t="system">System</button><button class="${st.tab === 'services' ? 'on' : ''}" data-act="tab" data-t="services">Services${L.svc_down ? html` <span class="badge sec">${L.svc_down}</span>` : total ? html` <span class="dim small">${total}</span>` : ''}</button>`);
     setHTML($('#a-body'), st.tab === 'services' ? servicesTab(a, L) : systemTab(a, L));
   }
   const refresh = () => view?.refresh?.();
   const svc = (sid) => (st.data.agent.local.services || []).find((s) => s.id === sid);
+  const setAgent = (a) => { st.data.agent = a; render(); };
   return {
     interval: 5000,
     mount(el) { el.innerHTML = '<div id="a-head"></div><div class="tabs" id="a-tabs"></div><div id="a-body"></div>'; },
@@ -1623,19 +1664,34 @@ function LocalPage([id, tab]) {
         try {
           const a = await POST(`locals/${id}/ping`);
           st.data.agent = a;
-          const L = a.local;
-          toast(!L.last_error ? `${a.name} answered in ${rttText(L.rtt_us)}` : `${a.name}: ${L.last_error}`, !L.last_error ? 'ok' : 'err');
+          const P = a.local.ping_info;
+          toast(!P.last_error ? `${a.name} answered in ${rttText(P.rtt_us)}` : `${a.name}: ${P.last_error}`, !P.last_error ? 'ok' : 'err');
         } finally { st.pinging = false; render(); }
+      },
+      'ping-pause': async () => {
+        const paused = st.data.agent.local.ping_mode === 'paused';
+        setAgent(await POST(`locals/${id}/pingstate`, { state: paused ? 'on' : 'paused' }));
+        toast(paused ? 'Ping resumed' : 'Ping paused', 'ok');
+      },
+      'ping-remove': async () => {
+        if (!(await confirmBox('Delete the ping?', 'The device is no longer pinged and its ping history is removed. You can add the ping again with Add service.', { okText: 'Delete ping', danger: true }))) return;
+        setAgent(await POST(`locals/${id}/pingstate`, { state: 'removed' }));
+        toast('Ping deleted', 'ok');
       },
       edit: () => localEditModal(st.data.agent, st.data.groups, refresh),
       delete: () => localDelete(st.data.agent, () => { location.hash = '#/dashboard/' + lastDashSub; }),
-      'svc-add': () => serviceModal(st.data.agent, null, st.data.presets, st.data.svc_limits, (a) => { st.data.agent = a; render(); }),
-      'svc-edit': (t) => serviceModal(st.data.agent, svc(t.dataset.sid), st.data.presets, st.data.svc_limits, (a) => { st.data.agent = a; render(); }),
+      'svc-add': () => serviceModal(st.data.agent, null, st.data.presets, st.data.svc_limits, setAgent),
+      'svc-edit': (t) => serviceModal(st.data.agent, svc(t.dataset.sid), st.data.presets, st.data.svc_limits, setAgent),
+      'svc-pause': async (t) => {
+        const s = svc(t.dataset.sid);
+        setAgent(await POST(`locals/${id}/services/${s.id}/pause`, { paused: !s.paused }));
+        toast(`${s.name} ${s.paused ? 'resumed' : 'paused'}`, 'ok');
+      },
       'svc-delete': async (t) => {
         const s = svc(t.dataset.sid);
         if (!(await confirmBox(`Delete ${s.name} (port ${s.port})?`, 'It is no longer checked, and its history is removed.', { okText: 'Delete service', danger: true }))) return;
-        st.data.agent = await POST(`locals/${id}/services/${s.id}/delete`);
-        toast(`${s.name} deleted`, 'ok'); render();
+        setAgent(await POST(`locals/${id}/services/${s.id}/delete`));
+        toast(`${s.name} deleted`, 'ok');
       },
       'svc-check': async (t) => {
         const sid = t.dataset.sid;

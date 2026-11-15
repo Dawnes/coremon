@@ -306,6 +306,7 @@ ul.plainlist { margin: 0; padding-left: 18px; line-height: 1.8; }
 .svcsum-row { display: grid; grid-template-columns: minmax(180px, 260px) 1fr 80px; gap: 14px; align-items: center; }
 .svcsum-name { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .svcsum-pct { text-align: right; }
+.svcsum-row.paused { opacity: 0.55; }
 @media (max-width: 700px) { .svcsum-row { grid-template-columns: 1fr 70px; } .svcsum-bar { grid-column: 1 / -1; grid-row: 2; } }
 .upaxis { display: flex; justify-content: space-between; margin-top: 6px; font-size: 11.5px; color: var(--dim); }
 .lg { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 6px; vertical-align: -1px; background: rgba(255, 255, 255, 0.06); }

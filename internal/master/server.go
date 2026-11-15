@@ -370,6 +370,8 @@ func (s *Server) routes() http.Handler {
 	change("POST /api/ui/locals/{id}/services/{sid}", s.handleServiceUpdate)
 	change("POST /api/ui/locals/{id}/services/{sid}/delete", s.handleServiceDelete)
 	view("POST /api/ui/locals/{id}/services/{sid}/check", s.handleServiceCheck)
+	change("POST /api/ui/locals/{id}/services/{sid}/pause", s.handleServicePause)
+	change("POST /api/ui/locals/{id}/pingstate", s.handlePingState)
 	view("GET /api/ui/local", s.handleLocalSettingsGet)
 	change("POST /api/ui/local", s.handleLocalSettingsSave)
 	view("GET /api/ui/jobs", s.handleJobs)

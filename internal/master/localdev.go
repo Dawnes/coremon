@@ -33,8 +33,34 @@ type LocalDevice struct {
 	Fails     int        `json:"fails,omitempty"` // unanswered pings in a row
 	LastError string     `json:"last_error,omitempty"`
 	Hist      []histSlot `json:"hist,omitempty"`
-	NoPing    bool       `json:"no_ping,omitempty"` // ping turned off by an admin
+	NoPing    bool       `json:"no_ping,omitempty"`   // before 0.3.42: ping turned off; read once as PingMode "paused"
+	PingMode  string     `json:"ping_mode,omitempty"` // "" pinged, "paused" or "removed"
 	Services  []*Service `json:"services,omitempty"`
+}
+
+const (
+	pingPaused  = "paused"
+	pingRemoved = "removed"
+)
+
+func (d *LocalDevice) pinging() bool { return d.PingMode == "" }
+
+// activeChecks: the checks that run (the ping and the services not paused).
+func (d *LocalDevice) activeChecks() int {
+	n := 0
+	if d.pinging() {
+		n++
+	}
+	for _, sv := range d.Services {
+		if !sv.Paused {
+			n++
+		}
+	}
+	return n
+}
+
+func (d *LocalDevice) resetPing() {
+	d.Checked, d.Up, d.Since, d.LastCheck, d.LastUp, d.RTTUs, d.Fails, d.LastError, d.Hist = false, false, 0, 0, 0, 0, 0, "", nil
 }
 
 // histSlot: the pings of one quarter of an hour, for the 24-hour bar.
@@ -213,37 +239,74 @@ type localView struct {
 	Interval  int        `json:"interval"`
 	DownAfter int        `json:"down_after"`
 
-	// Ping off: the status above comes from the services; the ping fields are empty.
-	Ping     bool          `json:"ping"`
-	SvcTotal int           `json:"svc_total"`
-	SvcDown  int           `json:"svc_down"`
-	Services []serviceView `json:"services,omitempty"` // device page only
+	// Ping not running: the status above comes from the services; the ping fields are empty.
+	Ping      bool          `json:"ping"`      // the ping runs
+	PingMode  string        `json:"ping_mode"` // on, paused or removed
+	PingInfo  *pingView     `json:"ping_info,omitempty"`
+	SvcTotal  int           `json:"svc_total"` // services that run (not paused)
+	SvcDown   int           `json:"svc_down"`
+	SvcPaused int           `json:"svc_paused"`
+	Services  []serviceView `json:"services,omitempty"` // device page only
+}
+
+// pingView: the ping as one of the device's checks, also while paused.
+type pingView struct {
+	Mode      string     `json:"mode"`
+	Checked   bool       `json:"checked"`
+	Up        bool       `json:"up"`
+	Since     int64      `json:"since"`
+	LastCheck int64      `json:"last_check"`
+	LastUp    int64      `json:"last_up"`
+	RTTUs     int64      `json:"rtt_us"`
+	Fails     int        `json:"fails"`
+	LastError string     `json:"last_error,omitempty"`
+	Uptime    float64    `json:"uptime"`
+	Hist      []histSlot `json:"hist,omitempty"`
+	Interval  int        `json:"interval"`
+	Timeout   int        `json:"timeout"`
+	DownAfter int        `json:"down_after"`
 }
 
 func (s *Server) localDeviceView(d *LocalDevice, full bool) agentView {
 	now := time.Now().Unix()
-	lv := &localView{Address: d.Address, Interval: s.st.st.Local.IntervalSec, DownAfter: s.st.st.Local.DownAfter, Ping: !d.NoPing, Uptime: -1}
-	if !d.NoPing {
-		lv.Checked, lv.Up, lv.Since, lv.LastCheck, lv.LastUp, lv.RTTUs, lv.Fails, lv.LastError =
-			d.Checked, d.Up, d.Since, d.LastCheck, d.LastUp, d.RTTUs, d.Fails, d.LastError
-		var h []histSlot
-		h, lv.Uptime = recentHist(d.Hist, now)
+	mode := d.PingMode
+	if mode == "" {
+		mode = "on"
+	}
+	lv := &localView{Address: d.Address, Interval: s.st.st.Local.IntervalSec, DownAfter: s.st.st.Local.DownAfter, Ping: d.pinging(), PingMode: mode, Uptime: -1}
+	if d.PingMode != pingRemoved {
+		h, up := recentHist(d.Hist, now)
+		pv := &pingView{Mode: mode, Checked: d.Checked, Up: d.Up, Since: d.Since, LastCheck: d.LastCheck, LastUp: d.LastUp, RTTUs: d.RTTUs,
+			Fails: d.Fails, LastError: d.LastError, Uptime: up, Interval: s.st.st.Local.IntervalSec, Timeout: s.st.st.Local.TimeoutSec, DownAfter: s.st.st.Local.DownAfter}
 		if full {
-			lv.Hist = h
+			pv.Hist = h
+		}
+		lv.PingInfo = pv
+		if d.pinging() {
+			lv.Checked, lv.Up, lv.Since, lv.LastCheck, lv.LastUp, lv.RTTUs, lv.Fails, lv.LastError, lv.Uptime =
+				pv.Checked, pv.Up, pv.Since, pv.LastCheck, pv.LastUp, pv.RTTUs, pv.Fails, pv.LastError, pv.Uptime
+			if full {
+				lv.Hist = h
+			}
 		}
 	}
 	svcs := []serviceView{}
+	running := []serviceView{}
 	for _, sv := range d.Services {
-		svcs = append(svcs, s.serviceView(sv, now, full))
-	}
-	lv.SvcTotal = len(svcs)
-	for _, sv := range svcs {
-		if sv.Checked && !sv.Up {
+		v := s.serviceView(sv, now, full)
+		svcs = append(svcs, v)
+		if sv.Paused {
+			lv.SvcPaused++
+			continue
+		}
+		running = append(running, v)
+		if v.Checked && !v.Up {
 			lv.SvcDown++
 		}
 	}
-	if d.NoPing {
-		servicesStatus(lv, svcs)
+	lv.SvcTotal = len(running)
+	if !d.pinging() {
+		servicesStatus(lv, running)
 	}
 	if full {
 		lv.Services = svcs
@@ -446,7 +509,7 @@ func (s *Server) localLoop(stop <-chan struct{}) {
 		s.loc.mu.Lock()
 		dueSvc := s.dueServices(now)
 		for id, d := range s.st.st.Locals {
-			if d.NoPing {
+			if !d.pinging() {
 				continue
 			}
 			next, seen := s.loc.next[id]
@@ -462,7 +525,7 @@ func (s *Server) localLoop(stop <-chan struct{}) {
 			}
 		}
 		for id := range s.loc.next {
-			if d := s.st.st.Locals[id]; strings.HasPrefix(id, "l_") && (d == nil || d.NoPing) {
+			if d := s.st.st.Locals[id]; strings.HasPrefix(id, "l_") && (d == nil || !d.pinging()) {
 				delete(s.loc.next, id)
 			}
 		}
@@ -568,7 +631,6 @@ func (s *Server) handleLocalUpdate(w http.ResponseWriter, r *http.Request) {
 		Name    *string `json:"name"`
 		Address *string `json:"address"`
 		GroupID *string `json:"group_id"`
-		Ping    *bool   `json:"ping"`
 	}
 	if !readJSON(w, r, &req, 4096) {
 		return
@@ -579,20 +641,7 @@ func (s *Server) handleLocalUpdate(w http.ResponseWriter, r *http.Request) {
 	if d == nil {
 		return
 	}
-	if req.Ping != nil && !*req.Ping && len(d.Services) == 0 {
-		http.Error(w, noCheckMsg, http.StatusConflict)
-		return
-	}
 	var changes []string
-	if req.Ping != nil && *req.Ping == d.NoPing {
-		d.NoPing = !*req.Ping
-		// Ping starts over when it is turned on again.
-		d.Checked, d.Up, d.Since, d.LastCheck, d.LastUp, d.RTTUs, d.Fails, d.LastError, d.Hist = false, false, 0, 0, 0, 0, 0, "", nil
-		s.loc.mu.Lock()
-		delete(s.loc.next, d.ID)
-		s.loc.mu.Unlock()
-		changes = append(changes, map[bool]string{true: "ping on", false: "ping off"}[*req.Ping])
-	}
 	if req.Name != nil {
 		n, err := checkName("device name", *req.Name, maxSystemName)
 		if err != nil {
@@ -658,10 +707,10 @@ func (s *Server) handleLocalPing(w http.ResponseWriter, r *http.Request) {
 		s.st.mu.Unlock()
 		return
 	}
-	id, noPing := d.ID, d.NoPing
+	id, pinging := d.ID, d.pinging()
 	s.st.mu.Unlock()
-	if noPing {
-		http.Error(w, "ping is turned off for this device", http.StatusConflict)
+	if !pinging {
+		http.Error(w, "ping is paused or removed for this device", http.StatusConflict)
 		return
 	}
 	s.loc.mu.Lock()
@@ -683,6 +732,53 @@ func (s *Server) handleLocalPing(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "device not found", http.StatusNotFound)
 		return
 	}
+	writeJSON(w, s.localDeviceView(d, true))
+}
+
+// handlePingState pauses, resumes, removes or adds the ping of a device.
+func (s *Server) handlePingState(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		State string `json:"state"` // on, paused or removed
+	}
+	if !readJSON(w, r, &req, 1024) {
+		return
+	}
+	s.st.mu.Lock()
+	defer s.st.mu.Unlock()
+	d := s.localOr404(w, r)
+	if d == nil {
+		return
+	}
+	want := map[string]string{"on": "", "paused": pingPaused, "removed": pingRemoved}
+	mode, ok := want[req.State]
+	if !ok {
+		http.Error(w, "state must be on, paused or removed", http.StatusBadRequest)
+		return
+	}
+	if mode == d.PingMode {
+		writeJSON(w, s.localDeviceView(d, true))
+		return
+	}
+	if mode != "" && d.pinging() && d.activeChecks() <= 1 {
+		http.Error(w, noCheckMsg, http.StatusConflict)
+		return
+	}
+	action := map[string]string{"": "device.ping_resumed", pingPaused: "device.ping_paused", pingRemoved: "device.ping_removed"}[mode]
+	switch {
+	case mode == pingRemoved:
+		d.resetPing()
+	case mode == "" && d.PingMode == pingRemoved:
+		d.resetPing()
+		action = "device.ping_added"
+	case mode == "":
+		d.Fails = 0 // resumed: decide afresh from the next pings
+	}
+	d.PingMode = mode
+	s.loc.mu.Lock()
+	delete(s.loc.next, d.ID)
+	s.loc.mu.Unlock()
+	s.st.markDirty()
+	s.writeLocalAudit(r, action, d, "")
 	writeJSON(w, s.localDeviceView(d, true))
 }
 

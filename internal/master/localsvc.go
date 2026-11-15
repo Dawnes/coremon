@@ -28,6 +28,7 @@ type Service struct {
 	Retries  int    `json:"retries"`
 	Timeout  int    `json:"timeout"`
 	Reverse  bool   `json:"reverse,omitempty"` // reachable counts as down
+	Paused   bool   `json:"paused,omitempty"`  // not checked until resumed
 
 	Checked   bool       `json:"checked,omitempty"`
 	Up        bool       `json:"up,omitempty"`
@@ -165,6 +166,7 @@ type serviceView struct {
 	Retries   int        `json:"retries"`
 	Timeout   int        `json:"timeout"`
 	Reverse   bool       `json:"reverse"`
+	Paused    bool       `json:"paused"`
 	Checked   bool       `json:"checked"`
 	Up        bool       `json:"up"`
 	Since     int64      `json:"since"`
@@ -181,7 +183,7 @@ type serviceView struct {
 func (s *Server) serviceView(sv *Service, now int64, full bool) serviceView {
 	h, up := recentHist(sv.Hist, now)
 	v := serviceView{ID: sv.ID, Name: sv.Name, Preset: sv.Preset, Port: sv.Port, Greeting: sv.Greeting, Interval: sv.Interval,
-		Retries: sv.Retries, Timeout: sv.Timeout, Reverse: sv.Reverse, Checked: sv.Checked, Up: sv.Up, Since: sv.Since,
+		Retries: sv.Retries, Timeout: sv.Timeout, Reverse: sv.Reverse, Paused: sv.Paused, Checked: sv.Checked, Up: sv.Up, Since: sv.Since,
 		LastCheck: sv.LastCheck, LastOK: sv.LastOK, RTTUs: sv.RTTUs, Fails: sv.Fails, LastError: sv.LastError, Banner: sv.Banner, Uptime: up}
 	if full {
 		v.Hist = h
@@ -238,6 +240,9 @@ func (s *Server) dueServices(now time.Time) []svcKey {
 	i := 0
 	for _, d := range s.st.st.Locals {
 		for _, sv := range d.Services {
+			if sv.Paused {
+				continue
+			}
 			known[sv.ID] = true
 			next, seen := s.loc.next[sv.ID]
 			if !seen {
@@ -479,7 +484,7 @@ func (s *Server) handleServiceDelete(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "service not found", http.StatusNotFound)
 		return
 	}
-	if d.NoPing && len(keep) == 0 {
+	if !gone.Paused && d.activeChecks() <= 1 {
 		http.Error(w, noCheckMsg, http.StatusConflict)
 		return
 	}
@@ -525,4 +530,42 @@ func (s *Server) handleServiceCheck(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, s.localDeviceView(d, true))
 }
 
-const noCheckMsg = "nothing would be checked on this device: turn ping on or add a service first"
+const noCheckMsg = "nothing would be checked on this device any more: keep the ping or at least one service running"
+
+func (s *Server) handleServicePause(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Paused bool `json:"paused"`
+	}
+	if !readJSON(w, r, &req, 1024) {
+		return
+	}
+	s.st.mu.Lock()
+	defer s.st.mu.Unlock()
+	d := s.localOr404(w, r)
+	if d == nil {
+		return
+	}
+	sv := d.service(r.PathValue("sid"))
+	if sv == nil {
+		http.Error(w, "service not found", http.StatusNotFound)
+		return
+	}
+	if req.Paused == sv.Paused {
+		writeJSON(w, s.localDeviceView(d, true))
+		return
+	}
+	if req.Paused && d.activeChecks() <= 1 {
+		http.Error(w, noCheckMsg, http.StatusConflict)
+		return
+	}
+	sv.Paused = req.Paused
+	if !sv.Paused {
+		sv.Fails = 0 // resumed: decide afresh from the next checks
+	}
+	s.loc.mu.Lock()
+	delete(s.loc.next, sv.ID)
+	s.loc.mu.Unlock()
+	s.st.markDirty()
+	s.writeLocalAudit(r, map[bool]string{true: "device.service_paused", false: "device.service_resumed"}[sv.Paused], d, sv.describe())
+	writeJSON(w, s.localDeviceView(d, true))
+}

@@ -292,6 +292,9 @@ func openStore(dir string) (*store, error) {
 		if d.GroupID != "" && s.group(d.GroupID) == nil {
 			d.GroupID = ""
 		}
+		if d.NoPing { // ping turned off before 0.3.42: now a paused ping
+			d.NoPing, d.PingMode = false, pingPaused
+		}
 	}
 	s.st.Settings.normalize()
 	for _, a := range s.st.Agents {
