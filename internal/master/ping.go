@@ -77,7 +77,7 @@ func (s *Server) handlePing(w http.ResponseWriter, r *http.Request) {
 	if !answered {
 		if !j.done() {
 			j.Status, j.Finished, j.Error = JobCancelled, time.Now().Unix(), "no answer within 15 s"
-			s.st.markDirty()
+			s.st.markJobs()
 		}
 	}
 	out := pingResult{Answered: answered, JobID: j.ID}

@@ -101,7 +101,7 @@ func (s *Server) cancelQueued(a *Agent, reason string) int {
 		}
 	}
 	if n > 0 {
-		s.st.markDirty()
+		s.st.markJobs()
 	}
 	return n
 }
@@ -229,6 +229,7 @@ func (s *Server) pollCore(ctx context.Context, agentID string, req proto.PollReq
 		a.Facts.OS, a.Facts.Arch = f.OS, f.Arch
 	} else {
 		a.Facts = sanitizeFacts(req.Facts)
+		a.setBoot(now)
 
 		a.Features = sanitizeFeatures(req.Features)
 		if a.Features == nil {
@@ -252,7 +253,8 @@ func (s *Server) pollCore(ctx context.Context, agentID string, req proto.PollReq
 			j.Status, j.Finished, j.Error = JobFailed, now, "agent lost this command (restarted?)"
 		}
 	}
-	s.st.markDirty()
+	s.st.markAgents()
+	s.st.markJobs()
 	ch := s.wakes[a.ID]
 	if ch == nil {
 		ch = make(chan struct{}, 1)
@@ -319,7 +321,7 @@ func (s *Server) takeCommands(agentID string) []proto.Command {
 		})
 	}
 	if len(out) > 0 {
-		s.st.markDirty()
+		s.st.markJobs()
 	}
 	return out
 }
@@ -350,9 +352,8 @@ func (s *Server) outputCore(agentID string, req proto.OutputBatch) {
 		}
 		n, _ := f.WriteString(data)
 		f.Close()
-		j.LogSize += int64(n)
+		j.LogSize += int64(n) // read from the log file at start: nothing to save
 	}
-	s.st.markDirty()
 }
 
 func (s *Server) resultCore(agentID string, res proto.Result, ip string) {
@@ -367,7 +368,7 @@ func (s *Server) resultCore(agentID string, res proto.Result, ip string) {
 	j.Finished = now
 	if s.belowMin(a) && !upgradeOnlyJob(j.Type) {
 		j.Status, j.Error = JobFailed, "result discarded: the agent is older than the lowest allowed version"
-		s.st.markDirty()
+		s.st.markJobs()
 		return
 	}
 	if res.OK {
@@ -411,8 +412,10 @@ func (s *Server) resultCore(agentID string, res proto.Result, ip string) {
 		delete(s.st.st.Agents, a.ID)
 		delete(s.wakes, a.ID)
 		s.kickVulns()
+		s.st.markDirty() // the registration is gone
 	}
-	s.st.markDirty()
+	s.st.markJobs()
+	s.st.markAgents()
 }
 
 func writeAPIError(w http.ResponseWriter, err error) {
@@ -523,7 +526,7 @@ func (s *Server) schedulerTick() {
 	round := nowU-s.st.st.CheckRoundAt >= interval
 	if round {
 		s.st.st.CheckRoundAt = nowU
-		s.st.markDirty()
+		s.st.markAgents()
 	}
 	type roundCheck struct {
 		a *Agent
@@ -556,16 +559,25 @@ func (s *Server) schedulerTick() {
 			continue
 		}
 
+		// No results at all (new agent, or agents.dat lost): check it now
+		// instead of waiting for the next round; once per agent.
+		first := len(a.StateAt) == 0 && !s.firstCheck[a.ID]
 		for i := range a.Features {
 			f := &a.Features[i]
 			spec := f.Action("check")
-			if spec == nil || !round {
+			if spec == nil || !(round || first) {
 				continue
 			}
 			if s.openJob(a.ID, proto.CmdAction, f.Name) || s.recentFailure(a.ID, proto.CmdAction, f.Name, 15*time.Minute) {
 				continue
 			}
 			checks = append(checks, roundCheck{a, &Job{Type: proto.CmdAction, Feature: f.Name, Action: "check", Params: json.RawMessage("{}"), Actor: "scheduler", Timeout: spec.Timeout}})
+			if first {
+				if s.firstCheck == nil {
+					s.firstCheck = map[string]bool{}
+				}
+				s.firstCheck[a.ID] = true
+			}
 		}
 	}
 	for _, c := range checks { // queued together: one row on the Jobs page
@@ -576,10 +588,10 @@ func (s *Server) schedulerTick() {
 		switch {
 		case j.Status == JobRunning && nowU > j.Started+int64(j.Timeout)+120:
 			j.Status, j.Finished, j.Error = JobTimeout, nowU, "no result from agent within timeout"
-			s.st.markDirty()
+			s.st.markJobs()
 		case j.Status == JobQueued && nowU > j.Created+7*24*3600:
 			j.Status, j.Finished, j.Error = JobFailed, nowU, "expired: agent never picked it up"
-			s.st.markDirty()
+			s.st.markJobs()
 		}
 	}
 

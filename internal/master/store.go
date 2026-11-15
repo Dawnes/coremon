@@ -97,27 +97,31 @@ const (
 	StatusReportOnly = "report_only"
 )
 
+// Agent: the registration is configuration (state.dat); everything the
+// agent reports and the work in progress is kept in agents.dat.
 type Agent struct {
-	ID          string                     `json:"id"`
-	Name        string                     `json:"name"`
-	GroupID     string                     `json:"group_id"`
-	Order       int                        `json:"order"`
-	Status      string                     `json:"status"`
-	ReportOnly  bool                       `json:"agent_report_only"`
-	Pins        [2]string                  `json:"pins"`
-	PinsAt      int64                      `json:"pins_at"`
-	AgentKey    string                     `json:"agent_key,omitempty"`
-	EnrollIP    string                     `json:"enroll_ip,omitempty"`
-	EnrolledAt  int64                      `json:"enrolled_at"`
-	LastSeen    int64                      `json:"last_seen"`
-	CoreVersion string                     `json:"core_version"`
-	Protocol    int                        `json:"protocol"`
-	Facts       proto.Facts                `json:"facts"`
-	Features    []proto.FeatureInfo        `json:"features"`
-	DesiredCore string                     `json:"desired_core"`
-	State       map[string]json.RawMessage `json:"state"`
-	StateAt     map[string]int64           `json:"state_at"`
-	Removing    bool                       `json:"removing"`
+	ID         string `json:"id"`
+	Name       string `json:"name"`
+	GroupID    string `json:"group_id"`
+	Order      int    `json:"order"`
+	Status     string `json:"status"`
+	AgentKey   string `json:"agent_key,omitempty"`
+	EnrollIP   string `json:"enroll_ip,omitempty"`
+	EnrolledAt int64  `json:"enrolled_at"`
+
+	ReportOnly  bool                       `json:"-"`
+	Pins        [2]string                  `json:"-"`
+	PinsAt      int64                      `json:"-"`
+	LastSeen    int64                      `json:"-"`
+	BootAt      int64                      `json:"-"` // stored instead of the uptime, which changes all the time
+	CoreVersion string                     `json:"-"`
+	Protocol    int                        `json:"-"`
+	Facts       proto.Facts                `json:"-"`
+	Features    []proto.FeatureInfo        `json:"-"`
+	DesiredCore string                     `json:"-"`
+	State       map[string]json.RawMessage `json:"-"`
+	StateAt     map[string]int64           `json:"-"`
+	Removing    bool                       `json:"-"`
 }
 
 func (a *Agent) feature(name string) *proto.FeatureInfo {
@@ -243,29 +247,38 @@ type State struct {
 	Locals      map[string]*LocalDevice `json:"locals,omitempty"`
 	Local       LocalSettings           `json:"local"`
 	Tokens      map[string]*EnrollToken `json:"tokens"`
-	Jobs        []*Job                  `json:"jobs"`
+	Jobs        []*Job                  `json:"-"` // jobs.dat
 
 	NVDKey string `json:"nvd_key,omitempty"`
 
-	CheckRoundAt int64 `json:"check_round_at,omitempty"`
+	CheckRoundAt int64 `json:"-"` // agents.dat
 
 	LoginsFilled bool `json:"logins_filled,omitempty"`
 }
 
 const maxJobs = 2000
 
+// store: the configuration (state.dat), the agents' reported data
+// (agents.dat) and the jobs (jobs.dat). Each file is only written when its
+// content changed; see datafiles.go.
 type store struct {
-	mu    sync.Mutex
-	path  string
-	dir   string
-	st    State
-	dirty bool
+	mu          sync.Mutex
+	path        string
+	dir         string
+	st          State
+	dirty       bool // state.dat may have changed
+	jobsDirty   bool
+	agentsDirty bool
+	sums        map[string][32]byte // content last written, per file
+	agentsCore  [32]byte            // agents.dat without last-seen times
+	agentsAt    time.Time           // last write of agents.dat
+	agentsLook  time.Time           // last comparison of agents.dat
 	// frozen: a restore wrote the state file; nothing may overwrite it.
 	frozen bool
 }
 
 func openStore(dir string) (*store, error) {
-	s := &store{path: filepath.Join(dir, stateFile), dir: dir}
+	s := &store{path: filepath.Join(dir, stateFile), dir: dir, sums: map[string][32]byte{}}
 	b, err := readStateJSON(dir)
 	if err == nil {
 		if err := json.Unmarshal(b, &s.st); err != nil {
@@ -292,11 +305,10 @@ func openStore(dir string) (*store, error) {
 		if d.GroupID != "" && s.group(d.GroupID) == nil {
 			d.GroupID = ""
 		}
-		if d.NoPing { // ping turned off before 0.3.42: now a paused ping
-			d.NoPing, d.PingMode = false, pingPaused
-		}
 	}
 	s.st.Settings.normalize()
+	s.loadAgents()
+	s.loadJobs()
 	for _, a := range s.st.Agents {
 		if a.State == nil {
 			a.State = map[string]json.RawMessage{}
@@ -309,11 +321,6 @@ func openStore(dir string) (*store, error) {
 		}
 	}
 
-	for _, j := range s.st.Jobs {
-		if !j.done() {
-			j.Status, j.Error, j.Finished = JobFailed, "master restarted", time.Now().Unix()
-		}
-	}
 	return s, s.writeNow()
 }
 
@@ -341,22 +348,18 @@ func (s *store) nextOrder(groupID string) int {
 	return n
 }
 
-func (s *store) markDirty() { s.dirty = true }
+// markDirty: something may have changed anywhere. Each file is compared
+// and only written when its content differs.
+func (s *store) markDirty() { s.dirty, s.jobsDirty, s.agentsDirty = true, true, true }
 
-func (s *store) writeNow() error {
-	if s.frozen {
-		return nil
-	}
-	js, err := json.Marshal(&s.st)
-	if err != nil {
-		return err
-	}
-	b, err := encodeState(js)
-	if err != nil {
-		return err
-	}
-	return writeAtomic(s.path, b)
-}
+// markJobs: only jobs changed.
+func (s *store) markJobs() { s.jobsDirty = true }
+
+// markAgents: only what agents report changed.
+func (s *store) markAgents() { s.agentsDirty = true }
+
+// writeNow writes every file whose content changed, right away.
+func (s *store) writeNow() error { return s.flush(time.Now(), true) }
 
 func (s *store) flushLoop(stop <-chan struct{}) {
 	t := time.NewTicker(2 * time.Second)
@@ -365,19 +368,15 @@ func (s *store) flushLoop(stop <-chan struct{}) {
 		select {
 		case <-stop:
 			s.mu.Lock()
-			if s.dirty {
-				_ = s.writeNow()
+			if err := s.flush(time.Now(), true); err != nil {
+				log.Printf("save: %v", err)
 			}
 			s.mu.Unlock()
 			return
 		case <-t.C:
 			s.mu.Lock()
-			if s.dirty {
-				if err := s.writeNow(); err != nil {
-					log.Printf("save state: %v", err)
-				} else {
-					s.dirty = false
-				}
+			if err := s.flush(time.Now(), false); err != nil {
+				log.Printf("save: %v", err)
 			}
 			s.mu.Unlock()
 		}
@@ -403,7 +402,7 @@ func (s *store) addJob(j *Job) {
 		}
 		s.st.Jobs = append([]*Job(nil), s.st.Jobs[n:]...)
 	}
-	s.markDirty()
+	s.markJobs()
 }
 
 func (s *store) purgeJobs(cutoff int64) int {
@@ -434,7 +433,7 @@ func (s *store) purgeJobs(cutoff int64) int {
 		}
 	}
 	if removed > 0 {
-		s.markDirty()
+		s.markJobs()
 	}
 	return removed
 }

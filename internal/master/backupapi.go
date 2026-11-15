@@ -372,7 +372,8 @@ func (s *Server) restore(p *preparedRestore, who, ip string) error {
 			if err := writeAtomic(path, b); err != nil {
 				return err
 			}
-		case f.name == "payload-next.key" || f.name == "tls-next.crt" || f.name == "tls-next.key" || f.name == "checks.dat":
+		case f.name == "payload-next.key" || f.name == "tls-next.crt" || f.name == "tls-next.key" ||
+			f.name == checksFileName || f.name == agentsFileName || f.name == jobsFileName:
 			os.Remove(path)
 		}
 	}

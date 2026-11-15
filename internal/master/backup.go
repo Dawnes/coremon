@@ -55,6 +55,8 @@ var backupFiles = []struct {
 	{"tls-next.key", false},
 	{"audit.jsonl", false},
 	{"checks.dat", false}, // results of the agentless checks (since 0.3.43)
+	{"agents.dat", false}, // what the agents report (since 0.3.47)
+	{"jobs.dat", false},   // the jobs (since 0.3.47)
 }
 
 var backupSchedules = []string{"off", "daily", "weekly", "monthly"}
@@ -100,21 +102,24 @@ func (s *Server) snapshot() (map[string][]byte, backupManifest, error) {
 	s.st.mu.Lock()
 	js, err := json.Marshal(&s.st.st)
 	users, systems := len(s.st.st.Users), len(s.st.st.Agents)+len(s.st.st.Locals)
-	var cjs []byte
+	var cjs, ajs, jjs []byte
 	if err == nil {
 		cjs, err = s.checksJSON()
+	}
+	if err == nil {
+		ajs, err = s.st.agentsJSON(false)
+	}
+	if err == nil {
+		jjs, err = s.st.jobsJSON()
 	}
 	s.st.mu.Unlock()
 	if err != nil {
 		return nil, backupManifest{}, err
 	}
-	enc, err := encodeState(js)
-	if err != nil {
-		return nil, backupManifest{}, err
-	}
-	files["state.dat"] = enc
-	if files["checks.dat"], err = encodeState(cjs); err != nil {
-		return nil, backupManifest{}, err
+	for name, plain := range map[string][]byte{"state.dat": js, "checks.dat": cjs, "agents.dat": ajs, "jobs.dat": jjs} {
+		if files[name], err = encodeState(plain); err != nil {
+			return nil, backupManifest{}, err
+		}
 	}
 	s.keyMu.Lock()
 	for _, f := range backupFiles[1:7] {

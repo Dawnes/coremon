@@ -80,8 +80,9 @@ type Server struct {
 	loc           localState
 	pinger        pingFunc
 	svcCheck      svcCheckFunc
-	checksDirty   bool       // check results changed; guarded by st.mu
-	checksMu      sync.Mutex // one write of checks.dat at a time
+	checksDirty   bool            // check results changed; guarded by st.mu
+	firstCheck    map[string]bool // agents checked because they had no results; guarded by st.mu
+	checksMu      sync.Mutex      // one write of checks.dat at a time
 
 	handler http.Handler
 

@@ -384,12 +384,12 @@ func (s *Server) handleCoreUpdate(w http.ResponseWriter, r *http.Request) {
 	}
 	if req.Version == a.CoreVersion {
 		a.DesiredCore = ""
-		s.st.markDirty()
+		s.st.markAgents()
 		writeJSON(w, map[string]any{"agent": s.view(a, false)})
 		return
 	}
 	a.DesiredCore = req.Version
-	s.st.markDirty()
+	s.st.markAgents()
 	from := a.CoreVersion
 	verb := "upgrade"
 	if versionLess(req.Version, from) {

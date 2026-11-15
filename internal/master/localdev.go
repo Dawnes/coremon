@@ -35,7 +35,6 @@ type LocalDevice struct {
 	LastError string     `json:"-"`
 	Hist      []histSlot `json:"-"`
 	RTT       []rttSlot  `json:"-"`
-	NoPing    bool       `json:"no_ping,omitempty"`   // before 0.3.42: ping turned off; read once as PingMode "paused"
 	PingMode  string     `json:"ping_mode,omitempty"` // "" pinged, "paused" or "removed"
 	Services  []*Service `json:"services,omitempty"`
 }
