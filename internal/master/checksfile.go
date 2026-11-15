@@ -31,6 +31,7 @@ type runFields struct {
 	LastError string     `json:"last_error,omitempty"`
 	Banner    string     `json:"banner,omitempty"`
 	Hist      []histSlot `json:"hist,omitempty"`
+	RTT       []rttSlot  `json:"rtt,omitempty"` // ping only: round-trip times in five-minute slots
 }
 
 type devRun struct {
@@ -45,12 +46,12 @@ type checksData struct {
 
 func (d *LocalDevice) run() runFields {
 	return runFields{Checked: d.Checked, Up: d.Up, Since: d.Since, LastCheck: d.LastCheck, LastOK: d.LastUp,
-		RTTUs: d.RTTUs, Fails: d.Fails, LastError: d.LastError, Hist: d.Hist}
+		RTTUs: d.RTTUs, Fails: d.Fails, LastError: d.LastError, Hist: d.Hist, RTT: d.RTT}
 }
 
 func (d *LocalDevice) setRun(r runFields) {
-	d.Checked, d.Up, d.Since, d.LastCheck, d.LastUp, d.RTTUs, d.Fails, d.LastError, d.Hist =
-		r.Checked, r.Up, r.Since, r.LastCheck, r.LastOK, r.RTTUs, r.Fails, r.LastError, r.Hist
+	d.Checked, d.Up, d.Since, d.LastCheck, d.LastUp, d.RTTUs, d.Fails, d.LastError, d.Hist, d.RTT =
+		r.Checked, r.Up, r.Since, r.LastCheck, r.LastOK, r.RTTUs, r.Fails, r.LastError, r.Hist, r.RTT
 }
 
 func (sv *Service) run() runFields {

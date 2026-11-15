@@ -9,6 +9,30 @@ import (
 	"time"
 )
 
+// Round-trip times: five-minute slots with average, lowest and highest, 24 hours.
+func TestRTTSlots(t *testing.T) {
+	base := int64(1_800_000_000) // a multiple of 300
+	var rs []rttSlot
+	rs = addRTT(rs, true, 2000, base+10)
+	rs = addRTT(rs, true, 6000, base+70)
+	rs = addRTT(rs, false, 0, base+130)
+	rs = addRTT(rs, false, 0, base+310)
+	if len(rs) != 2 {
+		t.Fatalf("slots: %+v", rs)
+	}
+	p := recentRTT(rs, base+320)
+	if p[0].Avg != 4000 || p[0].Min != 2000 || p[0].Max != 6000 || p[0].N != 2 || p[0].Fail != 1 {
+		t.Fatalf("first slot: %+v", p[0])
+	}
+	if p[1].N != 0 || p[1].Fail != 1 || p[1].Avg != 0 {
+		t.Fatalf("unanswered slot: %+v", p[1])
+	}
+	rs = addRTT(rs, true, 1000, base+histSpan+400)
+	if len(rs) != 1 || rs[0].Min != 1000 {
+		t.Fatalf("older than 24 hours must go: %+v", rs)
+	}
+}
+
 // Check results live in checks.dat, not in state.dat, and survive a restart.
 func TestChecksFile(t *testing.T) {
 	pub, _ := keys(t)
@@ -47,7 +71,7 @@ func TestChecksFile(t *testing.T) {
 		t.Fatal(err)
 	}
 	d2 := s2.st.st.Locals[d.ID]
-	if d2 == nil || !d2.Up || d2.RTTUs != 3000 || len(d2.Hist) != 1 || !d2.Services[0].Up || len(d2.Services[0].Hist) != 1 {
+	if d2 == nil || !d2.Up || d2.RTTUs != 3000 || len(d2.Hist) != 1 || len(d2.RTT) != 1 || d2.RTT[0].Max != 3000 || !d2.Services[0].Up || len(d2.Services[0].Hist) != 1 {
 		t.Fatalf("results after a restart: %+v", d2)
 	}
 

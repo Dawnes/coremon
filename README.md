@@ -25,7 +25,7 @@ as **agentless** devices: the master itself pings them and checks their services
   and actively exploited ones highlighted.
 * **Agentless devices**: devices without an agent, checked by the master with a
   ping and per-service TCP checks (heartbeat, retries, timeout, reverse mode),
-  with a 24-hour history.
+  with a 24-hour history and a graph of the ping's round-trip time.
 * **Releases**: update the master and the agents from the website.
 * **Users**: administrators and read-only users, optional two-factor sign-in
   with an authenticator app, and accounts can be locked.

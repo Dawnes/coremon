@@ -34,6 +34,7 @@ type LocalDevice struct {
 	Fails     int        `json:"-"` // unanswered pings in a row
 	LastError string     `json:"-"`
 	Hist      []histSlot `json:"-"`
+	RTT       []rttSlot  `json:"-"`
 	NoPing    bool       `json:"no_ping,omitempty"`   // before 0.3.42: ping turned off; read once as PingMode "paused"
 	PingMode  string     `json:"ping_mode,omitempty"` // "" pinged, "paused" or "removed"
 	Services  []*Service `json:"services,omitempty"`
@@ -61,7 +62,75 @@ func (d *LocalDevice) activeChecks() int {
 }
 
 func (d *LocalDevice) resetPing() {
-	d.Checked, d.Up, d.Since, d.LastCheck, d.LastUp, d.RTTUs, d.Fails, d.LastError, d.Hist = false, false, 0, 0, 0, 0, 0, "", nil
+	d.Checked, d.Up, d.Since, d.LastCheck, d.LastUp, d.RTTUs, d.Fails, d.LastError, d.Hist, d.RTT = false, false, 0, 0, 0, 0, 0, "", nil, nil
+}
+
+// rttSlot: the round-trip times of the pings in five minutes, for the graph.
+// Times in microseconds; F counts the unanswered pings.
+type rttSlot struct {
+	T   int64 `json:"t"`
+	N   int   `json:"n,omitempty"`
+	Sum int64 `json:"sum,omitempty"`
+	Min int64 `json:"min,omitempty"`
+	Max int64 `json:"max,omitempty"`
+	F   int   `json:"f,omitempty"`
+}
+
+// rttPoint: one five-minute slot as the website shows it.
+type rttPoint struct {
+	T    int64 `json:"t"`
+	Avg  int64 `json:"avg"`
+	Min  int64 `json:"min"`
+	Max  int64 `json:"max"`
+	N    int   `json:"n"`
+	Fail int   `json:"fail"`
+}
+
+const rttSlotSec = 300
+
+// addRTT counts one ping in its five minutes and drops what is older than 24 hours.
+func addRTT(rs []rttSlot, ok bool, us int64, t int64) []rttSlot {
+	slot := t - t%rttSlotSec
+	if n := len(rs); n == 0 || rs[n-1].T != slot {
+		rs = append(rs, rttSlot{T: slot})
+	}
+	r := &rs[len(rs)-1]
+	if ok {
+		if r.N == 0 || us < r.Min {
+			r.Min = us
+		}
+		if us > r.Max {
+			r.Max = us
+		}
+		r.N++
+		r.Sum += us
+	} else {
+		r.F++
+	}
+	cut := 0
+	for cut < len(rs) && rs[cut].T <= t-histSpan {
+		cut++
+	}
+	if cut > 0 {
+		rs = append([]rttSlot(nil), rs[cut:]...)
+	}
+	return rs
+}
+
+// recentRTT: the slots of the last 24 hours with their average.
+func recentRTT(rs []rttSlot, now int64) []rttPoint {
+	out := []rttPoint{}
+	for _, r := range rs {
+		if r.T <= now-histSpan {
+			continue
+		}
+		p := rttPoint{T: r.T, Min: r.Min, Max: r.Max, N: r.N, Fail: r.F}
+		if r.N > 0 {
+			p.Avg = r.Sum / int64(r.N)
+		}
+		out = append(out, p)
+	}
+	return out
 }
 
 // histSlot: the pings of one quarter of an hour, for the 24-hour bar.
@@ -263,6 +332,7 @@ type pingView struct {
 	LastError string     `json:"last_error,omitempty"`
 	Uptime    float64    `json:"uptime"`
 	Hist      []histSlot `json:"hist,omitempty"`
+	RTT       []rttPoint `json:"rtt,omitempty"`
 	Interval  int        `json:"interval"`
 	Timeout   int        `json:"timeout"`
 	DownAfter int        `json:"down_after"`
@@ -281,6 +351,7 @@ func (s *Server) localDeviceView(d *LocalDevice, full bool) agentView {
 			Fails: d.Fails, LastError: d.LastError, Uptime: up, Interval: s.st.st.Local.IntervalSec, Timeout: s.st.st.Local.TimeoutSec, DownAfter: s.st.st.Local.DownAfter}
 		if full {
 			pv.Hist = h
+			pv.RTT = recentRTT(d.RTT, now)
 		}
 		lv.PingInfo = pv
 		if d.pinging() {
@@ -411,6 +482,7 @@ func (s *Server) record(d *LocalDevice, rtt time.Duration, err error, now time.T
 		}
 	}
 	d.Hist = addHist(d.Hist, ok, t)
+	d.RTT = addRTT(d.RTT, ok, rtt.Microseconds(), t)
 	s.markChecks()
 }
 
@@ -664,7 +736,7 @@ func (s *Server) handleLocalUpdate(w http.ResponseWriter, r *http.Request) {
 			changes = append(changes, "address "+d.Address+" → "+ip)
 			d.Address = ip
 			// A new address starts over.
-			d.Checked, d.Up, d.Since, d.LastCheck, d.LastUp, d.RTTUs, d.Fails, d.LastError, d.Hist = false, false, 0, 0, 0, 0, 0, "", nil
+			d.resetPing()
 			s.loc.mu.Lock()
 			delete(s.loc.next, d.ID)
 			s.loc.mu.Unlock()

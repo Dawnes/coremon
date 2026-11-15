@@ -1476,6 +1476,48 @@ function uptimeBar(hist, { word = 'ping', compact = false } = {}) {
   }
   return compact ? html`<div class="upbar mini">${cells}</div>` : html`<div class="upbar">${cells}</div><div class="upaxis"><span>24 hours ago</span><span>now</span></div>`;
 }
+// Round-trip times of the last 24 hours in 288 five-minute slots: the
+// average as a line, red where no ping was answered, gaps where none ran.
+function rttGraph(rtt) {
+  const slot = 300, n = 288, end = Math.floor(now() / slot) * slot, by = new Map((rtt || []).map((r) => [r.t, r]));
+  const slots = [];
+  for (let i = 0; i < n; i++) { const t = end - (n - 1 - i) * slot; slots.push({ i, t, r: by.get(t) }); }
+  const top0 = Math.max(0, ...slots.map((s) => (s.r && s.r.n ? s.r.avg / 1000 : 0)));
+  if (!top0 && !slots.some((s) => s.r)) return html`<div class="dim small">No round-trip times yet: the graph fills as pings are answered.</div>`;
+  const nice = (v) => { const p = 10 ** Math.floor(Math.log10(v)); for (const m of [1, 2, 2.5, 5, 10]) if (m * p >= v) return m * p; return 10 * p; };
+  const step = nice(Math.max(top0, 0.1) / 5), top = Math.max(step, Math.ceil(top0 / step) * step);
+  const H = 100, y = (us) => (H - (us / 1000 / top) * H).toFixed(2);
+  let line = '', area = '', run = [];
+  const flush = () => {
+    if (!run.length) return;
+    const pts = run.map((s) => `${s.i + 0.5},${y(s.r.avg)}`);
+    line += `M${pts.join('L')}${run.length === 1 ? 'h0.01' : ''}`;
+    area += `M${run[0].i + 0.5},${H}L${pts.join('L')}L${run[run.length - 1].i + 0.5},${H}Z`;
+    run = [];
+  };
+  for (const s of slots) { if (s.r && s.r.n) run.push(s); else flush(); }
+  flush();
+  const hhmm = (t) => fmtDate(t).split(' ')[1];
+  let bands = '', hits = '', grid = '';
+  for (const s of slots) {
+    const r = s.r, range = `${hhmm(s.t)}–${hhmm(s.t + slot)}`;
+    if (r && !r.n && r.fail) bands += `<rect x="${s.i}" y="0" width="1" height="${H}" class="bad"/>`;
+    const tip = !r ? 'no pings' : !r.n ? `no answer (${r.fail} ping${r.fail === 1 ? '' : 's'})`
+      : `average ${rttText(r.avg)}, lowest ${rttText(r.min)}, highest ${rttText(r.max)} · ${r.n} answered${r.fail ? `, ${r.fail} unanswered` : ''}`;
+    hits += `<rect x="${s.i}" y="0" width="1" height="${H}" class="hit"><title>${esc(`${range}: ${tip}`)}</title></rect>`;
+  }
+  const ticks = [];
+  for (let v = 0; v <= top + 1e-9; v += step) ticks.push(v);
+  for (const v of ticks) grid += `<line x1="0" x2="${n}" y1="${y(v * 1000)}" y2="${y(v * 1000)}"/>`;
+  const xl = slots.filter((s) => { const d = new Date(s.t * 1000); return d.getMinutes() === 0 && d.getHours() % 2 === 0; });
+  for (const s of xl) grid += `<line x1="${s.i}" x2="${s.i}" y1="0" y2="${H}"/>`;
+  const fmtV = (v) => (step < 1 ? v.toFixed(step < 0.5 ? 2 : 1).replace(/\.?0+$/, '') || '0' : String(+v.toFixed(1)));
+  return html`<div class="rttg">
+    <div class="rttg-y">${ticks.map((v) => html`<span style="top:${100 - (v / top) * 100}%">${fmtV(v)}</span>`)}</div>
+    <div class="rttg-plot">${raw(`<svg viewBox="0 0 ${n} ${H}" preserveAspectRatio="none"><g class="grid">${grid}</g><g class="bands">${bands}</g><path class="area" d="${area}"/><path class="line" d="${line}"/><g>${hits}</g></svg>`)}
+      <div class="rttg-x">${xl.map((s) => html`<span style="left:${(s.i / n) * 100}%">${hhmm(s.t)}</span>`)}</div></div>
+    <div class="rttg-unit">ms</div></div>`;
+}
 function svcState(s) {
   if (s.paused) return html`<span class="badge mute xs">paused</span>`;
   if (!s.checked) return s.fails ? html`<span class="badge upd xs" title="${s.last_error || ''}">retry ${s.fails} of ${s.retries}</span>` : html`<span class="badge mute xs">waiting</span>`;
@@ -1584,7 +1626,8 @@ function LocalPage([id, tab]) {
       <div class="panel panel-pad"><div class="row" style="margin-bottom:12px"><h2 style="margin:0">Ping, last 24 hours</h2><span class="spacer"></span>
         ${!P ? html`<span class="dim small">not pinged</span>` : P.uptime >= 0 ? html`<span class="muted small">${pctText(P.uptime)} of the pings answered${on ? '' : ' (paused)'}</span>` : html`<span class="dim small">${on ? 'no pings yet' : 'paused'}</span>`}</div>
         ${uptimeBar(P ? P.hist : [])}
-        <div class="row dim small" style="margin-top:10px;gap:14px"><span><i class="lg ok"></i>all answered</span><span><i class="lg part"></i>some answered</span><span><i class="lg bad"></i>none answered</span><span><i class="lg none"></i>no pings</span></div></div>
+        <div class="row dim small" style="margin-top:10px;gap:14px"><span><i class="lg ok"></i>all answered</span><span><i class="lg part"></i>some answered</span><span><i class="lg bad"></i>none answered</span><span><i class="lg none"></i>no pings</span></div>
+        ${P ? html`<div class="row" style="margin:22px 0 10px"><h3 style="margin:0">Round-trip time</h3><span class="spacer"></span><span class="dim small">average per 5 minutes · point at the graph for lowest and highest</span></div>${rttGraph(P.rtt)}` : ''}</div>
       <div class="panel panel-pad" style="margin-top:16px"><div class="row" style="margin-bottom:12px"><h2 style="margin:0">Services, last 24 hours</h2><span class="spacer"></span>
         <a href="#" class="small" data-act="tab" data-t="services">${canChange() ? 'Details, add or remove' : 'Details'}</a></div>
         ${svcs.length ? html`<div class="svcsum">${svcs.map((s) => html`
