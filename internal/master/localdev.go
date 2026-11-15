@@ -873,6 +873,31 @@ func (s *Server) handleLocalSettingsGet(w http.ResponseWriter, r *http.Request) 
 			"timeout_min": minPingTimeout, "timeout_max": maxPingTimeout, "down_min": minDownAfter, "down_max": maxDownAfter}})
 }
 
+// replanPings applies a new ping interval right away instead of after the
+// old one: a ping waiting longer than the new interval since the last one is
+// moved forward. Services keep their own schedule. Caller holds s.st.mu.
+func (s *Server) replanPings(intervalSec int, now time.Time) {
+	iv := time.Duration(intervalSec) * time.Second
+	s.loc.mu.Lock()
+	defer s.loc.mu.Unlock()
+	for id, d := range s.st.st.Locals {
+		next, ok := s.loc.next[id]
+		if !ok || !d.pinging() {
+			continue
+		}
+		want := now.Add(iv)
+		if d.LastCheck > 0 {
+			want = time.Unix(d.LastCheck, 0).Add(iv)
+		}
+		if want.Before(now) {
+			want = now
+		}
+		if next.After(want) {
+			s.loc.next[id] = want
+		}
+	}
+}
+
 func (s *Server) handleLocalSettingsSave(w http.ResponseWriter, r *http.Request) {
 	var req LocalSettings
 	if !readJSON(w, r, &req, 4096) {
@@ -894,18 +919,10 @@ func (s *Server) handleLocalSettingsSave(w http.ResponseWriter, r *http.Request)
 	old := s.st.st.Local
 	s.st.st.Local = req
 	s.st.markDirty()
-	s.st.mu.Unlock()
 	if old.IntervalSec != req.IntervalSec {
-		// Apply the new interval right away instead of after the old one.
-		s.loc.mu.Lock()
-		now := time.Now()
-		for id, next := range s.loc.next {
-			if lim := now.Add(time.Duration(req.IntervalSec) * time.Second); next.After(lim) {
-				s.loc.next[id] = lim
-			}
-		}
-		s.loc.mu.Unlock()
+		s.replanPings(req.IntervalSec, time.Now())
 	}
+	s.st.mu.Unlock()
 	s.audit.write(actor(r), clientIP(r), "settings.local", "", fmt.Sprintf("ping every %ds, timeout %ds, down after %d failed", req.IntervalSec, req.TimeoutSec, req.DownAfter))
 	writeJSON(w, map[string]any{"settings": req})
 }

@@ -33,6 +33,36 @@ func TestRTTSlots(t *testing.T) {
 	}
 }
 
+// A shorter ping interval applies right away; services keep their schedule.
+func TestReplanPings(t *testing.T) {
+	pub, _ := keys(t)
+	s := testServer(t, pub, "http://127.0.0.1:1/none", "0.3.0")
+	now := time.Unix(1_800_000_000, 0)
+	d := &LocalDevice{ID: "l_0123456789abcdef", Name: "printer", Address: "10.0.0.7", LastCheck: now.Unix() - 30,
+		Services: []*Service{{ID: "s_0123456789abcdef", Name: "IPP", Port: 631, Interval: 300, Retries: 3, Timeout: 5}}}
+	old := &LocalDevice{ID: "l_1123456789abcdef", Name: "old", Address: "10.0.0.8", LastCheck: now.Unix() - 600}
+	s.st.mu.Lock()
+	defer s.st.mu.Unlock()
+	s.st.st.Locals[d.ID], s.st.st.Locals[old.ID] = d, old
+	s.loc.next[d.ID] = now.Add(3570 * time.Second)
+	s.loc.next[old.ID] = now.Add(3000 * time.Second)
+	s.loc.next["s_0123456789abcdef"] = now.Add(3000 * time.Second)
+	s.replanPings(60, now)
+	if got := s.loc.next[d.ID]; !got.Equal(now.Add(30 * time.Second)) {
+		t.Errorf("ping: next %v, want 30 s after now", got.Sub(now))
+	}
+	if got := s.loc.next[old.ID]; !got.Equal(now) {
+		t.Errorf("overdue ping: next %v, want now", got.Sub(now))
+	}
+	if got := s.loc.next["s_0123456789abcdef"]; !got.Equal(now.Add(3000 * time.Second)) {
+		t.Errorf("service moved: %v", got.Sub(now))
+	}
+	s.replanPings(3600, now)
+	if got := s.loc.next[d.ID]; !got.Equal(now.Add(30 * time.Second)) {
+		t.Errorf("a longer interval must not delay a planned ping: %v", got.Sub(now))
+	}
+}
+
 // Check results live in checks.dat, not in state.dat, and survive a restart.
 func TestChecksFile(t *testing.T) {
 	pub, _ := keys(t)
