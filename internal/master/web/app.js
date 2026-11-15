@@ -1787,7 +1787,7 @@ function Devices() {
         <td>${canChange() ? html`<select class="sm" data-change="set-group" data-id="${a.id}" title="Group">${groupOptions(d.groups, a.group_id)}</select>` : html`<span class="muted">${d.groups.find((g) => g.id === a.group_id)?.name || 'Ungrouped'}</span>`}</td>
         <td class="muted">${isLocal(a) ? html`<span class="dim">—</span>` : osLabel(a.facts)}</td><td>${isLocal(a) ? html`<span class="dim">—</span>` : verPill(a)}</td>
         <td class="muted nowrap">${seen(a)}</td>
-        ${ifChange(html`<td class="w1"><div class="row" style="flex-wrap:nowrap">${isLocal(a)
+        ${ifChange(html`<td class="w1"><div class="row" style="flex-wrap:nowrap;justify-content:flex-end">${isLocal(a)
     ? html`<button class="btn ghost sm" data-act="l-edit" data-id="${a.id}">${icon('edit')} Edit</button><button class="btn danger sm" data-act="l-delete" data-id="${a.id}" title="Delete">${icon('trash')}</button>`
     : html`<button class="btn ghost sm" data-act="rename" data-id="${a.id}">${icon('edit')} Rename</button><button class="btn danger sm" data-act="remove" data-id="${a.id}" title="Remove">${icon('trash')}</button>`}</div></td>`)}</tr>`)}</tbody></table></div>` : html`<div class="panel empty">No devices yet.</div>`);
     if (!st.addShown) { st.addShown = true; addPanel(); }
