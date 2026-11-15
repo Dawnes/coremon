@@ -1505,8 +1505,8 @@ function serviceModal(dev, svc, presets, lim, done) {
   openModal(html`<h3>${isNew ? `Add a service to ${dev.name}` : `Edit ${s.name}`}</h3>
     <form class="form" data-submit="save">
       <label class="field">Service<select name="preset" data-change="preset">
-        ${groups.map((g) => html`<optgroup label="${g}">${presets.filter((p) => p.group === g).map((p) => html`<option value="${p.key}" ${s.preset === p.key ? 'selected' : ''}>${p.name} (${p.port})</option>`)}</optgroup>`)}
-        <option value="" ${!s.preset ? 'selected' : ''}>Custom…</option></select></label>
+        ${groups.map((g) => presets.filter((p) => p.group === g).map((p) => html`<option value="${p.key}" ${s.preset === p.key ? 'selected' : ''}>${p.name} (${p.port})</option>`))}
+        <option value="" ${!s.preset ? 'selected' : ''}>Custom TCP port…</option></select></label>
       <div class="row" style="gap:12px;align-items:flex-end">
         <label class="field" style="flex:2">Name<input type="text" name="name" value="${s.name}" maxlength="48" required></label>
         <label class="field" style="flex:1">Port<input type="number" name="port" min="1" max="65535" value="${s.port}" required></label></div>
@@ -1544,24 +1544,30 @@ function LocalPage([id, tab]) {
     const kv = [
       ['Status', html`${status} ${L.checked ? `since ${fmtDate(L.since)}` : ''}`],
       ['IP address', html`<span class="mono">${L.address}</span>`],
-      ['Ping', L.ping ? 'on' : html`off <span class="dim small">(status from the services)</span>`],
-      ...(L.ping ? [
-        ['Round-trip time', L.up && L.rtt_us ? rttText(L.rtt_us) : '—'],
-        ['Last ping', L.last_check ? html`${fmtDate(L.last_check, true)}` : '—'],
-        ['Last answer', L.last_up ? html`${fmtDate(L.last_up, true)}` : 'never'],
-        ['Unanswered in a row', L.fails ? html`<span class="c-red">${L.fails}</span>` : '0'],
-        ['Last error', L.last_error ? html`<span class="c-red">${L.last_error}</span>` : '—'],
-      ] : []),
+      ['Ping', L.ping ? 'on' : html`<span class="badge mute xs">off</span>`],
+      ['Round-trip time', L.ping && L.up && L.rtt_us ? rttText(L.rtt_us) : '—'],
+      ['Last ping', L.ping && L.last_check ? html`${fmtDate(L.last_check, true)}` : '—'],
+      ['Last answer', !L.ping ? '—' : L.last_up ? html`${fmtDate(L.last_up, true)}` : 'never'],
+      ['Unanswered in a row', !L.ping ? '—' : L.fails ? html`<span class="c-red">${L.fails}</span>` : '0'],
+      ['Last error', L.ping && L.last_error ? html`<span class="c-red">${L.last_error}</span>` : '—'],
       ['Services', L.svc_total ? html`<a href="#" data-act="tab" data-t="services">${L.svc_total} service${L.svc_total === 1 ? '' : 's'}</a>${L.svc_down ? html` · <span class="c-red">${L.svc_down} down</span>` : ''}` : html`<span class="dim">none</span>`],
       ['Monitoring', 'Agentless'],
       ['Added', fmtDate(a.enrolled_at)],
     ];
     return html`
+      ${L.ping ? '' : html`<div class="notice blue">Ping is turned off for this device. Its status comes from its services: up while at least one service is up.${canChange() ? html` Turn ping on again with <a href="#" data-act="edit">Edit</a>.` : ''}</div>`}
       <div class="panel panel-pad" style="margin-bottom:16px"><div class="facts">${kv.map(([k, v]) => html`<div><div class="k">${k}</div><div class="v">${v}</div></div>`)}</div></div>
-      ${L.ping ? html`<div class="panel panel-pad"><div class="row" style="margin-bottom:12px"><h2 style="margin:0">Ping, last 24 hours</h2><span class="spacer"></span>
-        ${L.uptime >= 0 ? html`<span class="muted small">${pctText(L.uptime)} of the pings answered</span>` : html`<span class="dim small">no pings yet</span>`}</div>
-        ${uptimeBar(L.hist)}
-        <div class="row dim small" style="margin-top:10px;gap:14px"><span><i class="lg ok"></i>all answered</span><span><i class="lg part"></i>some answered</span><span><i class="lg bad"></i>none answered</span><span><i class="lg none"></i>no pings</span></div></div>` : ''}`;
+      <div class="panel panel-pad"><div class="row" style="margin-bottom:12px"><h2 style="margin:0">Ping, last 24 hours</h2><span class="spacer"></span>
+        ${!L.ping ? html`<span class="dim small">ping is turned off</span>` : L.uptime >= 0 ? html`<span class="muted small">${pctText(L.uptime)} of the pings answered</span>` : html`<span class="dim small">no pings yet</span>`}</div>
+        ${uptimeBar(L.ping ? L.hist : [])}
+        <div class="row dim small" style="margin-top:10px;gap:14px"><span><i class="lg ok"></i>all answered</span><span><i class="lg part"></i>some answered</span><span><i class="lg bad"></i>none answered</span><span><i class="lg none"></i>no pings</span></div></div>
+      <div class="panel panel-pad" style="margin-top:16px"><div class="row" style="margin-bottom:12px"><h2 style="margin:0">Services, last 24 hours</h2><span class="spacer"></span>
+        <a href="#" class="small" data-act="tab" data-t="services">${canChange() ? 'Details, add or remove' : 'Details'}</a></div>
+        ${(L.services || []).length ? html`<div class="svcsum">${L.services.map((s) => html`
+          <div class="svcsum-row"><div class="svcsum-name">${svcState(s)} <b>${s.name}</b> <span class="dim small mono">TCP ${s.port}</span>${s.reverse ? html` <span class="badge info xs" title="Reverse mode: reachable counts as down">reverse</span>` : ''}</div>
+            <div class="svcsum-bar">${uptimeBar(s.hist, { word: 'check', compact: true })}</div>
+            <div class="svcsum-pct dim small">${s.uptime >= 0 ? `${pctText(s.uptime)} up` : 'no checks yet'}</div></div>`)}</div>`
+          : html`<div class="dim small">No services yet.</div>`}</div>`;
   }
   function servicesTab(a, L) {
     const svcs = L.services || [];
@@ -1594,7 +1600,7 @@ function LocalPage([id, tab]) {
           <span class="tag">${icon('folder')} ${g ? g.name : 'Ungrouped'}</span><span class="verpill loc" title="Monitored by the master itself; no agent is installed">agentless</span></div>
           <div class="sub">${L.address} · ${state}${L.up && L.svc_down ? ` · ${L.svc_down} of ${L.svc_total} services down` : ''}</div></div>
         <span class="spacer"></span>
-        ${L.ping ? html`<button class="btn sm" data-act="ping" ${st.pinging ? 'disabled' : ''} title="Ping the device now">${st.pinging ? html`<span class="spin"></span>` : icon('pulse')} Ping now</button>` : ''}
+        <button class="btn sm" data-act="ping" ${st.pinging || !L.ping ? 'disabled' : ''} title="${L.ping ? 'Ping the device now' : 'Ping is turned off for this device'}">${st.pinging ? html`<span class="spin"></span>` : icon('pulse')} Ping now</button>
         ${ifChange(html`<button class="btn sm" data-act="edit">${icon('edit')} Edit</button><button class="btn danger sm" data-act="delete" title="Delete">${icon('trash')}</button>`)}
       </div>
       ${conflictNotice(a)}`);
