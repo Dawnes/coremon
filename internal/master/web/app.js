@@ -785,7 +785,27 @@ function Dashboard() {
     if (!d || st.drag) return;
     const A = d.agents;
     const active = A.filter((a) => a.status !== 'pending');
-    const online = active.filter((a) => a.online).length;
+    // Services OK: per agent its connection; per agentless device the
+    // running ping and services. Undecided (waiting, retrying) is not OK.
+    let svcTotal = 0, svcOK = 0, svcDown = 0, devClean = 0;
+    for (const a of active) {
+      let t = 0, ok = 0, down = 0;
+      if (!isLocal(a)) {
+        t = 1;
+        if (a.online) ok = 1; else down = 1;
+      } else {
+        const L = a.local, P = L.ping_info;
+        if (L.ping && P) {
+          t++;
+          if (P.checked && !P.up) down++;
+          else if (P.checked && !P.fails) ok++;
+        }
+        t += L.svc_total; ok += L.svc_ok || 0; down += L.svc_down;
+      }
+      svcTotal += t; svcOK += ok; svcDown += down;
+      if (!down) devClean++;
+    }
+    const svcClass = svcDown ? 'c-red' : svcOK < svcTotal ? 'c-amber' : 'c-green';
     const totUpd = active.reduce((s, a) => s + (a.updates?.total || 0), 0);
     const totSec = active.reduce((s, a) => s + (a.updates?.security || 0), 0);
     const reboot = active.filter((a) => a.updates?.reboot_required).length;
@@ -813,10 +833,10 @@ function Dashboard() {
     if (allCurrent) oldest = null;
     const hours = d.settings?.check_interval_hours || 6;
     setHTML($('#d-stats'), html`
-      <div class="panel stat c-green"><div class="label">Devices online</div><div class="value">${online}<small> / ${active.length}</small></div>
-        ${reportOnly ? html`<div class="statnote" title="Report-only devices only report; no checks, installs or reboots">${icon('pause')} ${reportOnly} report only</div>` : ''}</div>
-      <div class="panel stat c-amber"><div class="label">Pending updates</div><div class="value">${totUpd}</div></div>
-      <div class="panel stat c-red"><div class="label">Security updates</div><div class="value">${totSec}</div></div>
+      <div class="panel stat ${svcClass}" title="Agents: the connection. Agentless devices: the ping and every service that is not paused."><div class="label">Services OK</div><div class="value">${svcOK}<small> / ${svcTotal}</small></div>
+        <div class="statnote">${active.length} device${active.length === 1 ? '' : 's'} · ${devClean} without failures${reportOnly ? html` · <span title="Report-only devices only report; no checks, installs or reboots">${reportOnly} report only</span>` : ''}</div></div>
+      <div class="panel stat c-amber"><div class="label">Pending updates</div><div class="value">${totUpd}</div>
+        ${totSec ? html`<div class="statnote"><span class="c-red">${totSec} security</span></div>` : ''}</div>
       <div class="panel stat c-violet"><div class="label">Reboot required</div><div class="value">${reboot}</div></div>
       <div class="panel stat c-cyan"><div class="label">Active jobs</div><div class="value">${d.active_jobs}</div></div>
       <div class="panel stat ${oc} ${oldest ? 'click' : ''}" ${oldest ? raw(`data-act="open-agent" data-id="${esc(oldest.a.id)}"`) : ''} title="${oldest ? 'Oldest information shown on this dashboard: ' + fmtDate(oldest.ts, true) : ''}">

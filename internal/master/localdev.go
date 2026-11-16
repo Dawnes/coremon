@@ -314,6 +314,7 @@ type localView struct {
 	PingInfo  *pingView     `json:"ping_info,omitempty"`
 	SvcTotal  int           `json:"svc_total"` // services that run (not paused)
 	SvcDown   int           `json:"svc_down"`
+	SvcOK     int           `json:"svc_ok"` // running services that are up without failed retries
 	SvcPaused int           `json:"svc_paused"`
 	Services  []serviceView `json:"services,omitempty"` // device page only
 }
@@ -371,8 +372,11 @@ func (s *Server) localDeviceView(d *LocalDevice, full bool) agentView {
 			continue
 		}
 		running = append(running, v)
-		if v.Checked && !v.Up {
+		switch {
+		case v.Checked && !v.Up:
 			lv.SvcDown++
+		case v.Checked && v.Fails == 0:
+			lv.SvcOK++
 		}
 	}
 	lv.SvcTotal = len(running)
