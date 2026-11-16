@@ -2114,8 +2114,16 @@ function endlessList({ load, keyOf, size = 50 }) {
   return p;
 }
 
+// "in 42 s", "in 5 min", "in 2h 14m", "in 3d 4h"; "now" when due.
+function inText(ts) {
+  const s = Math.floor(ts - now());
+  if (s <= 0) return 'now';
+  if (s < 60) return `in ${s} s`;
+  if (s < 3600) return `in ${Math.round(s / 60)} min`;
+  return 'in ' + dur(s);
+}
 function Jobs() {
-  const st = { active: false, agent: '', user: '' };
+  const st = { active: false, agent: '', user: '', tab: 'jobs', up: null };
   const list = endlessList({
     keyOf: (j) => j.id,
     load: async (last, _, size) => {
@@ -2165,27 +2173,57 @@ function Jobs() {
       <tbody>${list.items.map((j) => (j.batch ? batchRow(j) : jobRow(j)))}</tbody></table></div>${list.footer(d.retention_days)}`
       : html`<div class="panel empty">${st.agent || st.user || st.active ? 'No jobs for this filter.' : 'No jobs.'}</div>`);
   }
+  function renderUpcoming() {
+    const u = st.up;
+    if (!u) return;
+    const at = (ts) => html`<span class="when" title="${fmtDate(ts, true)}">${inText(ts)}</span>`;
+    setHTML($('#j-up'), html`
+      <div class="panel" style="margin-bottom:16px"><div class="panel-pad" style="padding-bottom:0"><h2 style="margin:0">Master tasks</h2></div>
+        <table class="tbl"><thead><tr><th>Task</th><th>Next run</th><th>Time</th></tr></thead><tbody>
+        ${u.tasks.map((t) => html`<tr><td><b>${t.title}</b>${t.detail ? html`<div class="dim small">${t.detail}</div>` : ''}</td>
+          <td class="nowrap">${at(t.at)}</td><td class="muted nowrap">${fmtDate(t.at)}</td></tr>`)}</tbody></table></div>
+      <div class="panel"><div class="panel-pad" style="padding-bottom:0"><h2 style="margin:0">Agentless checks</h2><div class="dim small" style="margin-top:4px">The next ${u.checks.length || ''} ping and service checks</div></div>
+        ${u.checks.length ? html`<table class="tbl"><thead><tr><th>Device</th><th>Check</th><th>Next run</th></tr></thead><tbody>
+        ${u.checks.map((c) => html`<tr><td><a href="#/device/${c.device_id}">${c.device}</a></td><td><b>${c.check}</b>${c.detail ? html` <span class="dim small">${c.detail}</span>` : ''}</td>
+          <td class="nowrap">${c.running ? html`<span class="row small"><span class="spin" style="width:10px;height:10px"></span>running</span>` : at(c.at)}</td></tr>`)}</tbody></table>`
+          : html`<div class="panel-pad dim small">No agentless checks: add an agentless device in Settings → Devices.</div>`}</div>`);
+  }
+  function showTab() {
+    setHTML($('#j-tabs'), html`<button class="${st.tab === 'jobs' ? 'on' : ''}" data-act="jtab" data-t="jobs">Jobs</button><button class="${st.tab === 'upcoming' ? 'on' : ''}" data-act="jtab" data-t="upcoming">Upcoming tasks</button>`);
+    $('#j-jobs').style.display = st.tab === 'jobs' ? '' : 'none';
+    $('#j-up').style.display = st.tab === 'upcoming' ? '' : 'none';
+  }
   const restart = () => { list.reset(); window.scrollTo({ top: 0 }); view.refresh(); };
   return {
     interval: 3000,
     mount(el) {
-      el.innerHTML = r(html`${subTabs('history', 'jobs')}<div class="page-head"><div><h1>Jobs</h1><div class="sub">Everything sent to agents</div></div><span class="spacer"></span>
+      el.innerHTML = r(html`${subTabs('history', 'jobs')}<div class="page-head"><div><h1>Jobs</h1><div class="sub">Everything sent to agents, and what is planned</div></div></div>
+        <div class="tabs" id="j-tabs"></div>
+        <div id="j-jobs"><div class="row" style="margin-bottom:14px;gap:14px;flex-wrap:wrap">
         <div class="chips"><button class="chip on" data-act="f" data-v="0">All</button><button class="chip" data-act="f" data-v="1">Active</button></div>
         <label class="row small muted">User <select id="j-user"><option value="">All users</option></select></label>
-        <label class="row small muted">Device <select id="j-sys"><option value="">All devices</option></select></label></div><div id="j-list"></div><div id="j-end"></div>`);
+        <label class="row small muted">Device <select id="j-sys"><option value="">All devices</option></select></label></div><div id="j-list"></div><div id="j-end"></div></div>
+        <div id="j-up"></div>`);
       $('#j-user').addEventListener('change', (e) => { st.user = e.target.value; restart(); });
       $('#j-sys').addEventListener('change', (e) => { st.agent = e.target.value; restart(); });
+      showTab();
       list.watch($('#j-end'), render);
     },
     unmount() { list.stop(); },
     async refresh() {
+      if (st.tab === 'upcoming') {
+        st.up = await GET('upcoming');
+        renderUpcoming();
+        return;
+      }
       if (st.active) list.reset();
       await list.refresh();
       render();
       list.check();
     },
     acts: {
-      f: (t) => { st.active = t.dataset.v === '1'; document.querySelectorAll('.chips .chip').forEach((c) => c.classList.toggle('on', c === t)); restart(); },
+      jtab: (t) => { st.tab = t.dataset.t; showTab(); view.refresh(); },
+      f: (t) => { st.active = t.dataset.v === '1'; document.querySelectorAll('#j-jobs .chips .chip').forEach((c) => c.classList.toggle('on', c === t)); restart(); },
       'to-top': async () => { await list.toTop(); render(); },
       batch: (t) => { const id = t.dataset.id; if (open.has(id)) open.delete(id); else open.add(id); render(); },
     },
@@ -2820,6 +2858,12 @@ function SettingsAccount() {
           ${session.prev_login ? html`<div class="previn-when">${fmtDate(session.prev_login)} <span class="previn-ago">${ago(session.prev_login)}</span></div>
             <div class="previn-ip">from <span class="mono">${session.prev_ip || 'an unknown address'}</span></div>`
     : html`<div class="previn-when">This is your first sign-in</div><div class="previn-ip">Next time, your previous sign-in shows here.</div>`}</div></div>
+        <div class="panel panel-pad"><h2>Notification email</h2>
+          <form class="form" data-submit="email" style="margin-top:0">
+            <label class="field">Email address<input type="email" name="email" value="${session.notify_email || ''}" maxlength="254" autocomplete="email" placeholder="name@example.com"></label>
+            <div style="margin-top:8px"><button class="btn primary">Save</button></div>
+          </form>
+        </div>
         <div class="panel panel-pad"><h2>Change password</h2>
           <form class="form" data-submit="pw" style="margin-top:0">
             <label class="field">Current password<input type="password" name="cur" autocomplete="current-password" required></label>
@@ -2832,6 +2876,13 @@ function SettingsAccount() {
       tfaBox();
     },
     acts: {
+      email: async (f) => {
+        const res = await POST('account/email', { email: f.email.value.trim() });
+        const before = session.notify_email || '';
+        session.notify_email = res.email;
+        f.email.value = res.email;
+        toast(res.email === before ? 'Saved' : res.email ? 'Notification email saved' : 'Notification email removed', 'ok');
+      },
       pw: async (f) => {
         if (f.new.value !== f.new2.value) return toast('New passwords do not match', 'err');
         await POST('password', { current: f.cur.value, new: f.new.value });

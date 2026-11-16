@@ -190,6 +190,8 @@ type User struct {
 	TOTPLast   int64  `json:"totp_last,omitempty"`
 	TOTPSince  int64  `json:"totp_since,omitempty"`
 
+	NotifyEmail string `json:"notify_email,omitempty"` // set by the user in My Account; personal
+
 	LastLogin int64  `json:"last_login,omitempty"`
 	LastIP    string `json:"last_ip,omitempty"`
 	PrevLogin int64  `json:"prev_login,omitempty"`

@@ -355,6 +355,7 @@ func (s *Server) routes() http.Handler {
 	view := func(p string, h http.HandlerFunc) { mux.HandleFunc(p, s.requireUI(permView, h)) }
 	change := func(p string, h http.HandlerFunc) { mux.HandleFunc(p, s.requireUI(permChange, h)) }
 	view("POST /api/ui/password", s.handlePassword)
+	view("POST /api/ui/account/email", s.handleNotifyEmail)
 	view("POST /api/ui/account/2fa/start", s.handle2FAStart)
 	view("POST /api/ui/account/2fa/enable", s.handle2FAEnable)
 	view("POST /api/ui/account/2fa/disable", s.handle2FADisable)
@@ -380,6 +381,7 @@ func (s *Server) routes() http.Handler {
 	change("POST /api/ui/local", s.handleLocalSettingsSave)
 	view("GET /api/ui/jobs", s.handleJobs)
 	view("GET /api/ui/jobs/{id}", s.handleJob)
+	view("GET /api/ui/upcoming", s.handleUpcoming)
 	change("GET /api/ui/tokens", s.handleTokens)
 	change("POST /api/ui/tokens", s.handleTokenCreate)
 	change("POST /api/ui/tokens/{hash}/delete", s.handleTokenDelete)

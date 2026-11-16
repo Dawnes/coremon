@@ -160,7 +160,7 @@ select.sm { height: 30px; padding: 0 8px; font-size: 12.5px; }
 .chip.on { color: var(--text); background: var(--accent); border-color: rgba(255, 255, 255, 0.2); }
 .chip .n { color: var(--dim); margin-left: 4px; }
 
-input[type=text], input[type=password], input[type=number], input[type=search], select, textarea {
+input[type=text], input[type=password], input[type=email], input[type=number], input[type=search], select, textarea {
   height: 36px; background: rgba(255, 255, 255, 0.03); border: 1px solid var(--line-hi); color: var(--text);
   padding: 0 12px; border-radius: var(--r-md); font: inherit; outline: none; min-width: 0; box-shadow: var(--shadow-xs);
   transition: border-color .12s, box-shadow .12s;

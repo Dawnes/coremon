@@ -123,6 +123,7 @@ func (s *Server) handleSession(w http.ResponseWriter, r *http.Request) {
 					out["app"] = s.appName()
 				}
 				out["prev_login"], out["prev_ip"] = u.PrevLogin, u.PrevIP
+				out["notify_email"] = u.NotifyEmail
 			}
 			s.st.mu.Unlock()
 		}
@@ -246,6 +247,47 @@ func (s *Server) handlePassword(w http.ResponseWriter, r *http.Request) {
 	s.setCookie(w, s.sess.create(u.ID))
 	s.audit.write(me.Name, clientIP(r), "password.changed", me.Name, "")
 	writeJSON(w, map[string]bool{"ok": true})
+}
+
+const maxEmailLen = 254
+
+// emailRe: a plain address (local@domain.tld), nothing more is checked.
+var emailRe = regexp.MustCompile(`^[A-Za-z0-9.!#$%&'*+/=?^_{|}~-]+@[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?(?:\.[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?)*\.[A-Za-z]{2,63}$`)
+
+// handleNotifyEmail sets or clears the signed-in user's own notification
+// address. The address itself is not written to the audit log.
+func (s *Server) handleNotifyEmail(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Email string `json:"email"`
+	}
+	if !readJSON(w, r, &req, 1024) {
+		return
+	}
+	email := strings.TrimSpace(req.Email)
+	if email != "" && (len(email) > maxEmailLen || !emailRe.MatchString(email)) {
+		http.Error(w, "that is not a valid email address", http.StatusBadRequest)
+		return
+	}
+	me := userFrom(r)
+	s.st.mu.Lock()
+	u := s.st.userByID(me.ID)
+	if u == nil {
+		s.st.mu.Unlock()
+		http.Error(w, "unknown user", http.StatusNotFound)
+		return
+	}
+	old := u.NotifyEmail
+	u.NotifyEmail = email
+	s.st.markDirty()
+	s.st.mu.Unlock()
+	switch {
+	case old == email:
+	case email == "":
+		s.audit.write(me.Name, clientIP(r), "account.email_removed", me.Name, "notification email removed")
+	default:
+		s.audit.write(me.Name, clientIP(r), "account.email_changed", me.Name, "notification email changed")
+	}
+	writeJSON(w, map[string]string{"email": email})
 }
 
 func passwordProblem(pw string) string {
