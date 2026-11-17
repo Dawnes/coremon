@@ -129,6 +129,7 @@ function layoutToasts() {
 
 function toastTimer(t, run) {
   clearTimeout(t.timer);
+  if (t.sticky) return; // stays until closed
   if (run) { t.started = Date.now(); t.timer = setTimeout(() => dropToast(t), t.left); }
   else if (t.started) { t.left = Math.max(800, t.left - (Date.now() - t.started)); t.started = 0; }
 }
@@ -185,7 +186,8 @@ function swipeToast(t) {
   t.el.addEventListener('pointercancel', end);
 }
 
-function toast(msg, kind = '') {
+// toast shows a message; sticky ones stay until closed. Lines split on \n.
+function toast(msg, kind = '', sticky = false) {
   const box = $('#toasts');
   if (!toastState.wired) wireToasts(box);
   const el = document.createElement('div');
@@ -195,7 +197,7 @@ function toast(msg, kind = '') {
   el.innerHTML = `<button class="tclose" type="button" aria-label="Close"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><path d="M18 6 6 18M6 6l12 12"/></svg></button>${ic}<div class="tbody"></div>`;
   el.querySelector('.tbody').textContent = msg;
   box.appendChild(el);
-  const t = { el, h: el.getBoundingClientRect().height, left: TOAST.ms[kind] ?? 4000, started: 0, timer: 0, base: '' };
+  const t = { el, h: el.getBoundingClientRect().height, left: TOAST.ms[kind] ?? 4000, started: 0, timer: 0, base: '', sticky };
   el.querySelector('.tclose').addEventListener('click', () => dropToast(t));
   swipeToast(t);
   toastState.list.unshift(t);
@@ -636,7 +638,9 @@ async function runAction(ids, feature, action, params, { open = true } = {}) {
 async function setAgentVersion(a, version) {
   if (version === a.core_version) return toast(`${a.name} already runs ${version}`);
   const down = a.core_version && versionLess(version, a.core_version);
-  const res = await POST(`agents/${a.id}/core`, { version });
+  let res;
+  try { res = await POST(`agents/${a.id}/core`, { version }); }
+  catch (e) { throw new Error(`${a.name}: agent update to ${version} not requested: ${e.message || e}`); }
   toast(`${a.name}: agent ${a.core_version} → ${version} requested${res.job ? '' : ' (applies when the device is online)'}`, 'ok');
   if (res.job && down) toast('Downgrade: the agent restarts with the older version');
   view?.refresh?.();
@@ -1003,7 +1007,9 @@ function Dashboard() {
       'agent-update': async (t) => {
         const a = st.data.agents.find((x) => x.id === t.dataset.id);
         if (!(await confirmBox(`Update the agent on ${a.name}?`, `Agent ${a.core_version} is older than the lowest allowed version ${a.min_agent}. It is updated to ${a.core_latest}; afterwards the device reports normally again.`, { okText: 'Update agent' }))) return;
-        const res = await POST(`agents/${a.id}/core`, {});
+        let res;
+        try { res = await POST(`agents/${a.id}/core`, {}); }
+        catch (e) { throw new Error(`${a.name}: agent update not requested: ${e.message || e}`); }
         if (res.job) openJob(res.job); else toast('Update requested — it runs when the device is online', 'ok');
         view.refresh();
       },
@@ -2433,13 +2439,23 @@ function Releases() {
         const groups = st.data.groups || [];
         const known = new Set(groups.map((g) => g.id));
         const name = groups.find((g) => g.id === gid)?.name || 'Ungrouped';
-        const list = outdatedIn(st.data.agents.filter((a) => (gid ? a.group_id === gid : !known.has(a.group_id)))).sort(byName);
+        // Same devices as the table: no agentless or pending ones.
+        const list = outdatedIn(st.data.agents.filter((a) => a.status !== 'pending' && !isLocal(a) &&
+          (gid ? a.group_id === gid : !known.has(a.group_id)))).sort(byName);
         if (!list.length) return;
         if (!(await confirmBox(`Update ${list.length} agent${list.length === 1 ? '' : 's'} in ${name} to ${l}?`,
           html`${list.map((a) => html`<div>${a.name} <span class="dim">(${a.core_version}${a.online ? '' : ', offline: updates when it is online'})</span></div>`)}`,
           { okText: 'Update agents' }))) return;
-        for (const a of list) await POST(`agents/${a.id}/core`, { version: l });
-        toast(`Update to ${l} requested for ${list.length} device${list.length === 1 ? '' : 's'}`, 'ok'); view.refresh();
+        // One failing device does not stop the others; the failures are named at the end.
+        const ok = [], bad = [];
+        for (const a of list) {
+          try { await POST(`agents/${a.id}/core`, { version: l }); ok.push(a.name); }
+          catch (e) { bad.push(`${a.name}: ${e.message || e}`); }
+        }
+        const n = (k) => `${k} device${k === 1 ? '' : 's'}`;
+        if (!bad.length) toast(`Update to ${l} requested for ${n(ok.length)}`, 'ok');
+        else toast(`Update to ${l} requested for ${ok.length} of ${n(list.length)}${ok.length ? ` (${ok.join(', ')})` : ''}.\nFailed:\n${bad.map((b) => '• ' + b).join('\n')}`, 'err', true);
+        view.refresh();
       },
     },
   };

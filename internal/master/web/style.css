@@ -433,7 +433,7 @@ pre.legal { white-space: pre-wrap; word-wrap: break-word; font-size: 12.5px; lin
 .toast.entering { transform: translateY(100%) !important; opacity: 0 !important; }
 .toast.leaving { opacity: 0 !important; pointer-events: none; }
 .toast.swiping { transition: none; }
-.toast .tbody { flex: 1; min-width: 0; overflow-wrap: anywhere; font-weight: 500; transition: opacity .3s; }
+.toast .tbody { flex: 1; min-width: 0; overflow-wrap: anywhere; white-space: pre-line; font-weight: 500; transition: opacity .3s; }
 .toast.behind .tbody, .toast.behind .ti { opacity: 0; }
 .toast .ti { flex: none; width: 16px; height: 16px; margin-top: 1px; transition: opacity .3s; }
 .toast.ok .ti { color: var(--green); }
