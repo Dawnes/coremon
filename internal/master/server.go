@@ -83,6 +83,7 @@ type Server struct {
 	checksDirty   bool              // check results changed; guarded by st.mu
 	firstCheck    map[string]bool   // agents checked because they had no results; guarded by st.mu
 	probeWant     map[string]string // check list version per probe agent; guarded by st.mu
+	probeRecv     []probeDelivery   // recent result deliveries (memory only); guarded by st.mu
 	checksMu      sync.Mutex        // one write of checks.dat at a time
 
 	handler http.Handler

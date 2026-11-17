@@ -134,6 +134,7 @@ func (s *Server) probeIntake(a *Agent, rep *proto.ProbeReport, now time.Time) {
 	}
 	pings := map[string]*LocalDevice{}
 	svcs := map[string]*Service{}
+	svcDev := map[string]string{} // service ID -> device name
 	for _, d := range s.st.st.Locals {
 		if d.Probe != a.ID {
 			continue
@@ -141,11 +142,17 @@ func (s *Server) probeIntake(a *Agent, rep *proto.ProbeReport, now time.Time) {
 		pings[d.ID] = d
 		for _, sv := range d.Services {
 			svcs[sv.ID] = sv
+			svcDev[sv.ID] = d.Name
 		}
 	}
 	res := rep.Results
 	if len(res) > maxProbeBatch {
 		res = res[len(res)-maxProbeBatch:]
+	}
+	var dl *probeDelivery
+	if s.st.st.Settings.ProbeResultsShown {
+		dl = &probeDelivery{AgentID: a.ID, Agent: a.Name, At: now.Unix()}
+		defer s.addDelivery(dl, now.Unix())
 	}
 	for _, r := range res {
 		ago := r.AgoMs
@@ -178,14 +185,21 @@ func (s *Server) probeIntake(a *Agent, rep *proto.ProbeReport, now time.Time) {
 				// The probe's own problem, not the device's: no result.
 				d.LastCheck, d.LastError = t, "the probe agent cannot send pings: "+cleanText(r.Error, 200)
 				s.markChecks()
+				dl.add(d.Name+" · Ping", false, "the probe cannot send pings")
 				continue
 			}
 			s.record(d, rtt, cerr, at)
+			dl.add(d.Name+" · Ping", r.OK, outcome(r.OK, "up", rtt, cerr))
 		} else if sv := svcs[r.ID]; sv != nil {
 			if sv.Paused || t <= sv.LastCheck {
 				continue
 			}
-			s.storeService(sv, rtt, cleanText(r.Banner, maxBanner), r.OK, cerr, at)
+			ok := s.storeService(sv, rtt, cleanText(r.Banner, maxBanner), r.OK, cerr, at)
+			what := outcome(r.OK, "reached", rtt, cerr)
+			if sv.Reverse {
+				what += " (expected closed)"
+			}
+			dl.add(svcDev[sv.ID]+" · "+sv.Name, ok, what)
 		}
 	}
 }

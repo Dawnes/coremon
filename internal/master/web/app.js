@@ -2299,20 +2299,26 @@ function RemoteProbes() {
     gave_up: html`<span class="badge mute" title="${p.note || ''}">gave up</span>`,
     answered: html`<span class="badge ok">${icon('check')} answered</span>`,
     failed: html`<span class="badge sec" title="${p.note || ''}">failed</span>`,
+    received: html`<span class="badge ok">${icon('check')} received</span>${p.failed ? html` <span class="badge sec">${p.failed} failed</span>` : ''}`,
   }[p.state] || p.state);
-  const done = (p) => p.state === 'answered' || p.state === 'failed';
+  const done = (p) => p.state === 'answered' || p.state === 'failed' || p.state === 'received';
+  const itemsTip = (p) => (p.items || []).join('\n') + (p.checks > (p.items || []).length ? `\n… and ${p.checks - p.items.length} more` : '');
   function render() {
     const d = st.d;
     if (!d) return;
     const open = d.requests.filter((p) => p.state !== 'gave_up' && !done(p)).length;
     setHTML($('#p-list'), d.requests.length ? html`<div class="panel"><table class="tbl"><thead><tr><th>Request</th><th>Agent</th><th>Waiting for</th><th>Status</th></tr></thead><tbody>
-      ${d.requests.map((p) => html`${p.kind === 'check' ? html`<tr>
+      ${d.requests.map((p) => p.kind === 'results' ? html`<tr class="dimrow" title="${itemsTip(p)}">
+        <td><b>results received</b> · ${p.checks} check${p.checks === 1 ? '' : 's'}<div class="dim small">hover to see the checks and their outcome</div></td>
+        <td><a href="#/device/${p.agent_id}">${p.agent}</a></td>
+        <td class="nowrap muted" title="received ${fmtDate(p.since, true)}">received ${secs(Math.max(0, d.now - p.since))} ago</td>
+        <td class="nowrap">${stateBadge(p)}</td></tr>` : html`${p.kind === 'check' ? html`<tr>
         <td><a href="#/device/${p.device_id}"><b>${p.title}</b></a><div class="dim small">check result · <span class="c-red">${p.note}</span></div></td>` : html`<tr class="click ${p.state === 'gave_up' || done(p) ? 'dimrow' : ''}" data-act="open-job" data-id="${p.id}">
         <td><b>${jobTitle(p)}</b><div class="dim small">${jobParams(p)}${p.state === 'overdue' || p.state === 'gave_up' || p.state === 'failed' || ((p.type || '').startsWith('probe.') && p.note) ? html` <span class="${p.state === 'overdue' || p.state === 'failed' ? 'c-red' : ''}">${p.note}</span>` : ''}</div></td>`}
         <td><a href="#/device/${p.agent_id}">${p.agent}</a></td>
         <td class="nowrap ${p.state === 'overdue' ? 'c-red' : 'muted'}" title="requested ${fmtDate(p.since, true)}">${p.state === 'gave_up' ? html`gave up ${ago(p.finished)}` : done(p) ? `answered in ${secs(Math.max(0, p.finished - p.since))}` : secs(Math.max(0, d.now - p.since))}</td>
         <td class="nowrap">${stateBadge(p)}</td></tr>`)}</tbody></table></div>
-      <div class="dim small" style="margin-top:10px">${open} open · answered requests stay 20 seconds; requests that gave up stay 10 minutes.</div>`
+      <div class="dim small" style="margin-top:10px">${open} open · answered requests${d.results_shown ? ' and received results' : ''} stay 20 seconds; requests that gave up stay 10 minutes.</div>`
       : html`<div class="panel empty">Nothing outstanding: every request to a remote agent has been answered.</div>`);
   }
   return {
@@ -2616,6 +2622,8 @@ function SettingsGeneral() {
             <label class="field">Lowest allowed agent version<select name="minagent">
               ${[...(d.agent_versions || [])].reverse().map((v, i) => html`<option value="${v}" ${v === (s.min_agent_version || d.min_agent) ? 'selected' : ''}>${v}${i === 0 ? ' (oldest stored)' : ''}</option>`)}</select></label>
             <div class="dim small">Older agents can still connect, but only to be updated: the master stores and shows none of their data and runs nothing else on them.</div>
+            <label class="checkrow"><input type="checkbox" name="proberesults" ${s.probe_results_shown ? 'checked' : ''}> Show received probe results on Remote Probes</label>
+            <div class="dim small">Activity › Remote Probes then also lists each batch of check results a remote probe sends, for 20 seconds, with the checks that failed. For all users.</div>
             <label class="field">GitHub repository for releases<input type="text" name="gh" placeholder="owner/name" value="${s.github_repo}"></label>
             <div class="dim small mono" style="word-break:break-all">${d.index_url ? 'Version index: ' + d.index_url : ''}</div>
             ${ifChange(html`<div><button class="btn primary">Save</button></div>`)}
@@ -2673,7 +2681,7 @@ function SettingsGeneral() {
         const url = st.editing ? f.url.value.trim() : st.url;
         const res = await POST('settings', { check_interval_hours: +f.interval.value, heartbeat_sec: +f.hb.value, retention_days: +f.ret.value,
           ui_port: +f.port.value, master_url: url, github_repo: f.gh.value, os_info_days: +f.osinfo.value, min_agent_version: f.minagent?.value || '',
-          vuln_days: +f.vulns.value });
+          vuln_days: +f.vulns.value, probe_results_shown: f.proberesults.checked });
         if (f.nvdkey?.value.trim()) {
           st.d.vulns = (await POST('vulns/nvdkey', { key: f.nvdkey.value.trim() })).vulns;
           vulnBox(st.d.vulns);

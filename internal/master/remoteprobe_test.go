@@ -94,6 +94,35 @@ func TestRemoteProbe(t *testing.T) {
 		t.Fatalf("result: up %v rtt %d hist %+v view %+v", d.Up, d.RTTUs, d.Hist, v.Local.Probe)
 	}
 
+	// Result deliveries are listed on Remote Probes only with the setting on.
+	results := func(at int64) (rows []probeRequest) {
+		for _, p := range s.probeRequests(at, nil) {
+			if p.Kind == "results" {
+				rows = append(rows, p)
+			}
+		}
+		return rows
+	}
+	s.st.mu.Lock()
+	if r := results(time.Now().Unix()); len(r) != 0 {
+		t.Fatalf("results listed while off: %+v", r)
+	}
+	s.st.st.Settings.ProbeResultsShown = true
+	s.probeIntake(a, &proto.ProbeReport{Version: want.Version, Results: []proto.ProbeResult{{ID: id, AgoMs: 500, Error: "timeout"}}}, time.Now())
+	r := results(time.Now().Unix())
+	late := results(time.Now().Unix() + probeAnsweredKeep + 1)
+	s.st.st.Settings.ProbeResultsShown = false
+	s.st.mu.Unlock()
+	if len(r) != 1 || r[0].State != "received" || r[0].Checks != 1 || r[0].Failed != 1 || len(r[0].Items) != 1 || r[0].Agent != a.Name {
+		t.Fatalf("results rows: %+v", r)
+	}
+	if len(late) != 0 {
+		t.Fatalf("results kept too long: %+v", late)
+	}
+	s.st.mu.Lock()
+	s.probeIntake(a, &proto.ProbeReport{Version: want.Version, Results: []proto.ProbeResult{{ID: id, AgoMs: 100, OK: true, RTTUs: 4000}}}, time.Now())
+	s.st.mu.Unlock()
+
 	// Probe offline: unknown, not down.
 	a.LastSeen = now - 3600
 	s.st.mu.Lock()

@@ -6,9 +6,11 @@ package master
 // not shown. Listed are the agents' open jobs (including a check list or
 // a clear not confirmed yet) and the checks of remote probes whose result
 // is overdue. An answered request stays 20 seconds; one that gave up
-// stays 10 minutes.
+// stays 10 minutes. With the general setting on, each delivery of probe
+// results is listed too, for 20 seconds (kept in memory only).
 
 import (
+	"fmt"
 	"net"
 	"net/http"
 	"sort"
@@ -20,19 +22,87 @@ import (
 
 const (
 	probeGaveUpKeep   = 10 * 60 // seconds a request that gave up stays listed
-	probeAnsweredKeep = 20      // seconds an answered request stays listed
+	probeAnsweredKeep = 20      // seconds an answered request (or a result delivery) stays listed
+	probeRecvMax      = 200     // deliveries kept at most
+	probeRecvItems    = 50      // checks named per delivery at most
 )
 
 type probeRequest struct {
 	*Job
-	Kind     string `json:"kind"` // "job" or "check"
-	AgentID  string `json:"agent_id"`
-	Agent    string `json:"agent"`
-	Title    string `json:"title,omitempty"` // checks
-	DeviceID string `json:"device_id,omitempty"`
-	Since    int64  `json:"since"` // requested (or expected) at
-	State    string `json:"state"` // waiting, running, overdue, offline, gave_up
-	Note     string `json:"note,omitempty"`
+	Kind     string   `json:"kind"` // "job", "check" or "results"
+	AgentID  string   `json:"agent_id"`
+	Agent    string   `json:"agent"`
+	Title    string   `json:"title,omitempty"` // checks
+	DeviceID string   `json:"device_id,omitempty"`
+	Since    int64    `json:"since"` // requested (or expected, or received) at
+	State    string   `json:"state"` // waiting, running, overdue, offline, gave_up, answered, failed, received
+	Note     string   `json:"note,omitempty"`
+	Checks   int      `json:"checks,omitempty"` // results: checks in the delivery
+	Failed   int      `json:"failed,omitempty"` // results: of which failed
+	Items    []string `json:"items,omitempty"`  // results: "<check>: <outcome>"
+	at       int64    // sort key of the done rows: answered or received at
+}
+
+// probeDelivery: one batch of results a probe agent sent (memory only).
+type probeDelivery struct {
+	AgentID, Agent string
+	At             int64
+	Checks, Failed int
+	Items          []string
+}
+
+// add counts one check result; a nil delivery (setting off) ignores it.
+func (dl *probeDelivery) add(title string, ok bool, what string) {
+	if dl == nil {
+		return
+	}
+	dl.Checks++
+	if !ok {
+		dl.Failed++
+		what = "FAILED – " + what
+	}
+	if len(dl.Items) < probeRecvItems {
+		dl.Items = append(dl.Items, title+": "+what)
+	}
+}
+
+// outcome: short text of one result.
+func outcome(reached bool, good string, rtt time.Duration, err error) string {
+	if !reached {
+		if err != nil {
+			return err.Error()
+		}
+		return "no answer"
+	}
+	ms := float64(rtt.Microseconds()) / 1000
+	if ms < 10 {
+		return fmt.Sprintf("%s %.1f ms", good, ms)
+	}
+	return fmt.Sprintf("%s %.0f ms", good, ms)
+}
+
+func onOff(b bool) string {
+	if b {
+		return "on"
+	}
+	return "off"
+}
+
+// addDelivery stores a delivery with results and drops expired ones. Caller holds s.st.mu.
+func (s *Server) addDelivery(dl *probeDelivery, now int64) {
+	keep := s.probeRecv[:0]
+	for _, d := range s.probeRecv {
+		if now-d.At <= probeAnsweredKeep {
+			keep = append(keep, d)
+		}
+	}
+	if dl.Checks > 0 {
+		keep = append(keep, *dl)
+	}
+	if len(keep) > probeRecvMax {
+		keep = keep[len(keep)-probeRecvMax:]
+	}
+	s.probeRecv = keep
 }
 
 // onMaster: the agent runs on the master's own system.
@@ -95,12 +165,23 @@ func (s *Server) probeRequests(now int64, local map[string]bool) []probeRequest 
 				p.Note = "clear sent, not yet confirmed"
 			}
 		}
+		p.at = j.Finished
 		out = append(out, p)
 	}
 	out = append(out, s.overdueChecks(now, local)...)
+	if s.st.st.Settings.ProbeResultsShown {
+		for _, d := range s.probeRecv {
+			a := s.st.st.Agents[d.AgentID]
+			if now-d.At > probeAnsweredKeep || a == nil || onMaster(a, local) {
+				continue
+			}
+			out = append(out, probeRequest{Kind: "results", AgentID: a.ID, Agent: a.Name, Since: d.At, State: "received",
+				Checks: d.Checks, Failed: d.Failed, Items: d.Items, at: d.At})
+		}
+	}
 	rank := func(p probeRequest) int {
 		switch p.State {
-		case "answered", "failed":
+		case "answered", "failed", "received":
 			return 1
 		case "gave_up":
 			return 2
@@ -113,7 +194,7 @@ func (s *Server) probeRequests(now int64, local map[string]bool) []probeRequest 
 			return ri < rj // open requests first, then the answered ones, then those that gave up
 		}
 		if ri == 1 {
-			return out[i].Finished > out[j].Finished // latest answer first
+			return out[i].at > out[j].at // latest answer first
 		}
 		return out[i].Since < out[j].Since // oldest first
 	})
@@ -179,6 +260,7 @@ func (s *Server) handleProbes(w http.ResponseWriter, r *http.Request) {
 	now := time.Now().Unix()
 	s.st.mu.Lock()
 	reqs := s.probeRequests(now, local)
+	shown := s.st.st.Settings.ProbeResultsShown
 	s.st.mu.Unlock()
-	writeJSON(w, map[string]any{"now": now, "requests": reqs})
+	writeJSON(w, map[string]any{"now": now, "requests": reqs, "results_shown": shown})
 }

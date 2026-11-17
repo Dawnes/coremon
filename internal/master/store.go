@@ -26,6 +26,8 @@ type Settings struct {
 	MinAgentVersion    string `json:"min_agent_version"`
 	VulnDays           int    `json:"vuln_days"`
 	BackupSchedule     string `json:"backup_schedule"`
+	// ProbeResultsShown: Remote Probes also lists result deliveries.
+	ProbeResultsShown bool `json:"probe_results_shown,omitempty"`
 }
 
 var osInfoChoices = []int{3, 14, 30, 90}

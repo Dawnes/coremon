@@ -768,8 +768,11 @@ func (s *Server) handleSettingsSave(w http.ResponseWriter, r *http.Request) {
 	s.st.st.Settings = req
 	s.st.markDirty()
 	s.st.mu.Unlock()
-	s.audit.write(actor(r), clientIP(r), "settings.saved", "", fmt.Sprintf("check=%dh heartbeat=%ds retention=%dd port=%d url=%q repo=%q os-info=%dd min-agent=%s vulns=%dd",
-		req.CheckIntervalHours, req.HeartbeatSec, req.RetentionDays, req.UIPort, req.MasterURL, req.GitHubRepo, req.OSInfoDays, req.MinAgentVersion, req.VulnDays))
+	s.audit.write(actor(r), clientIP(r), "settings.saved", "", fmt.Sprintf("check=%dh heartbeat=%ds retention=%dd port=%d url=%q repo=%q os-info=%dd min-agent=%s vulns=%dd probe-results=%s",
+		req.CheckIntervalHours, req.HeartbeatSec, req.RetentionDays, req.UIPort, req.MasterURL, req.GitHubRepo, req.OSInfoDays, req.MinAgentVersion, req.VulnDays, onOff(req.ProbeResultsShown)))
+	if old.ProbeResultsShown != req.ProbeResultsShown {
+		s.audit.write(actor(r), clientIP(r), "settings.probe_results", "", "show received probe results on Remote Probes: "+onOff(req.ProbeResultsShown))
+	}
 	if old.OSInfoDays != req.OSInfoDays {
 		s.kickOSInfo()
 	}

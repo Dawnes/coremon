@@ -31,7 +31,8 @@ as **agentless** devices: the master itself pings them and checks their services
 * **Users**: administrators and read-only users, optional two-factor sign-in
   with an authenticator app, and accounts can be locked.
 * **Activity**: every job, the upcoming scheduled tasks, the requests remote agents
-  have not answered yet, and an audit log of who did what.
+  have not answered yet (optionally also the check results remote probes just sent),
+  and an audit log of who did what.
 
 ## Security
 
