@@ -29,7 +29,7 @@ as **agentless** devices: the master itself pings them and checks their services
 * **Releases**: update the master and the agents from the website.
 * **Users**: administrators and read-only users, optional two-factor sign-in
   with an authenticator app, and accounts can be locked.
-* **History**: every job and an audit log of who did what.
+* **Activity**: every job, the upcoming scheduled tasks and an audit log of who did what.
 
 ## Security
 

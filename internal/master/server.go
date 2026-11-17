@@ -382,6 +382,7 @@ func (s *Server) routes() http.Handler {
 	view("GET /api/ui/jobs", s.handleJobs)
 	view("GET /api/ui/jobs/{id}", s.handleJob)
 	view("GET /api/ui/upcoming", s.handleUpcoming)
+	view("GET /api/ui/probes", s.handleProbes)
 	change("GET /api/ui/tokens", s.handleTokens)
 	change("POST /api/ui/tokens", s.handleTokenCreate)
 	change("POST /api/ui/tokens/{hash}/delete", s.handleTokenDelete)

@@ -376,14 +376,14 @@ function showLogin() {
 
 const NAV = [
   ['dashboard', 'dash', 'Dashboard'],
-  ['history', 'jobs', 'History'],
+  ['activity', 'jobs', 'Activity'],
   ['settings', 'cog', 'Settings'],
   ['about', 'info', 'About'],
 ];
 const SUBNAV = {
   dashboard: () => [['overview', 'Overview'], ['devices', 'Device List'], ['apps', 'Application List']],
   about: () => [['about', 'About'], ['license', 'License']],
-  history: () => [['jobs', 'Jobs'], ['audit', 'Audit log']],
+  activity: () => [['jobs', 'Jobs'], ['probes', 'Remote Probes'], ['audit', 'Audit log']],
   settings: () => [['general', 'General'], ['devices', 'Devices'], ['agentless', 'Agentless'], ['releases', 'Releases'], ...(canChange() ? [['users', 'Users']] : []), ['account', 'My Account'], ['identity', 'Identity'], ...(canChange() ? [['backups', 'Backups']] : [])],
 };
 function currentRoute() {
@@ -445,7 +445,7 @@ function route() {
   const [section, sub] = currentRoute();
   const subViews = {
     settings: { general: SettingsGeneral, devices: Devices, agentless: SettingsLocal, releases: Releases, users: SettingsUsers, backups: SettingsBackups, account: SettingsAccount, identity: SettingsIdentity },
-    history: { jobs: Jobs, audit: Audit },
+    activity: { jobs: Jobs, probes: RemoteProbes, audit: Audit },
     dashboard: { overview: Dashboard, devices: DeviceList, apps: AppList },
     about: { about: AboutPage, license: LicensePage },
   };
@@ -2197,7 +2197,7 @@ function Jobs() {
   return {
     interval: 3000,
     mount(el) {
-      el.innerHTML = r(html`${subTabs('history', 'jobs')}<div class="page-head"><div><h1>Jobs</h1><div class="sub">Everything sent to agents, and what is planned</div></div></div>
+      el.innerHTML = r(html`${subTabs('activity', 'jobs')}<div class="page-head"><div><h1>Jobs</h1><div class="sub">Everything sent to agents, and what is planned</div></div></div>
         <div class="tabs" id="j-tabs"></div>
         <div id="j-jobs"><div class="row" style="margin-bottom:14px;gap:14px;flex-wrap:wrap">
         <div class="chips"><button class="chip on" data-act="f" data-v="0">All</button><button class="chip" data-act="f" data-v="1">Active</button></div>
@@ -2227,6 +2227,40 @@ function Jobs() {
       'to-top': async () => { await list.toTop(); render(); },
       batch: (t) => { const id = t.dataset.id; if (open.has(id)) open.delete(id); else open.add(id); render(); },
     },
+  };
+}
+
+// Activity > Remote Probes: what the master is waiting for from agents on
+// other systems; answered requests disappear, ones that gave up stay 10 min.
+function RemoteProbes() {
+  const st = { d: null };
+  const secs = (s) => (s < 60 ? `${s} s` : s < 3600 ? `${Math.floor(s / 60)} min ${s % 60} s` : dur(s));
+  const stateBadge = (p) => ({
+    waiting: html`<span class="badge mute">waiting</span>`,
+    running: html`<span class="badge info"><span class="spin" style="width:10px;height:10px"></span>running</span>`,
+    overdue: html`<span class="badge sec" title="${p.note || ''}">not answered in time</span>`,
+    offline: html`<span class="badge upd" title="${p.note || ''}">agent offline</span>`,
+    gave_up: html`<span class="badge mute" title="${p.note || ''}">gave up</span>`,
+  }[p.state] || p.state);
+  function render() {
+    const d = st.d;
+    if (!d) return;
+    const open = d.requests.filter((p) => p.state !== 'gave_up').length;
+    setHTML($('#p-list'), d.requests.length ? html`<div class="panel"><table class="tbl"><thead><tr><th>Request</th><th>Agent</th><th>Waiting for</th><th>Status</th></tr></thead><tbody>
+      ${d.requests.map((p) => html`<tr class="click ${p.state === 'gave_up' ? 'dimrow' : ''}" data-act="open-job" data-id="${p.id}">
+        <td><b>${jobTitle(p)}</b><div class="dim small">${jobParams(p)}${p.state === 'overdue' || p.state === 'gave_up' ? html` <span class="${p.state === 'overdue' ? 'c-red' : ''}">${p.note}</span>` : ''}</div></td>
+        <td><a href="#/device/${p.agent_id}">${p.agent}</a></td>
+        <td class="nowrap ${p.state === 'overdue' ? 'c-red' : 'muted'}" title="requested ${fmtDate(p.since, true)}">${p.state === 'gave_up' ? html`gave up ${ago(p.finished)}` : secs(Math.max(0, d.now - p.since))}</td>
+        <td class="nowrap">${stateBadge(p)}</td></tr>`)}</tbody></table></div>
+      <div class="dim small" style="margin-top:10px">${open} open · answered requests disappear; requests that gave up stay 10 minutes.</div>`
+      : html`<div class="panel empty">Nothing outstanding: every request to a remote agent has been answered.</div>`);
+  }
+  return {
+    interval: 2000,
+    mount(el) {
+      el.innerHTML = r(html`${subTabs('activity', 'probes')}<div class="page-head"><div><h1>Remote Probes</h1><div class="sub">Requests to agents on other systems that are not answered yet</div></div></div><div id="p-list"></div>`);
+    },
+    async refresh() { st.d = await GET('probes'); render(); },
   };
 }
 
@@ -2377,7 +2411,7 @@ function Audit() {
   return {
     interval: 10000,
     mount(el) {
-      el.innerHTML = r(html`${subTabs('history', 'audit')}<div class="page-head"><div><h1>Audit log</h1><div class="sub">Who did what, and when</div></div><span class="spacer"></span>
+      el.innerHTML = r(html`${subTabs('activity', 'audit')}<div class="page-head"><div><h1>Audit log</h1><div class="sub">Who did what, and when</div></div><span class="spacer"></span>
         <label class="row small muted">User <select id="au-user"><option value="">All users</option></select></label>
         <label class="row small muted">Device <select id="au-sys"><option value="">All devices</option></select></label></div><div id="au"></div><div id="au-end"></div>`);
       $('#au-sys').addEventListener('change', (e) => { st.agent = e.target.value; restart(); });

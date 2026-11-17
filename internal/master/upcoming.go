@@ -1,6 +1,6 @@
 package master
 
-// Upcoming tasks (History > Jobs > Upcoming tasks): the next run of each
+// Upcoming tasks (Activity > Jobs > Upcoming tasks): the next run of each
 // of the master's own scheduled tasks, and the next agentless checks.
 
 import (
