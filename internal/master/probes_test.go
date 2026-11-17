@@ -26,23 +26,32 @@ func TestProbeRequests(t *testing.T) {
 	add("offline", "a_off", JobQueued, now-3*hb, 0, 0, 60, "")
 	add("running", "a_on", JobRunning, now-20, now-10, 0, 60, "")
 	add("slow", "a_on", JobRunning, now-200, now-120, 0, 60, "")
-	add("answered", "a_on", JobSuccess, now-30, now-29, now-20, 60, "")
-	add("failed", "a_on", JobFailed, now-30, now-29, now-20, 60, "apt-get exited 100")
+	add("answered", "a_on", JobSuccess, now-30, now-29, now-10, 60, "")
+	add("failed", "a_on", JobFailed, now-30, now-29, now-10, 60, "apt-get exited 100")
+	add("oldanswer", "a_on", JobSuccess, now-90, now-89, now-60, 60, "")
+	add("restarted", "a_on", JobFailed, now-30, now-29, now-10, 60, "master restarted")
 	add("gaveup", "a_on", JobTimeout, now-400, now-399, now-60, 60, "no result from agent within timeout")
 	add("oldgaveup", "a_on", JobTimeout, now-4000, now-3999, now-1000, 60, "no result from agent within timeout")
 	add("mine", "a_master", JobQueued, now-5, 0, 0, 60, "")
 
 	got := map[string]string{}
+	var order []string
 	for _, p := range s.probeRequests(now, map[string]bool{"10.0.0.1": true}) {
 		got[p.ID] = p.State
+		order = append(order, p.State)
 	}
-	want := map[string]string{"waiting": "waiting", "late": "overdue", "offline": "offline", "running": "running", "slow": "overdue", "gaveup": "gave_up"}
+	want := map[string]string{"waiting": "waiting", "late": "overdue", "offline": "offline", "running": "running", "slow": "overdue", "gaveup": "gave_up",
+		"answered": "answered", "failed": "failed"}
 	for id, st := range want {
 		if got[id] != st {
 			t.Errorf("%s: %q, want %q", id, got[id], st)
 		}
 	}
-	for _, id := range []string{"answered", "failed", "oldgaveup", "mine"} {
+	// Open requests first, then the answered ones, then those that gave up.
+	if n := len(order); n < 3 || order[n-1] != "gave_up" || (order[n-2] != "answered" && order[n-2] != "failed") {
+		t.Errorf("order: %v", order)
+	}
+	for _, id := range []string{"oldanswer", "restarted", "oldgaveup", "mine"} {
 		if _, ok := got[id]; ok {
 			t.Errorf("%s must not be listed", id)
 		}

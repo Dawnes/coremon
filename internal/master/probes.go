@@ -5,8 +5,8 @@ package master
 // (its own agentless checks) and the agent on the master's own system are
 // not shown. Listed are the agents' open jobs (including a check list or
 // a clear not confirmed yet) and the checks of remote probes whose result
-// is overdue. A request leaves the list when it is answered; one that
-// gave up stays 10 minutes.
+// is overdue. An answered request stays 20 seconds; one that gave up
+// stays 10 minutes.
 
 import (
 	"net"
@@ -18,7 +18,10 @@ import (
 	"coremon/internal/proto"
 )
 
-const probeGaveUpKeep = 10 * 60 // seconds a request that gave up stays listed
+const (
+	probeGaveUpKeep   = 10 * 60 // seconds a request that gave up stays listed
+	probeAnsweredKeep = 20      // seconds an answered request stays listed
+)
 
 type probeRequest struct {
 	*Job
@@ -76,6 +79,11 @@ func (s *Server) probeRequests(now int64, local map[string]bool) []probeRequest 
 			p.State = "running"
 		case gaveUp(j) && now-j.Finished <= probeGaveUpKeep:
 			p.State, p.Note = "gave_up", j.Error
+		case answered(j) && now-j.Finished <= probeAnsweredKeep:
+			p.State = "answered"
+			if j.Status != JobSuccess {
+				p.State, p.Note = "failed", j.Error
+			}
 		default:
 			continue
 		}
@@ -90,14 +98,39 @@ func (s *Server) probeRequests(now int64, local map[string]bool) []probeRequest 
 		out = append(out, p)
 	}
 	out = append(out, s.overdueChecks(now, local)...)
+	rank := func(p probeRequest) int {
+		switch p.State {
+		case "answered", "failed":
+			return 1
+		case "gave_up":
+			return 2
+		}
+		return 0
+	}
 	sort.SliceStable(out, func(i, j int) bool {
-		gi, gj := out[i].State == "gave_up", out[j].State == "gave_up"
-		if gi != gj {
-			return !gi // open requests first
+		ri, rj := rank(out[i]), rank(out[j])
+		if ri != rj {
+			return ri < rj // open requests first, then the answered ones, then those that gave up
+		}
+		if ri == 1 {
+			return out[i].Finished > out[j].Finished // latest answer first
 		}
 		return out[i].Since < out[j].Since // oldest first
 	})
 	return out
+}
+
+// answered: the agent sent a result, good or bad (not a failure the master
+// decided itself, such as a lost or discarded command).
+func answered(j *Job) bool {
+	switch j.Status {
+	case JobSuccess:
+		return true
+	case JobFailed:
+		return j.Started > 0 && !gaveUp(j) && !strings.HasPrefix(j.Error, "master restarted") &&
+			!strings.HasPrefix(j.Error, "result discarded") && !strings.HasPrefix(j.Error, "result refused")
+	}
+	return false
 }
 
 // overdueChecks: checks of remote probes that should have reported by now

@@ -2297,25 +2297,28 @@ function RemoteProbes() {
     overdue: html`<span class="badge sec" title="${p.note || ''}">not answered in time</span>`,
     offline: html`<span class="badge upd" title="${p.note || ''}">agent offline</span>`,
     gave_up: html`<span class="badge mute" title="${p.note || ''}">gave up</span>`,
+    answered: html`<span class="badge ok">${icon('check')} answered</span>`,
+    failed: html`<span class="badge sec" title="${p.note || ''}">failed</span>`,
   }[p.state] || p.state);
+  const done = (p) => p.state === 'answered' || p.state === 'failed';
   function render() {
     const d = st.d;
     if (!d) return;
-    const open = d.requests.filter((p) => p.state !== 'gave_up').length;
+    const open = d.requests.filter((p) => p.state !== 'gave_up' && !done(p)).length;
     setHTML($('#p-list'), d.requests.length ? html`<div class="panel"><table class="tbl"><thead><tr><th>Request</th><th>Agent</th><th>Waiting for</th><th>Status</th></tr></thead><tbody>
       ${d.requests.map((p) => html`${p.kind === 'check' ? html`<tr>
-        <td><a href="#/device/${p.device_id}"><b>${p.title}</b></a><div class="dim small">check result · <span class="c-red">${p.note}</span></div></td>` : html`<tr class="click ${p.state === 'gave_up' ? 'dimrow' : ''}" data-act="open-job" data-id="${p.id}">
-        <td><b>${jobTitle(p)}</b><div class="dim small">${jobParams(p)}${p.state === 'overdue' || p.state === 'gave_up' || ((p.type || '').startsWith('probe.') && p.note) ? html` <span class="${p.state === 'overdue' ? 'c-red' : ''}">${p.note}</span>` : ''}</div></td>`}
+        <td><a href="#/device/${p.device_id}"><b>${p.title}</b></a><div class="dim small">check result · <span class="c-red">${p.note}</span></div></td>` : html`<tr class="click ${p.state === 'gave_up' || done(p) ? 'dimrow' : ''}" data-act="open-job" data-id="${p.id}">
+        <td><b>${jobTitle(p)}</b><div class="dim small">${jobParams(p)}${p.state === 'overdue' || p.state === 'gave_up' || p.state === 'failed' || ((p.type || '').startsWith('probe.') && p.note) ? html` <span class="${p.state === 'overdue' || p.state === 'failed' ? 'c-red' : ''}">${p.note}</span>` : ''}</div></td>`}
         <td><a href="#/device/${p.agent_id}">${p.agent}</a></td>
-        <td class="nowrap ${p.state === 'overdue' ? 'c-red' : 'muted'}" title="requested ${fmtDate(p.since, true)}">${p.state === 'gave_up' ? html`gave up ${ago(p.finished)}` : secs(Math.max(0, d.now - p.since))}</td>
+        <td class="nowrap ${p.state === 'overdue' ? 'c-red' : 'muted'}" title="requested ${fmtDate(p.since, true)}">${p.state === 'gave_up' ? html`gave up ${ago(p.finished)}` : done(p) ? `answered in ${secs(Math.max(0, p.finished - p.since))}` : secs(Math.max(0, d.now - p.since))}</td>
         <td class="nowrap">${stateBadge(p)}</td></tr>`)}</tbody></table></div>
-      <div class="dim small" style="margin-top:10px">${open} open · answered requests disappear; requests that gave up stay 10 minutes.</div>`
+      <div class="dim small" style="margin-top:10px">${open} open · answered requests stay 20 seconds; requests that gave up stay 10 minutes.</div>`
       : html`<div class="panel empty">Nothing outstanding: every request to a remote agent has been answered.</div>`);
   }
   return {
     interval: 2000,
     mount(el) {
-      el.innerHTML = r(html`${subTabs('activity', 'probes')}<div class="page-head"><div><h1>Remote Probes</h1><div class="sub">Requests to agents on other systems that are not answered yet</div></div></div><div id="p-list"></div>`);
+      el.innerHTML = r(html`${subTabs('activity', 'probes')}<div class="page-head"><div><h1>Remote Probes</h1><div class="sub">Requests to agents on other systems that are not answered yet, and those just answered</div></div></div><div id="p-list"></div>`);
     },
     async refresh() { st.d = await GET('probes'); render(); },
   };
