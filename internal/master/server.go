@@ -368,6 +368,7 @@ func (s *Server) routes() http.Handler {
 	change("POST /api/ui/agents/{id}/approve", s.handleApprove)
 	change("POST /api/ui/agents/{id}/remove", s.handleRemove)
 	change("POST /api/ui/agents/{id}/core", s.handleCoreUpdate)
+	change("POST /api/ui/agents/{id}/probe/enabled", s.handleProbeEnabled)
 	change("POST /api/ui/agents/{id}/probe/clear", s.handleProbeClear)
 	change("POST /api/ui/agents/{id}/probe/resend", s.handleProbeResend)
 	change("GET /api/ui/probe-agents", s.handleProbeChoices)

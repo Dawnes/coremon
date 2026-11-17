@@ -19,8 +19,10 @@ func TestRemoteProbe(t *testing.T) {
 	s.st.mu.Lock()
 	s.st.st.Agents["a_p"] = &Agent{ID: "a_p", Name: "probe-1", Status: StatusReportOnly, LastSeen: now, ProbeCap: true, CoreVersion: "0.3.9",
 		Facts: proto.Facts{IPs: []string{"10.9.0.2"}}}
-	s.st.st.Agents["a_old"] = &Agent{ID: "a_old", Name: "old", Status: StatusActive, LastSeen: now, CoreVersion: "0.3.8",
+	s.st.st.Agents["a_old"] = &Agent{ID: "a_old", Name: "old", Status: StatusActive, LastSeen: now, CoreVersion: "0.3.8", ProbeOn: true,
 		Facts: proto.Facts{IPs: []string{"10.9.0.3"}}}
+	s.st.st.Agents["a_no"] = &Agent{ID: "a_no", Name: "noprobe", Status: StatusActive, LastSeen: now, ProbeCap: true, CoreVersion: "0.3.9",
+		Facts: proto.Facts{IPs: []string{"10.9.0.4"}}}
 	s.st.mu.Unlock()
 	srv := httptest.NewTLSServer(s.routes())
 	defer srv.Close()
@@ -39,12 +41,28 @@ func TestRemoteProbe(t *testing.T) {
 	if code, b := c.do("POST", "/api/ui/locals/"+id, `{"probe":"a_old"}`); code != 409 || !strings.Contains(b, "0.3.9") {
 		t.Errorf("old agent as probe: %d %s", code, b)
 	}
+	// Only agents switched on as remote probe (default off).
+	if code, b := c.do("POST", "/api/ui/locals/"+id, `{"probe":"a_p"}`); code != 409 || !strings.Contains(b, "not enabled as a remote probe") {
+		t.Errorf("probe while off: %d %s", code, b)
+	}
+	if code, b := c.do("POST", "/api/ui/agents/a_p/probe/enabled", `{"on":true}`); code != 200 || !s.st.st.Agents["a_p"].ProbeOn {
+		t.Fatalf("switch on: %d %s", code, b)
+	}
 	if code, b := c.do("POST", "/api/ui/locals/"+id, `{"probe":"a_p"}`); code != 200 || d.Probe != "a_p" {
 		t.Fatalf("probe chosen: %d %s", code, b)
 	}
+	if code, b := c.do("POST", "/api/ui/agents/a_p/probe/enabled", `{"on":false}`); code != 409 || !strings.Contains(b, "1 agentless device") {
+		t.Errorf("switch off with checks: %d %s", code, b)
+	}
 	_, choices := c.do("GET", "/api/ui/probe-agents", "")
-	if !strings.Contains(choices, `"id":"a_p"`) || !strings.Contains(choices, `"note":"agent 0.3.9 or later needed"`) {
+	if !strings.Contains(choices, `"id":"a_p"`) || !strings.Contains(choices, `"note":"agent 0.3.9 or later needed"`) || strings.Contains(choices, "a_no") {
 		t.Errorf("choices: %s", choices)
+	}
+	if code, _ := c.do("POST", "/api/ui/agents/a_no/probe/enabled", `{"on":true}`); code != 200 {
+		t.Error("switch on a_no")
+	}
+	if code, b := c.do("POST", "/api/ui/agents/a_no/probe/enabled", `{"on":false}`); code != 200 || s.st.st.Agents["a_no"].ProbeOn {
+		t.Errorf("switch off without checks: %d %s", code, b)
 	}
 
 	// The same address is fine for another probe (another network), not for the same one.

@@ -68,8 +68,10 @@ and OSV.dev, NVD, CISA and FIRST (vulnerability data).
 For a device without an agent choose **Agentless** instead and enter its name and IP
 address. Settings → Agentless sets how often it is pinged; its services are added
 on the device's Services tab. **Checked by** chooses who checks it: the master, or
-an agent (0.3.9 or later) on another system that can reach it. A device whose
-agent is offline shows as unknown, not down.
+an agent (0.3.9 or later) on another system that can reach it. Only agents an admin
+switched on with **Act as remote probe** (Remote probe section of the agent's device
+page; off by default) are offered; it can be switched off again once no device is
+checked by it. A device whose agent is offline shows as unknown, not down.
 
 ## Updating
 

@@ -1399,14 +1399,17 @@ function AgentPage([id, tab]) {
       : !p.want && !p.running ? html`<span class="muted small">no devices to check</span>`
         : p.running === p.want ? html`<span class="badge ok">${icon('check')} check list confirmed</span> <span class="muted small">${when(p.confirmed_at)}</span>`
           : html`<span class="badge upd">check list not confirmed yet</span>${a.online ? '' : html` <span class="muted small">(the device is offline)</span>`}`;
+    const sw = html`<label class="checkrow" style="margin:0"><input type="checkbox" data-act="probe-on" ${p.on ? 'checked' : ''} ${canChange() ? '' : 'disabled'}> Act as remote probe</label>`;
     return html`<div class="panel panel-pad" style="margin-top:16px">
       <div class="row"><h2 style="margin:0">Remote probe</h2><span class="spacer"></span>
         ${ifChange(html`<button class="btn sm" data-act="probe-resend" ${busy ? 'disabled' : ''} title="Send the current check list again, even if the agent has it">${icon('refresh')} Resend check list</button>
         <button class="btn warn sm" data-act="probe-clear" ${busy ? 'disabled' : ''} title="The agent drops its whole check list and waits for a new one">${icon('trash')} Clear probe checks</button>`)}</div>
-      <div class="muted small" style="margin:8px 0 12px">This agent can check agentless devices for the master, for networks the master cannot reach. Choose it as “Checked by” in a device's Edit window.</div>
-      <div class="row">${state}</div>
+      <div class="row" style="margin-top:10px">${sw}</div>
+      ${p.on ? html`<div class="muted small" style="margin:8px 0 12px">This agent checks agentless devices for the master, for networks the master cannot reach. Choose it as “Checked by” in a device's Edit window. It can be switched off once no device is checked by it.</div>
+      <div class="row">${state}</div>` : html`<div class="muted small" style="margin-top:8px">Off: this agent is not offered as “Checked by” for agentless devices. Switch it on to let it check devices for networks the master cannot reach.</div>`}
+      ${p.on ? html`
       <div class="facts" style="margin-top:14px"><div><div class="k">Devices</div><div class="v">${p.devices}</div></div><div><div class="k">Checks</div><div class="v">${p.checks} of at most ${p.max}</div></div>
-        <div><div class="k">List version</div><div class="v mono small">${p.running || '—'}</div></div></div>
+        <div><div class="k">List version</div><div class="v mono small">${p.running || '—'}</div></div></div>` : ''}
       ${busy ? html`<div class="dim small" style="margin-top:10px"><span class="spin" style="width:10px;height:10px"></span> ${busy.type === 'probe.clear' ? 'Clear sent, not yet confirmed' : 'Check list sent, not yet confirmed'}…</div>` : ''}
     </div>`;
   }
@@ -1479,6 +1482,16 @@ function AgentPage([id, tab]) {
           ${p.devices ? html`Its ${p.devices} device${p.devices === 1 ? '' : 's'} show “unknown” until ` : 'Nothing is checked until '}you press “Resend check list” or the checks of its devices change.`, { okText: 'Clear probe checks', danger: true }))) return;
         await POST(`agents/${id}/probe/clear`); toast('Clear sent to the agent', 'ok'); refresh();
       },
+      'probe-on': async (t) => {
+        const on = t.checked;
+        try {
+          await POST(`agents/${id}/probe/enabled`, { on });
+          toast(`${a().name}: remote probe ${on ? 'on' : 'off'}`, 'ok');
+        } catch (e) {
+          t.checked = !on; // refused: back to how it was
+          throw e;
+        } finally { refresh(); }
+      },
       'probe-resend': async () => {
         await POST(`agents/${id}/probe/resend`); toast('Check list sent to the agent', 'ok'); refresh();
       },
@@ -1513,7 +1526,8 @@ async function localEditModal(a, groups, done) {
       <label class="field">IP address<input type="text" name="address" value="${a?.local.address || ''}" placeholder="e.g. 192.168.5.20" required spellcheck="false" autocomplete="off"></label>
       <div class="dim small">IPv4 or IPv6. No host names: Coremon does not rely on DNS. Each address can belong to one device only, per checking system.${isNew ? '' : ' A new address starts all checks over.'}</div>
       <label class="field">Checked by<select name="probe">${opts}</select></label>
-      <div class="dim small">Master: the master checks the device itself. An agent: that agent checks it, for a network the master cannot reach; its results come in with the agent's contact. ${isNew ? '' : 'The history is kept when this changes.'}</div>
+      <div class="dim small">Master: the master checks the device itself. An agent: that agent checks it, for a network the master cannot reach; its results come in with the agent's contact. ${isNew ? '' : 'The history is kept when this changes.'}
+        Only agents with Remote probe switched on are listed; switch it on on the agent's device page.</div>
       <label class="field">Group<select name="group">${groupOptions(groups, a?.group_id || '')}</select></label>
       <div class="actions"><button type="button" class="btn ghost" data-act="cancel">Cancel</button><button class="btn primary">${isNew ? html`${icon('plus')} Add device` : 'Save'}</button></div>
     </form>`, {
@@ -1895,7 +1909,7 @@ function Devices() {
             ${(st.probes?.agents || []).filter((p) => !p.note).map((p) => html`<option value="${p.id}">Checked by: ${p.name}${p.online ? '' : ' (offline)'}</option>`)}</select>
           <button class="btn primary">${icon('plus')} Add device</button>
         </form>
-        <div class="dim small" style="margin-top:8px">IPv4 or IPv6 only, no host names. An address can belong to one device only, whether agent or agentless; devices checked by different agents may share an address (separate networks).</div>`}`);
+        <div class="dim small" style="margin-top:8px">IPv4 or IPv6 only, no host names. An address can belong to one device only, whether agent or agentless; devices checked by different agents may share an address (separate networks). Only agents with Remote probe switched on (on the agent's device page) can check devices.</div>`}`);
     if (st.type === 'agent') renderTokens();
   }
   function renderTokens() {

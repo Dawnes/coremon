@@ -113,6 +113,9 @@ type Agent struct {
 	// ProbeHold: an admin cleared the agent's check list; no list is sent
 	// until Resend, or until the list (this version) changes.
 	ProbeHold *string `json:"probe_hold,omitempty"`
+	// ProbeOn: an admin allowed the agent to act as a remote probe; only
+	// then is it offered under "Checked by". Off again only without checks.
+	ProbeOn bool `json:"probe_on,omitempty"`
 
 	ProbeCap    bool                       `json:"-"` // the agent can probe agentless devices
 	ProbeVer    string                     `json:"-"` // the check list the agent runs

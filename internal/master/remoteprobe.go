@@ -100,6 +100,8 @@ func (s *Server) probeAllowed(agentID string, extra int, local map[string]bool) 
 		return fmt.Errorf("%s cannot check devices: update its agent to %s or later", a.Name, probeMinAgent)
 	case onMaster(a, local):
 		return fmt.Errorf("%s runs on the master's own system: choose Master instead", a.Name)
+	case !a.ProbeOn:
+		return fmt.Errorf("%s is not enabled as a remote probe: switch that on on its device page first", a.Name)
 	}
 	if n := s.probeLoad(agentID) + extra; n > maxProbeChecks {
 		return fmt.Errorf("%s would run %d checks: at most %d per agent", a.Name, n, maxProbeChecks)
@@ -288,6 +290,7 @@ func (s *Server) localProbe(d *LocalDevice, now int64) *localProbeView {
 
 // agentProbeView: an agent's work as a probe, for its device page.
 type agentProbeView struct {
+	On          bool   `json:"on"` // allowed to act as a remote probe
 	Devices     int    `json:"devices"`
 	Checks      int    `json:"checks"`
 	Max         int    `json:"max"`
@@ -301,7 +304,7 @@ func (s *Server) agentProbe(a *Agent, local map[string]bool) *agentProbeView {
 	if !a.ProbeCap || s.belowMin(a) || a.Status == StatusPending || onMaster(a, local) {
 		return nil
 	}
-	v := &agentProbeView{Max: maxProbeChecks, Running: a.ProbeVer, Want: s.probeWanted(a.ID), Cleared: a.ProbeHold != nil, ConfirmedAt: a.ProbeAt}
+	v := &agentProbeView{On: a.ProbeOn, Max: maxProbeChecks, Running: a.ProbeVer, Want: s.probeWanted(a.ID), Cleared: a.ProbeHold != nil, ConfirmedAt: a.ProbeAt}
 	for _, d := range s.st.st.Locals {
 		if d.Probe == a.ID {
 			v.Devices++
@@ -327,7 +330,7 @@ func (s *Server) handleProbeChoices(w http.ResponseWriter, r *http.Request) {
 	defer s.st.mu.Unlock()
 	out := []probeChoice{}
 	for _, a := range s.orderedAgents() {
-		if a.Status == StatusPending || onMaster(a, local) {
+		if a.Status == StatusPending || onMaster(a, local) || !a.ProbeOn {
 			continue
 		}
 		c := probeChoice{ID: a.ID, Name: a.Name, Online: s.online(a, now), Checks: s.probeLoad(a.ID)}
@@ -341,7 +344,53 @@ func (s *Server) handleProbeChoices(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, map[string]any{"agents": out, "max": maxProbeChecks})
 }
 
-// ---- the two admin buttons on an agent's page ----
+// ---- the switch and the two admin buttons on an agent's page ----
+
+// handleProbeEnabled switches the agent's remote probe role on or off.
+// Off only when no agentless device is checked by it any more.
+func (s *Server) handleProbeEnabled(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		On bool `json:"on"`
+	}
+	if !readJSON(w, r, &req, 256) {
+		return
+	}
+	local := s.ownIPs()
+	s.st.mu.Lock()
+	defer s.st.mu.Unlock()
+	a := s.agentOr404(w, r)
+	if a == nil {
+		return
+	}
+	if onMaster(a, local) {
+		http.Error(w, a.Name+" runs on the master's own system: it cannot be a remote probe", http.StatusConflict)
+		return
+	}
+	if a.ProbeOn == req.On {
+		writeJSON(w, map[string]any{"on": a.ProbeOn})
+		return
+	}
+	if !req.On {
+		n := 0
+		for _, d := range s.st.st.Locals {
+			if d.Probe == a.ID {
+				n++
+			}
+		}
+		if n > 0 {
+			http.Error(w, fmt.Sprintf("%s still checks %s: remove those checks first", a.Name, plural(n, "agentless device")), http.StatusConflict)
+			return
+		}
+	}
+	a.ProbeOn = req.On
+	s.st.markDirty()
+	act := "agent.probe_enabled"
+	if !req.On {
+		act = "agent.probe_disabled"
+	}
+	s.audit.writeAgent(actor(r), clientIP(r), act, a, "")
+	writeJSON(w, map[string]any{"on": a.ProbeOn})
+}
 
 func (s *Server) cancelProbeLists(a *Agent, reason string) {
 	now := time.Now().Unix()
