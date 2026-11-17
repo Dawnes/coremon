@@ -237,6 +237,10 @@ func (s *Server) pollCore(ctx context.Context, agentID string, req proto.PollReq
 		}
 		a.ReportOnly = req.ReportOnly
 		s.syncMode(a, "scheduler")
+		if req.Probe != nil {
+			s.probeIntake(a, req.Probe, time.Now())
+			s.probeSync(a, time.Now())
+		}
 	}
 	s.syncPins(a, "scheduler")
 
@@ -315,9 +319,14 @@ func (s *Server) takeCommands(agentID string) []proto.Command {
 			continue
 		}
 		j.Status, j.Started = JobRunning, now
+		params := j.Params
+		if j.Type == proto.CmdProbeList {
+			// Built when sent, so it is the current list; not kept in the job.
+			params, _ = json.Marshal(s.probeList(a.ID))
+		}
 		out = append(out, proto.Command{
 			ID: j.ID, Type: j.Type, Feature: j.Feature, Action: j.Action,
-			Params: j.Params, Artifact: j.Artifact, Timeout: j.Timeout,
+			Params: params, Artifact: j.Artifact, Timeout: j.Timeout,
 		})
 	}
 	if len(out) > 0 {
@@ -405,6 +414,13 @@ func (s *Server) resultCore(agentID string, res proto.Result, ip string) {
 		}
 	case j.Type == proto.CmdPing:
 		s.pingAnswered(j, res)
+	case (j.Type == proto.CmdProbeList || j.Type == proto.CmdProbeClear) && res.OK:
+		var ack proto.ProbeAck
+		json.Unmarshal(res.Data, &ack)
+		a.ProbeCap, a.ProbeVer, a.ProbeAt = true, clip(ack.Version, 64), now
+		if j.Type == proto.CmdProbeClear {
+			a.ProbeVer = ""
+		}
 	case j.Type == proto.CmdCoreUpdate && !res.OK:
 		a.DesiredCore = ""
 	case j.Type == proto.CmdUninstall && res.OK:
@@ -583,6 +599,7 @@ func (s *Server) schedulerTick() {
 	for _, c := range checks { // queued together: one row on the Jobs page
 		s.enqueue(c.a, c.j)
 	}
+	s.probeSyncAll(time.Now())
 
 	for _, j := range s.st.st.Jobs {
 		switch {

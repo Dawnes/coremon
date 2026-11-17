@@ -1,6 +1,8 @@
-package master
-
-// ICMP echo (ping) messages, shared by the platform-specific senders.
+// Package probe holds the network checks of agentless devices: an ICMP
+// echo (ping) and a TCP connection, optionally waiting for the greeting.
+// The master runs them itself, and an agent runs them as a remote probe
+// for devices the master cannot reach.
+package probe
 
 import (
 	"encoding/binary"
@@ -17,7 +19,18 @@ var (
 	pingPayload = []byte("coremon-ping")
 )
 
-func pingMethod() string {
+// SetupError: no ping could be sent at all (no permission); a problem of
+// the checking system, not of the device. Denied: the system refused the
+// sockets.
+type SetupError struct {
+	Err    error
+	Denied bool
+}
+
+func (e *SetupError) Error() string { return e.Err.Error() }
+
+// Method: how the last ping was sent ("ping socket", "raw socket", "ping command").
+func Method() string {
 	if v, ok := lastMethod.Load().(string); ok {
 		return v
 	}
@@ -77,7 +90,7 @@ func exchange(c net.PacketConn, to net.Addr, ip net.IP, v6 bool, id uint16, chec
 	start := time.Now()
 	c.SetDeadline(start.Add(timeout))
 	if _, err := c.WriteTo(msg, to); err != nil {
-		return 0, fmt.Errorf("send: %w", unwrapOp(err))
+		return 0, fmt.Errorf("send: %w", UnwrapOp(err))
 	}
 	buf := make([]byte, 1500)
 	for {
@@ -87,7 +100,7 @@ func exchange(c net.PacketConn, to net.Addr, ip net.IP, v6 bool, id uint16, chec
 			if errors.As(err, &ne) && ne.Timeout() {
 				return 0, fmt.Errorf("no answer within %s", timeout)
 			}
-			return 0, unwrapOp(err)
+			return 0, UnwrapOp(err)
 		}
 		if !sameHost(from, ip) {
 			continue
@@ -108,7 +121,8 @@ func sameHost(a net.Addr, ip net.IP) bool {
 	return false
 }
 
-func unwrapOp(err error) error {
+// UnwrapOp: the plain reason inside a network operation error.
+func UnwrapOp(err error) error {
 	var oe *net.OpError
 	if errors.As(err, &oe) && oe.Err != nil {
 		return oe.Err

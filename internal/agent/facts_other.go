@@ -24,5 +24,9 @@ func collectFacts() proto.Facts {
 	if os.Getenv("COREMON_FAKE_OS") != "" {
 		f.OSID, f.OSVersion, _ = strings.Cut(os.Getenv("COREMON_FAKE_OS"), "/")
 	}
+	if v := os.Getenv("COREMON_FAKE_IPS"); v != "" {
+		// Look like another system (for testing remote probes on one PC).
+		f.IPs = strings.Split(v, ",")
+	}
 	return f
 }

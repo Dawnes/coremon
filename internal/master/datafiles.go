@@ -49,6 +49,9 @@ type agentRun struct {
 	Removing    bool                       `json:"removing,omitempty"`
 	State       map[string]json.RawMessage `json:"state,omitempty"`
 	StateAt     map[string]int64           `json:"state_at,omitempty"`
+	ProbeCap    bool                       `json:"probe_cap,omitempty"`
+	ProbeVer    string                     `json:"probe_ver,omitempty"`
+	ProbeAt     int64                      `json:"probe_at,omitempty"`
 }
 
 type agentsData struct {
@@ -65,7 +68,7 @@ type jobsData struct {
 func (a *Agent) run(core bool) *agentRun {
 	r := &agentRun{LastSeen: a.LastSeen, BootAt: a.BootAt, CoreVersion: a.CoreVersion, Protocol: a.Protocol, ReportOnly: a.ReportOnly,
 		Pins: a.Pins, PinsAt: a.PinsAt, Facts: a.Facts, Features: a.Features, DesiredCore: a.DesiredCore, Removing: a.Removing,
-		State: a.State, StateAt: a.StateAt}
+		State: a.State, StateAt: a.StateAt, ProbeCap: a.ProbeCap, ProbeVer: a.ProbeVer, ProbeAt: a.ProbeAt}
 	r.Facts.UptimeSec = 0 // BootAt instead
 	if core {
 		r.LastSeen, r.PinsAt = 0, 0
@@ -82,6 +85,7 @@ func (a *Agent) setRun(r *agentRun) {
 	a.LastSeen, a.BootAt, a.CoreVersion, a.Protocol, a.ReportOnly = r.LastSeen, r.BootAt, r.CoreVersion, r.Protocol, r.ReportOnly
 	a.Pins, a.PinsAt, a.Facts, a.Features, a.DesiredCore, a.Removing = r.Pins, r.PinsAt, r.Facts, r.Features, r.DesiredCore, r.Removing
 	a.State, a.StateAt = r.State, r.StateAt
+	a.ProbeCap, a.ProbeVer, a.ProbeAt = r.ProbeCap, r.ProbeVer, r.ProbeAt
 	if a.LastSeen > 0 && a.BootAt > 0 && a.LastSeen >= a.BootAt {
 		a.Facts.UptimeSec = a.LastSeen - a.BootAt // the uptime at the last contact
 	}

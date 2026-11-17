@@ -1,4 +1,4 @@
-package master
+package probe
 
 import (
 	"context"
@@ -10,10 +10,10 @@ import (
 	"time"
 )
 
-// icmpPing pings ip. It first uses a ping socket, which an ordinary user may
+// Ping pings ip. It first uses a ping socket, which an ordinary user may
 // open when net.ipv4.ping_group_range allows it (Debian's default); if that
 // is refused it falls back to a raw socket, which needs CAP_NET_RAW.
-func icmpPing(ctx context.Context, ip net.IP, timeout time.Duration) (time.Duration, error) {
+func Ping(ctx context.Context, ip net.IP, timeout time.Duration) (time.Duration, error) {
 	if dl, ok := ctx.Deadline(); ok && time.Until(dl) < timeout {
 		timeout = time.Until(dl)
 	}
@@ -23,7 +23,7 @@ func icmpPing(ctx context.Context, ip net.IP, timeout time.Duration) (time.Durat
 		lastMethod.Store("ping socket")
 		return exchange(c, &net.UDPAddr{IP: ip}, ip, v6, 0, false, timeout)
 	} else if !denied(err) {
-		return 0, &pingSetupError{fmt.Errorf("cannot open a ping socket: %w", err)}
+		return 0, &SetupError{Err: fmt.Errorf("cannot open a ping socket: %w", err)}
 	}
 	network, laddr := "ip4:icmp", "0.0.0.0"
 	if v6 {
@@ -31,8 +31,8 @@ func icmpPing(ctx context.Context, ip net.IP, timeout time.Duration) (time.Durat
 	}
 	c, err := net.ListenPacket(network, laddr)
 	if err != nil {
-		return 0, &pingSetupError{errors.New("the master may not send pings: the system refuses ping sockets for its user " +
-			"(sysctl net.ipv4.ping_group_range) and the service lacks CAP_NET_RAW. Run the master install command once as root on the master: it updates the service")}
+		return 0, &SetupError{Denied: true, Err: errors.New("pings cannot be sent: the system refuses ping sockets for this user " +
+			"(sysctl net.ipv4.ping_group_range) and the process lacks CAP_NET_RAW")}
 	}
 	defer c.Close()
 	lastMethod.Store("raw socket")

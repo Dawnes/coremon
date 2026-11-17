@@ -260,6 +260,8 @@ function jobTitle(j) {
     case 'agent.mode': return /"report_only":true/.test(JSON.stringify(j.params)) ? 'report only' : 'allow changes';
     case 'agent.ping': return 'ping';
     case 'agent.pins': return 'master keys';
+    case 'probe.list': return 'send check list';
+    case 'probe.clear': return 'clear check list';
     default: return j.type + (j.action ? ' · ' + j.action : '');
   }
 }
@@ -515,9 +517,14 @@ const isLocal = (a) => a.monitor === 'local';
 const isDown = (a) => (isLocal(a) ? a.local.checked && !a.local.up : !a.online && a.status !== 'pending');
 const pctText = (x) => (x >= 1 ? '100%' : x >= 0.999 ? '99.9%' : (Math.floor(x * 1000) / 10).toFixed(1) + '%');
 const rttText = (us) => (us < 1000 ? '<1 ms' : us < 10000 ? (us / 1000).toFixed(1) + ' ms' : Math.round(us / 1000) + ' ms');
+// The remote probe of an agentless device, when it delivers no results
+// (offline, cleared, …): the device is then unknown, not down.
+const probeOut = (a) => (isLocal(a) && a.local.probe && a.local.probe.state !== 'ok' ? a.local.probe : null);
+const unknownText = (p) => `unknown – ${p.note}`;
 function agentDot(a) {
   if (isLocal(a)) {
-    const L = a.local;
+    const L = a.local, p = probeOut(a);
+    if (p) return html`<span class="dot unk" title="${unknownText(p)}"></span>`;
     if (!L.checked) return html`<span class="dot pend" title="${L.fails ? 'no answer yet' : 'waiting for the first ping'}"></span>`;
     return html`<span class="dot ${L.up ? 'on' : 'off'}" title="${L.up ? 'up: answers ping' : 'down since ' + fmtDate(L.since)}"></span>`;
   }
@@ -695,11 +702,12 @@ function Dashboard() {
   const filtering = () => st.filter !== 'all' || st.q !== '';
   const matches = (a) => agentMatches(a, st.filter, st.q, st.data.groups);
   function localCard(a) {
-    const L = a.local;
-    const state = !L.checked ? 'wait' : L.up ? 'up' : 'down';
+    const L = a.local, p = probeOut(a);
+    const state = p ? 'unk' : !L.checked ? 'wait' : L.up ? 'up' : 'down';
     const svcDown = state === 'up' && L.svc_down > 0;
-    const accent = svcDown ? 'a-upd' : { wait: 'a-pend', up: 'a-ok', down: 'a-off' }[state];
-    const big = { wait: L.fails ? html`<div class="big some">?</div><div class="biglbl">no answer yet<br>${L.fails} of ${L.down_after} checks</div>`
+    const accent = svcDown ? 'a-upd' : { unk: 'a-unk', wait: 'a-pend', up: 'a-ok', down: 'a-off' }[state];
+    const big = { unk: html`<div class="big dim">?</div><div class="biglbl">unknown<br>${p ? p.note.replace(/:.*/, '') : ''}</div>`,
+      wait: L.fails ? html`<div class="big some">?</div><div class="biglbl">no answer yet<br>${L.fails} of ${L.down_after} checks</div>`
       : L.last_error ? html`<div class="big sec" title="${L.last_error}">!</div><div class="biglbl">the master cannot<br>check it</div>`
       : html`<div class="big dim">—</div><div class="biglbl">waiting for<br>first check</div>`,
       up: svcDown ? html`<div class="big some">Up</div><div class="biglbl">${L.svc_down} of ${L.svc_total} service${L.svc_total === 1 ? '' : 's'}<br>down</div>` : html`<div class="big zero">Up</div>`,
@@ -708,9 +716,9 @@ function Dashboard() {
     return html`
       <div class="card ${accent}" data-act="open-agent" data-id="${a.id}" ${canChange() ? raw('data-drag="agent" draggable="true"') : ''}>
         <div class="top">${ifChange(html`<span class="grip" title="Drag to reorder or move to another group">${icon('grip')}</span>`)}${agentDot(a)}
-          <div style="min-width:0"><div class="name">${a.name}</div><div class="os">Agentless</div><div class="os"><span class="ip">${L.address}</span></div></div></div>
+          <div style="min-width:0"><div class="name">${a.name}</div><div class="os">Agentless${L.probe ? html` · via ${L.probe.name}` : ''}</div><div class="os"><span class="ip">${L.address}</span></div></div></div>
         <div class="mid">${big}<div class="badges">${uptime}</div></div>
-        <div class="inforow"><span class="uptime">${icon('clock')}${state === 'wait' ? (L.fails ? 'not decided yet' : 'not checked yet') : `${L.up ? 'up' : 'down'} ${dur(now() - L.since)}`}</span><span class="spacer"></span>${state === 'up' && L.ping && L.rtt_us ? html`<span class="tag mono">${rttText(L.rtt_us)}</span>` : ''}</div>
+        <div class="inforow"><span class="uptime">${icon('clock')}${state === 'unk' ? 'no results now' : state === 'wait' ? (L.fails ? 'not decided yet' : 'not checked yet') : `${L.up ? 'up' : 'down'} ${dur(now() - L.since)}`}</span><span class="spacer"></span>${state === 'up' && L.ping && L.rtt_us ? html`<span class="tag mono">${rttText(L.rtt_us)}</span>` : ''}</div>
         <div class="foot"><span>${L.last_check ? when(L.last_check, 'checked ') : 'waiting'}</span></div>
       </div>`;
   }
@@ -797,7 +805,8 @@ function Dashboard() {
         const L = a.local, P = L.ping_info;
         if (L.ping && P) {
           t++;
-          if (P.checked && !P.up) down++;
+          if (probeOut(a)) { /* unknown: counts, but not as OK and not as down */ }
+          else if (P.checked && !P.up) down++;
           else if (P.checked && !P.fails) ok++;
         }
         t += L.svc_total; ok += L.svc_ok || 0; down += L.svc_down;
@@ -1022,7 +1031,7 @@ function DeviceList() {
   lastDashSub = 'devices';
   const st = { filter: 'all', q: '', data: null, sort: 'name', dir: 1 };
   const byText = (x, y) => String(x).localeCompare(String(y), undefined, { numeric: true, sensitivity: 'base' });
-  const statusText = (a) => (isLocal(a) ? (!a.local.checked ? 'waiting' : a.local.up ? (a.local.svc_down ? `${a.local.svc_down} service${a.local.svc_down === 1 ? '' : 's'} down` : 'online') : 'down')
+  const statusText = (a) => (isLocal(a) ? (probeOut(a) ? 'unknown' : !a.local.checked ? 'waiting' : a.local.up ? (a.local.svc_down ? `${a.local.svc_down} service${a.local.svc_down === 1 ? '' : 's'} down` : 'online') : 'down')
     : a.status === 'pending' ? 'pending' : a.below_min ? 'update required' : !a.online ? 'offline' : a.status === 'report_only' ? 'report only' : 'online');
   const lastTs = (a) => (isLocal(a) ? a.local.last_check || 0 : a.online ? a.updates?.checked_at || 0 : a.last_seen || 0);
   const healthN = (a) => (a.facts?.health?.failed_count > 0 ? 2 : 0) + (a.facts?.health?.auto_updates === 'on' ? 1 : 0);
@@ -1048,7 +1057,8 @@ function DeviceList() {
   }
   function last(a) {
     if (isLocal(a)) {
-      const L = a.local;
+      const L = a.local, p = probeOut(a);
+      if (p) return html`<span class="dim">${unknownText(p)}</span>`;
       if (!L.last_check) return html`<span class="dim">waiting for first check</span>`;
       return L.checked && !L.up ? html`<span class="c-red">down</span><span class="dim">, checked ${when(L.last_check)}</span>` : when(L.last_check);
     }
@@ -1060,7 +1070,7 @@ function DeviceList() {
   function row(a) {
     const u = a.updates, o = a.os_support, f = a.facts;
     return html`<tr>
-      <td class="nowrap" title="${statusText(a)}${a.below_min ? ` (agent ${a.core_version}, lowest allowed ${a.min_agent})` : ''}">${agentDot(a)}${statusText(a) === 'online' ? '' : html` <span class="small ${a.status === 'pending' || a.status === 'report_only' || a.below_min || statusText(a) === 'waiting' || statusText(a).includes('service') ? 'c-amber' : 'c-red'}">${statusText(a)}</span>`}</td>
+      <td class="nowrap" title="${statusText(a)}${a.below_min ? ` (agent ${a.core_version}, lowest allowed ${a.min_agent})` : ''}">${agentDot(a)}${statusText(a) === 'online' ? '' : html` <span class="small ${statusText(a) === 'unknown' ? 'dim' : a.status === 'pending' || a.status === 'report_only' || a.below_min || statusText(a) === 'waiting' || statusText(a).includes('service') ? 'c-amber' : 'c-red'}">${statusText(a)}</span>`}</td>
       <td class="nowrap"><a href="#/device/${a.id}"><b>${a.name}</b></a></td>
       <td class="opt muted">${groupName(a.group_id)}</td>
       <td class="opt small nowrap">${(f.ips || [])[0] || ''}</td>
@@ -1372,7 +1382,27 @@ function AgentPage([id, tab]) {
       ['Automatic updates', ({ on: html`<span class="badge info xs">on</span> unattended-upgrades`, off: 'off', not_installed: 'not installed' })[h?.auto_updates] || '—'],
       ['Last upgrade', h?.last_upgrade ? `${fmtDate(h.last_upgrade.time)} (${ago(h.last_upgrade.time)}, ${h.last_upgrade.packages} package${h.last_upgrade.packages === 1 ? '' : 's'}) · by ${upgradedBy(h.last_upgrade.by)}` : h ? 'none recorded' : '—'],
     ];
-    return html`<div class="panel panel-pad" style="margin-bottom:16px"><div class="facts">${kv.map(([k, v]) => html`<div><div class="k">${k}</div><div class="v">${v ?? '—'}</div></div>`)}</div></div>${agentPanel(a)}`;
+    return html`<div class="panel panel-pad" style="margin-bottom:16px"><div class="facts">${kv.map(([k, v]) => html`<div><div class="k">${k}</div><div class="v">${v ?? '—'}</div></div>`)}</div></div>${agentPanel(a)}${probePanel(a)}`;
+  }
+  // Remote probe: the agentless devices this agent checks for the master.
+  function probePanel(a) {
+    const p = a.probe;
+    if (!p) return '';
+    const busy = (st.data.jobs || []).find((j) => (j.type === 'probe.list' || j.type === 'probe.clear') && (j.status === 'queued' || j.status === 'running'));
+    const state = p.cleared ? html`<span class="badge mute">cleared</span> <span class="muted small">no check list is sent until you resend it or the checks change</span>`
+      : !p.want && !p.running ? html`<span class="muted small">no devices to check</span>`
+        : p.running === p.want ? html`<span class="badge ok">${icon('check')} check list confirmed</span> <span class="muted small">${when(p.confirmed_at)}</span>`
+          : html`<span class="badge upd">check list not confirmed yet</span>${a.online ? '' : html` <span class="muted small">(the device is offline)</span>`}`;
+    return html`<div class="panel panel-pad" style="margin-top:16px">
+      <div class="row"><h2 style="margin:0">Remote probe</h2><span class="spacer"></span>
+        ${ifChange(html`<button class="btn sm" data-act="probe-resend" ${busy ? 'disabled' : ''} title="Send the current check list again, even if the agent has it">${icon('refresh')} Resend check list</button>
+        <button class="btn warn sm" data-act="probe-clear" ${busy ? 'disabled' : ''} title="The agent drops its whole check list and waits for a new one">${icon('trash')} Clear probe checks</button>`)}</div>
+      <div class="muted small" style="margin:8px 0 12px">This agent can check agentless devices for the master, for networks the master cannot reach. Choose it as “Checked by” in a device's Edit window.</div>
+      <div class="row">${state}</div>
+      <div class="facts" style="margin-top:14px"><div><div class="k">Devices</div><div class="v">${p.devices}</div></div><div><div class="k">Checks</div><div class="v">${p.checks} of at most ${p.max}</div></div>
+        <div><div class="k">List version</div><div class="v mono small">${p.running || '—'}</div></div></div>
+      ${busy ? html`<div class="dim small" style="margin-top:10px"><span class="spin" style="width:10px;height:10px"></span> ${busy.type === 'probe.clear' ? 'Clear sent, not yet confirmed' : 'Check list sent, not yet confirmed'}…</div>` : ''}
+    </div>`;
   }
   function render() {
     const d = st.data;
@@ -1437,6 +1467,15 @@ function AgentPage([id, tab]) {
         await POST('agents/' + id, { report_only: false }); toast('Changes allowed', 'ok'); refresh();
       },
       ping: () => pingModal(a()),
+      'probe-clear': async () => {
+        const p = a().probe;
+        if (!(await confirmBox(`Clear the probe checks of ${a().name}?`, html`The agent drops its whole check list and any results it has not sent yet, and then waits.
+          ${p.devices ? html`Its ${p.devices} device${p.devices === 1 ? '' : 's'} show “unknown” until ` : 'Nothing is checked until '}you press “Resend check list” or the checks of its devices change.`, { okText: 'Clear probe checks', danger: true }))) return;
+        await POST(`agents/${id}/probe/clear`); toast('Clear sent to the agent', 'ok'); refresh();
+      },
+      'probe-resend': async () => {
+        await POST(`agents/${id}/probe/resend`); toast('Check list sent to the agent', 'ok'); refresh();
+      },
       reboot: async () => {
         const ag = a();
         const body = html`The device restarts within a few seconds and shows offline until it is back.
@@ -1455,20 +1494,27 @@ function conflictNotice(a) {
   return html`<div class="notice red">${c.map((x, i) => html`${i ? html`<br>` : ''}IP ${x.ip} is also used by <a href="#/device/${x.id}"><b>${x.name}</b></a>.`)}
     A device should be monitored once, with one type of monitoring: remove one of them.</div>`;
 }
-function localEditModal(a, groups, done) {
+async function localEditModal(a, groups, done) {
   const isNew = !a;
+  let pa = { agents: [], max: 200 };
+  try { pa = await GET('probe-agents'); } catch { /* only Master can be chosen */ }
+  const cur = a?.local.probe?.id || '';
+  const opts = html`<option value="" ${cur ? '' : 'selected'}>Master</option>${pa.agents.map((p) => html`<option value="${p.id}" ${cur === p.id ? 'selected' : ''} ${p.note && cur !== p.id ? 'disabled' : ''}>${p.name}${p.note ? ` (${p.note})` : !p.online ? ' (offline)' : ` (${p.checks} of ${pa.max} checks)`}</option>`)}
+    ${cur && !pa.agents.some((p) => p.id === cur) ? html`<option value="${cur}" selected>${a.local.probe.name}</option>` : ''}`;
   openModal(html`<h3>${isNew ? 'Add an agentless device' : `Edit ${a.name}`}</h3>
     <form class="form" data-submit="save">
       <label class="field">Name<input type="text" name="name" value="${a?.name || ''}" maxlength="64" placeholder="e.g. printer-hall" required ${isNew ? raw('autofocus') : ''}></label>
       <label class="field">IP address<input type="text" name="address" value="${a?.local.address || ''}" placeholder="e.g. 192.168.5.20" required spellcheck="false" autocomplete="off"></label>
-      <div class="dim small">IPv4 or IPv6. No host names: Coremon does not rely on DNS. Each address can belong to one device only.${isNew ? '' : ' A new address starts all checks over.'}</div>
+      <div class="dim small">IPv4 or IPv6. No host names: Coremon does not rely on DNS. Each address can belong to one device only, per checking system.${isNew ? '' : ' A new address starts all checks over.'}</div>
+      <label class="field">Checked by<select name="probe">${opts}</select></label>
+      <div class="dim small">Master: the master checks the device itself. An agent: that agent checks it, for a network the master cannot reach; its results come in with the agent's contact. ${isNew ? '' : 'The history is kept when this changes.'}</div>
       <label class="field">Group<select name="group">${groupOptions(groups, a?.group_id || '')}</select></label>
       <div class="actions"><button type="button" class="btn ghost" data-act="cancel">Cancel</button><button class="btn primary">${isNew ? html`${icon('plus')} Add device` : 'Save'}</button></div>
     </form>`, {
     acts: {
       cancel: () => closeModal(),
       save: async (f) => {
-        const body = { name: f.name.value, address: f.address.value.trim(), group_id: f.group.value };
+        const body = { name: f.name.value, address: f.address.value.trim(), group_id: f.group.value, probe: f.probe.value };
         const res = await POST(isNew ? 'locals' : `locals/${a.id}`, body);
         closeModal();
         toast(isNew ? `${res.name} added` : 'Saved', 'ok');
@@ -1624,8 +1670,8 @@ function LocalPage([id, tab]) {
   const st = { data: null, pinging: false, tab: tab === 'services' ? 'services' : 'system', checking: new Set() };
   const pingNote = (L) => (L.ping_mode === 'paused' ? 'Ping is paused for this device.' : 'This device is not pinged.');
   function systemTab(a, L) {
-    const P = L.ping_info, on = L.ping;
-    const status = !L.checked ? html`<span class="badge mute xs">waiting</span>` : L.up ? html`<span class="badge ok xs">up</span>` : html`<span class="badge sec xs">down</span>`;
+    const P = L.ping_info, on = L.ping, out = probeOut(a);
+    const status = out ? html`<span class="badge mute xs" title="${out.note}">unknown</span>` : !L.checked ? html`<span class="badge mute xs">waiting</span>` : L.up ? html`<span class="badge ok xs">up</span>` : html`<span class="badge sec xs">down</span>`;
     const svcs = L.services || [];
     const kv = [
       ['Status', html`${status} ${L.checked ? `since ${fmtDate(L.since)}` : ''}`],
@@ -1638,6 +1684,7 @@ function LocalPage([id, tab]) {
       ['Last error', on && L.last_error ? html`<span class="c-red">${L.last_error}</span>` : '—'],
       ['Services', svcs.length ? html`<a href="#" data-act="tab" data-t="services">${svcs.length} service${svcs.length === 1 ? '' : 's'}</a>${L.svc_down ? html` · <span class="c-red">${L.svc_down} down</span>` : ''}${L.svc_paused ? html` · <span class="dim">${L.svc_paused} paused</span>` : ''}` : html`<span class="dim">none</span>`],
       ['Monitoring', 'Agentless'],
+      ['Checked by', L.probe ? html`<a href="#/device/${L.probe.id}">${L.probe.name}</a> <span class="dim small">(remote probe)</span>` : 'Master'],
     ];
     return html`
       ${on ? '' : html`<div class="notice blue">${pingNote(L)} Its status comes from its running services: up while at least one is up.${canChange() ? html` ${L.ping_mode === 'paused' ? 'Resume' : 'Add'} the ping on the <a href="#" data-act="tab" data-t="services">Services</a> tab.` : ''}</div>`}
@@ -1660,7 +1707,7 @@ function LocalPage([id, tab]) {
   }
   function servicesTab(a, L) {
     const svcs = L.services || [], P = L.ping_info;
-    const head = html`<div class="row" style="margin-bottom:12px"><span class="muted small">The ping and the TCP services are checked from the master. For a TCP service it only connects: nothing is sent and nothing is logged in to.</span>
+    const head = html`<div class="row" style="margin-bottom:12px"><span class="muted small">The ping and the TCP services are checked ${L.probe ? html`by the agent <b>${L.probe.name}</b>, on its own schedule` : 'from the master'}. For a TCP service it only connects: nothing is sent and nothing is logged in to.</span>
       <span class="spacer"></span>${ifChange(html`<button class="btn primary sm" data-act="svc-add">${icon('plus')} Add service</button>`)}</div>`;
     if (!svcs.length && !P) return html`${head}<div class="panel empty">No services yet.</div>`;
     const pingRow = P ? html`<tr class="${P.mode === 'paused' ? 'dimrow' : ''}">
@@ -1672,7 +1719,7 @@ function LocalPage([id, tab]) {
         <td style="min-width:150px">${uptimeBar(P.hist, { compact: true })}<div class="dim small">${P.uptime >= 0 ? `${pctText(P.uptime)} answered` : 'no pings yet'}</div></td>
         <td class="dim small nowrap" title="The same for all agentless devices: Settings → Agentless">every ${P.interval} s<br>down after ${P.down_after} · ${P.timeout} s</td>
         <td class="w1"><div class="row" style="flex-wrap:nowrap;gap:6px">
-          <button class="btn ghost sm iconbtn" data-act="ping" title="Ping now" ${st.pinging || P.mode === 'paused' ? 'disabled' : ''}>${st.pinging ? html`<span class="spin"></span>` : icon('refresh')}</button>
+          <button class="btn ghost sm iconbtn" data-act="ping" title="${L.probe ? 'Checked by a remote probe on its own schedule' : 'Ping now'}" ${st.pinging || P.mode === 'paused' || L.probe ? 'disabled' : ''}>${st.pinging ? html`<span class="spin"></span>` : icon('refresh')}</button>
           ${ifChange(html`${pauseBtn(P.mode === 'paused', 'ping-pause', '')}<button class="btn danger sm iconbtn" data-act="ping-remove" title="Delete">${icon('trash')}</button>`)}</div></td>
       </tr>` : '';
     return html`${head}<div class="panel scrollx"><table class="tbl svctbl"><thead><tr><th>Status</th><th>Service</th><th>Greeting</th><th>Response</th><th>Checked</th><th>Last 24 hours</th><th>Check</th><th class="w1"></th></tr></thead>
@@ -1685,7 +1732,7 @@ function LocalPage([id, tab]) {
         <td style="min-width:150px">${uptimeBar(s.hist, { word: 'check', compact: true })}<div class="dim small">${s.uptime >= 0 ? `${pctText(s.uptime)} up` : 'no checks yet'}</div></td>
         <td class="dim small nowrap">every ${s.interval} s<br>${s.retries} retr${s.retries === 1 ? 'y' : 'ies'} · ${s.timeout} s${s.greeting ? html`<br>greeting` : ''}</td>
         <td class="w1"><div class="row" style="flex-wrap:nowrap;gap:6px">
-          <button class="btn ghost sm iconbtn" data-act="svc-check" data-sid="${s.id}" title="Check now" ${st.checking.has(s.id) || s.paused ? 'disabled' : ''}>${st.checking.has(s.id) ? html`<span class="spin"></span>` : icon('refresh')}</button>
+          <button class="btn ghost sm iconbtn" data-act="svc-check" data-sid="${s.id}" title="${L.probe ? 'Checked by a remote probe on its own schedule' : 'Check now'}" ${st.checking.has(s.id) || s.paused || L.probe ? 'disabled' : ''}>${st.checking.has(s.id) ? html`<span class="spin"></span>` : icon('refresh')}</button>
           ${ifChange(html`${pauseBtn(s.paused, 'svc-pause', `data-sid="${esc(s.id)}"`)}<button class="btn ghost sm iconbtn" data-act="svc-edit" data-sid="${s.id}" title="Edit">${icon('edit')}</button><button class="btn danger sm iconbtn" data-act="svc-delete" data-sid="${s.id}" title="Delete">${icon('trash')}</button>`)}</div></td>
       </tr>`)}</tbody></table></div>`;
   }
@@ -1694,17 +1741,23 @@ function LocalPage([id, tab]) {
     if (!d) return;
     const a = d.agent, L = a.local;
     const g = d.groups.find((x) => x.id === a.group_id);
-    const state = !L.checked ? (L.fails ? `no answer yet (${L.fails} of ${L.down_after} checks before down)` : 'waiting for the first check') : L.up ? `up for ${dur(now() - L.since)}` : `down for ${dur(now() - L.since)}`;
+    const out = probeOut(a);
+    const state = out ? unknownText(out) : !L.checked ? (L.fails ? `no answer yet (${L.fails} of ${L.down_after} checks before down)` : 'waiting for the first check') : L.up ? `up for ${dur(now() - L.since)}` : `down for ${dur(now() - L.since)}`;
     const total = (L.services || []).length + (L.ping_info ? 1 : 0);
     setHTML($('#a-head'), html`
       <div class="page-head syshead">
         <div class="headinfo"><div class="row"><a href="#/dashboard/${lastDashSub}" class="btn ghost sm iconbtn" title="Back">${icon('back')}</a>${agentDot(a)}<h1>${a.name}</h1>
-          <span class="tag">${icon('folder')} ${g ? g.name : 'Ungrouped'}</span><span class="verpill loc" title="Monitored by the master itself; no agent is installed">agentless</span></div>
-          <div class="sub">${L.address} · ${state}${L.up && L.svc_down ? ` · ${L.svc_down} of ${L.svc_total} services down` : ''}</div></div>
+          <span class="tag">${icon('folder')} ${g ? g.name : 'Ungrouped'}</span><span class="verpill loc" title="${L.probe ? `Checked by the agent ${L.probe.name}` : 'Monitored by the master itself'}; no agent is installed on it">agentless${L.probe ? ` · via ${L.probe.name}` : ''}</span></div>
+          <div class="sub">${L.address} · ${state}${!out && L.up && L.svc_down ? ` · ${L.svc_down} of ${L.svc_total} services down` : ''}</div></div>
         <span class="spacer"></span>
-        <button class="btn sm" data-act="ping" ${st.pinging || !L.ping ? 'disabled' : ''} title="${L.ping ? 'Ping the device now' : pingNote(L)}">${st.pinging ? html`<span class="spin"></span>` : icon('pulse')} Ping now</button>
+        <button class="btn sm" data-act="ping" ${st.pinging || !L.ping || L.probe ? 'disabled' : ''} title="${L.probe ? `Checked by ${L.probe.name} on its own schedule` : L.ping ? 'Ping the device now' : pingNote(L)}">${st.pinging ? html`<span class="spin"></span>` : icon('pulse')} Ping now</button>
         ${ifChange(html`<button class="btn sm" data-act="edit">${icon('edit')} Edit</button><button class="btn danger sm" data-act="delete" title="Delete">${icon('trash')}</button>`)}
       </div>
+      ${out ? html`<div class="notice grey"><b>Unknown – ${out.note}.</b> ${{
+        offline: html`The agent <a href="#/device/${out.id}">${out.name}</a> that checks this device has no contact with the master. The master does not take over: the shown results are the last ones received.`,
+        cleared: html`An administrator cleared the check list of <a href="#/device/${out.id}">${out.name}</a>. Checks resume after “Resend check list” on that agent's page, or when the checks change.`,
+        waiting: html`<a href="#/device/${out.id}">${out.name}</a> has not confirmed its check list yet.`,
+      }[out.state] || html`Choose another agent, or the master, with Edit.`}</div>` : ''}
       ${conflictNotice(a)}`);
     setHTML($('#a-tabs'), html`<button class="${st.tab === 'system' ? 'on' : ''}" data-act="tab" data-t="system">System</button><button class="${st.tab === 'services' ? 'on' : ''}" data-act="tab" data-t="services">Services${L.svc_down ? html` <span class="badge sec">${L.svc_down}</span>` : total ? html` <span class="dim small">${total}</span>` : ''}</button>`);
     setHTML($('#a-body'), st.tab === 'services' ? servicesTab(a, L) : systemTab(a, L));
@@ -1798,11 +1851,11 @@ function Devices() {
         <tr>${ifChange(html`<td></td>`)}<td class="dim">Ungrouped</td><td class="muted">${count('')} device(s)</td>${ifChange(html`<td class="dim small w1">always last</td>`)}</tr></tbody></table>`
         : html`<div class="muted small" style="margin-top:10px">No groups yet. All devices are shown together.</div>`}`);
     const act = d.agents.filter((a) => a.status !== 'pending').sort(byName);
-    const seen = (a) => (isLocal(a) ? (!a.local.checked ? html`<span class="dim">waiting</span>` : a.local.up ? 'up' : html`<span class="c-red">down</span>, last answer ${when(a.local.last_up)}`)
+    const seen = (a) => (isLocal(a) ? (probeOut(a) ? html`<span class="dim">${unknownText(probeOut(a))}</span>` : !a.local.checked ? html`<span class="dim">waiting</span>` : a.local.up ? 'up' : html`<span class="c-red">down</span>, last answer ${when(a.local.last_up)}`)
       : a.online ? 'online' : when(a.last_seen));
     setHTML($('#s-all'), act.length ? html`<div class="panel scrollx"><table class="tbl"><thead><tr><th>Device</th><th>Type</th><th>IP address</th><th>Group</th><th>OS</th><th>Agent</th><th>Last seen</th><th class="w1"></th></tr></thead>
       <tbody>${act.map((a) => html`<tr><td class="nowrap">${agentDot(a)} <a href="#/device/${a.id}"><b>${a.name}</b></a> ${a.status === 'report_only' ? html`<span class="badge info">report only</span>` : ''}${a.below_min ? html`<span class="badge upd xs">update required</span>` : ''}${a.ip_conflicts?.length ? html` <span class="badge sec xs" title="${a.ip_conflicts.map((c) => `IP ${c.ip} is also used by ${c.name}`).join('\n')}">IP also used</span>` : ''}</td>
-        <td class="muted nowrap">${isLocal(a) ? 'Agentless' : 'Agent'}</td>
+        <td class="muted nowrap">${isLocal(a) ? html`Agentless${a.local.probe ? html`<div class="dim small">via ${a.local.probe.name}</div>` : ''}` : 'Agent'}</td>
         <td class="mono small">${ipLabel(a.facts)}</td>
         <td>${canChange() ? html`<select class="sm" data-change="set-group" data-id="${a.id}" title="Group">${groupOptions(d.groups, a.group_id)}</select>` : html`<span class="muted">${d.groups.find((g) => g.id === a.group_id)?.name || 'Ungrouped'}</span>`}</td>
         <td class="muted">${isLocal(a) ? html`<span class="dim">—</span>` : osLabel(a.facts)}</td><td>${isLocal(a) ? html`<span class="dim">—</span>` : verPill(a)}</td>
@@ -1832,9 +1885,11 @@ function Devices() {
           <input type="text" name="name" placeholder="Name, e.g. printer-hall" maxlength="64" style="width:220px" required>
           <input type="text" name="address" placeholder="IP address, e.g. 192.168.5.20" style="width:220px" required spellcheck="false" autocomplete="off">
           <select name="group" title="Group">${groupOptions(groups, '')}</select>
+          <select name="probe" title="Checked by: the master itself, or an agent for a network the master cannot reach"><option value="">Checked by: Master</option>
+            ${(st.probes?.agents || []).filter((p) => !p.note).map((p) => html`<option value="${p.id}">Checked by: ${p.name}${p.online ? '' : ' (offline)'}</option>`)}</select>
           <button class="btn primary">${icon('plus')} Add device</button>
         </form>
-        <div class="dim small" style="margin-top:8px">IPv4 or IPv6 only, no host names. An address can belong to one device only, whether agent or agentless.</div>`}`);
+        <div class="dim small" style="margin-top:8px">IPv4 or IPv6 only, no host names. An address can belong to one device only, whether agent or agentless; devices checked by different agents may share an address (separate networks).</div>`}`);
     if (st.type === 'agent') renderTokens();
   }
   function renderTokens() {
@@ -1870,7 +1925,8 @@ function Devices() {
         </div>`);
     },
     async refresh() {
-      [st.data, st.tokens] = await Promise.all([GET('overview'), canChange() ? GET('tokens') : Promise.resolve([])]);
+      [st.data, st.tokens, st.probes] = await Promise.all([GET('overview'), canChange() ? GET('tokens') : Promise.resolve([]),
+        canChange() ? GET('probe-agents').catch(() => null) : Promise.resolve(null)]);
       render();
     },
     acts: {
@@ -1897,7 +1953,7 @@ function Devices() {
       },
       'add-type': (t) => { st.type = t.dataset.t; addPanel(); },
       'l-add': async (f) => {
-        const res = await POST('locals', { name: f.name.value, address: f.address.value.trim(), group_id: f.group.value });
+        const res = await POST('locals', { name: f.name.value, address: f.address.value.trim(), group_id: f.group.value, probe: f.probe.value });
         toast(`${res.name} added — the first ping follows within seconds`, 'ok');
         f.name.value = ''; f.address.value = '';
         view.refresh();
@@ -2247,8 +2303,9 @@ function RemoteProbes() {
     if (!d) return;
     const open = d.requests.filter((p) => p.state !== 'gave_up').length;
     setHTML($('#p-list'), d.requests.length ? html`<div class="panel"><table class="tbl"><thead><tr><th>Request</th><th>Agent</th><th>Waiting for</th><th>Status</th></tr></thead><tbody>
-      ${d.requests.map((p) => html`<tr class="click ${p.state === 'gave_up' ? 'dimrow' : ''}" data-act="open-job" data-id="${p.id}">
-        <td><b>${jobTitle(p)}</b><div class="dim small">${jobParams(p)}${p.state === 'overdue' || p.state === 'gave_up' ? html` <span class="${p.state === 'overdue' ? 'c-red' : ''}">${p.note}</span>` : ''}</div></td>
+      ${d.requests.map((p) => html`${p.kind === 'check' ? html`<tr>
+        <td><a href="#/device/${p.device_id}"><b>${p.title}</b></a><div class="dim small">check result · <span class="c-red">${p.note}</span></div></td>` : html`<tr class="click ${p.state === 'gave_up' ? 'dimrow' : ''}" data-act="open-job" data-id="${p.id}">
+        <td><b>${jobTitle(p)}</b><div class="dim small">${jobParams(p)}${p.state === 'overdue' || p.state === 'gave_up' || ((p.type || '').startsWith('probe.') && p.note) ? html` <span class="${p.state === 'overdue' ? 'c-red' : ''}">${p.note}</span>` : ''}</div></td>`}
         <td><a href="#/device/${p.agent_id}">${p.agent}</a></td>
         <td class="nowrap ${p.state === 'overdue' ? 'c-red' : 'muted'}" title="requested ${fmtDate(p.since, true)}">${p.state === 'gave_up' ? html`gave up ${ago(p.finished)}` : secs(Math.max(0, d.now - p.since))}</td>
         <td class="nowrap">${stateBadge(p)}</td></tr>`)}</tbody></table></div>

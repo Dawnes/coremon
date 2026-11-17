@@ -25,11 +25,13 @@ as **agentless** devices: the master itself pings them and checks their services
   and actively exploited ones highlighted.
 * **Agentless devices**: devices without an agent, checked by the master with a
   ping and per-service TCP checks (heartbeat, retries, timeout, reverse mode),
-  with a 24-hour history and a graph of the ping's round-trip time.
+  with a 24-hour history and a graph of the ping's round-trip time. For a network
+  the master cannot reach, an agent there can do the checks instead ("Checked by").
 * **Releases**: update the master and the agents from the website.
 * **Users**: administrators and read-only users, optional two-factor sign-in
   with an authenticator app, and accounts can be locked.
-* **Activity**: every job, the upcoming scheduled tasks and an audit log of who did what.
+* **Activity**: every job, the upcoming scheduled tasks, the requests remote agents
+  have not answered yet, and an audit log of who did what.
 
 ## Security
 
@@ -64,7 +66,9 @@ and OSV.dev, NVD, CISA and FIRST (vulnerability data).
 
 For a device without an agent choose **Agentless** instead and enter its name and IP
 address. Settings → Agentless sets how often it is pinged; its services are added
-on the device's Services tab.
+on the device's Services tab. **Checked by** chooses who checks it: the master, or
+an agent (0.3.9 or later) on another system that can reach it. A device whose
+agent is offline shows as unknown, not down.
 
 ## Updating
 

@@ -2,10 +2,11 @@ package master
 
 // Remote Probes (Activity > Remote Probes): what the master is waiting
 // for from agents on other systems. Requests the master handles itself
-// (its agentless checks) and the agent on the master's own system are not
-// shown. For now these are the agents' jobs; agentless checks done by
-// remote agents will join later. A request leaves the list when it is
-// answered; one that gave up stays 10 minutes.
+// (its own agentless checks) and the agent on the master's own system are
+// not shown. Listed are the agents' open jobs (including a check list or
+// a clear not confirmed yet) and the checks of remote probes whose result
+// is overdue. A request leaves the list when it is answered; one that
+// gave up stays 10 minutes.
 
 import (
 	"net"
@@ -13,31 +14,22 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"coremon/internal/proto"
 )
 
 const probeGaveUpKeep = 10 * 60 // seconds a request that gave up stays listed
 
 type probeRequest struct {
 	*Job
-	Agent string `json:"agent"`
-	Since int64  `json:"since"` // requested at
-	State string `json:"state"` // waiting, running, overdue, offline, gave_up
-	Note  string `json:"note,omitempty"`
-}
-
-// localIPs: the master system's own addresses (not loopback).
-func localIPs() map[string]bool {
-	out := map[string]bool{}
-	addrs, err := net.InterfaceAddrs()
-	if err != nil {
-		return out
-	}
-	for _, a := range addrs {
-		if n, ok := a.(*net.IPNet); ok && !n.IP.IsLoopback() {
-			out[n.IP.String()] = true
-		}
-	}
-	return out
+	Kind     string `json:"kind"` // "job" or "check"
+	AgentID  string `json:"agent_id"`
+	Agent    string `json:"agent"`
+	Title    string `json:"title,omitempty"` // checks
+	DeviceID string `json:"device_id,omitempty"`
+	Since    int64  `json:"since"` // requested (or expected) at
+	State    string `json:"state"` // waiting, running, overdue, offline, gave_up
+	Note     string `json:"note,omitempty"`
 }
 
 // onMaster: the agent runs on the master's own system.
@@ -70,7 +62,7 @@ func (s *Server) probeRequests(now int64, local map[string]bool) []probeRequest 
 		if a == nil || onMaster(a, local) {
 			continue
 		}
-		p := probeRequest{Job: j, Agent: a.Name, Since: j.Created}
+		p := probeRequest{Job: j, Kind: "job", AgentID: a.ID, Agent: a.Name, Since: j.Created}
 		switch {
 		case j.Status == JobQueued && !s.online(a, now):
 			p.State, p.Note = "offline", "the agent is offline; it runs when the agent is back"
@@ -87,8 +79,17 @@ func (s *Server) probeRequests(now int64, local map[string]bool) []probeRequest 
 		default:
 			continue
 		}
+		if !j.done() && p.Note == "" {
+			switch j.Type {
+			case proto.CmdProbeList:
+				p.Note = "check list sent, not yet confirmed"
+			case proto.CmdProbeClear:
+				p.Note = "clear sent, not yet confirmed"
+			}
+		}
 		out = append(out, p)
 	}
+	out = append(out, s.overdueChecks(now, local)...)
 	sort.SliceStable(out, func(i, j int) bool {
 		gi, gj := out[i].State == "gave_up", out[j].State == "gave_up"
 		if gi != gj {
@@ -99,8 +100,49 @@ func (s *Server) probeRequests(now int64, local map[string]bool) []probeRequest 
 	return out
 }
 
+// overdueChecks: checks of remote probes that should have reported by now
+// (interval + timeout + one heartbeat after the last result), for probes
+// that are online and run the current list. Caller holds s.st.mu.
+func (s *Server) overdueChecks(now int64, local map[string]bool) []probeRequest {
+	var out []probeRequest
+	hb := int64(s.heartbeat())
+	ls := s.st.st.Local
+	for _, d := range s.st.st.Locals {
+		a := s.st.st.Agents[d.Probe]
+		if d.Probe == "" || a == nil || onMaster(a, local) || !s.online(a, now) || a.ProbeHold != nil ||
+			a.ProbeVer == "" || a.ProbeVer != s.probeWanted(a.ID) {
+			continue
+		}
+		add := func(title string, last int64, every, timeout int) {
+			if a.ProbeAt > last {
+				last = a.ProbeAt // the list was (re)confirmed later
+			}
+			due := last + int64(every)
+			if now <= due+int64(timeout)+hb {
+				return
+			}
+			out = append(out, probeRequest{Kind: "check", AgentID: a.ID, Agent: a.Name, Title: title, DeviceID: d.ID,
+				Since: due, State: "overdue", Note: "no result in time"})
+		}
+		if d.pinging() {
+			add(d.Name+" · Ping", d.LastCheck, ls.IntervalSec, ls.TimeoutSec)
+		}
+		for _, sv := range d.Services {
+			if sv.Paused {
+				continue
+			}
+			every := sv.Interval
+			if sv.Fails > 0 {
+				every = int(svcRetryEvery / time.Second)
+			}
+			add(d.Name+" · "+sv.Name, sv.LastCheck, every, sv.Timeout)
+		}
+	}
+	return out
+}
+
 func (s *Server) handleProbes(w http.ResponseWriter, r *http.Request) {
-	local := localIPs()
+	local := s.ownIPs()
 	now := time.Now().Unix()
 	s.st.mu.Lock()
 	reqs := s.probeRequests(now, local)

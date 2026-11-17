@@ -162,6 +162,13 @@ func (s *Server) handleSealed(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		s.resultCore(env.Agent, res, ip)
+	case "probe":
+		var rep proto.ProbeReport
+		if len(msg.Body) > maxPollBody || json.Unmarshal(msg.Body, &rep) != nil {
+			http.Error(w, "bad request", http.StatusBadRequest)
+			return
+		}
+		s.probeReport(env.Agent, &rep)
 	default:
 		http.Error(w, "unknown operation", http.StatusBadRequest)
 		return

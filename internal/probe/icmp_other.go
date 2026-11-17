@@ -1,6 +1,6 @@
 //go:build !linux
 
-package master
+package probe
 
 // Development builds (not Linux): use the system's ping command.
 
@@ -15,7 +15,7 @@ import (
 	"time"
 )
 
-func icmpPing(ctx context.Context, ip net.IP, timeout time.Duration) (time.Duration, error) {
+func Ping(ctx context.Context, ip net.IP, timeout time.Duration) (time.Duration, error) {
 	var cmd *exec.Cmd
 	if runtime.GOOS == "windows" {
 		cmd = exec.CommandContext(ctx, "ping", "-n", "1", "-w", strconv.Itoa(int(timeout/time.Millisecond)), ip.String())

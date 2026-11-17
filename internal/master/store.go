@@ -108,7 +108,13 @@ type Agent struct {
 	AgentKey   string `json:"agent_key,omitempty"`
 	EnrollIP   string `json:"enroll_ip,omitempty"`
 	EnrolledAt int64  `json:"enrolled_at"`
+	// ProbeHold: an admin cleared the agent's check list; no list is sent
+	// until Resend, or until the list (this version) changes.
+	ProbeHold *string `json:"probe_hold,omitempty"`
 
+	ProbeCap    bool                       `json:"-"` // the agent can probe agentless devices
+	ProbeVer    string                     `json:"-"` // the check list the agent runs
+	ProbeAt     int64                      `json:"-"` // when it confirmed that list
 	ReportOnly  bool                       `json:"-"`
 	Pins        [2]string                  `json:"-"`
 	PinsAt      int64                      `json:"-"`

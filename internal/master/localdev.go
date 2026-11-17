@@ -15,6 +15,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"coremon/internal/probe"
 )
 
 type LocalDevice struct {
@@ -37,6 +39,8 @@ type LocalDevice struct {
 	RTT       []rttSlot  `json:"-"`
 	PingMode  string     `json:"ping_mode,omitempty"` // "" pinged, "paused" or "removed"
 	Services  []*Service `json:"services,omitempty"`
+	// Probe: the agent that checks this device ("Checked by"); "" = the master.
+	Probe string `json:"probe,omitempty"`
 }
 
 const (
@@ -182,10 +186,17 @@ func (l *LocalSettings) normalize() {
 // pingFunc sends one echo request and waits for the answer.
 type pingFunc func(ctx context.Context, ip net.IP, timeout time.Duration) (time.Duration, error)
 
-// pingSetupError: the master could not send a ping at all (no permission).
-type pingSetupError struct{ err error }
-
-func (e *pingSetupError) Error() string { return e.err.Error() }
+// icmpPing: the master's own ping, with a hint for the admin when the
+// system does not allow it.
+func icmpPing(ctx context.Context, ip net.IP, timeout time.Duration) (time.Duration, error) {
+	rtt, err := probe.Ping(ctx, ip, timeout)
+	var se *probe.SetupError
+	if errors.As(err, &se) && se.Denied {
+		return 0, &probe.SetupError{Denied: true, Err: errors.New("the master may not send pings: the system refuses ping sockets for its user " +
+			"(sysctl net.ipv4.ping_group_range) and the service lacks CAP_NET_RAW. Run the master install command once as root on the master: it updates the service")}
+	}
+	return rtt, err
+}
 
 type localState struct {
 	mu      sync.Mutex
@@ -244,24 +255,30 @@ type ipConflict struct {
 	Name string `json:"name"`
 }
 
-// ipOwner: the device (other than except) that already uses ip. Caller holds s.st.mu.
-func (s *Server) ipOwner(ip, except string) (id, name string) {
-	for _, a := range s.st.st.Agents {
-		for _, x := range a.Facts.IPs {
-			if a.ID != except && canonIP(x) == ip {
-				return a.ID, a.Name
+// ipOwner: the device (other than except) that already uses ip in the
+// network seen by probe ("" = the master). The same address may be used
+// by devices that different probes check: separate networks. Agent
+// devices count in the master's network. Caller holds s.st.mu.
+func (s *Server) ipOwner(ip, except, probe string) (id, name string) {
+	if probe == "" {
+		for _, a := range s.st.st.Agents {
+			for _, x := range a.Facts.IPs {
+				if a.ID != except && canonIP(x) == ip {
+					return a.ID, a.Name
+				}
 			}
 		}
 	}
 	for _, d := range s.st.st.Locals {
-		if d.ID != except && d.Address == ip {
+		if d.ID != except && d.Address == ip && d.Probe == probe {
 			return d.ID, d.Name
 		}
 	}
 	return "", ""
 }
 
-// agentConflicts: local devices using one of this agent device's addresses.
+// agentConflicts: local devices checked by the master using one of this
+// agent device's addresses.
 func (s *Server) agentConflicts(a *Agent) []ipConflict {
 	var out []ipConflict
 	for _, x := range a.Facts.IPs {
@@ -270,7 +287,7 @@ func (s *Server) agentConflicts(a *Agent) []ipConflict {
 			continue
 		}
 		for _, d := range s.st.st.Locals {
-			if d.Address == ip {
+			if d.Address == ip && d.Probe == "" {
 				out = append(out, ipConflict{IP: ip, ID: d.ID, Name: d.Name})
 			}
 		}
@@ -280,6 +297,9 @@ func (s *Server) agentConflicts(a *Agent) []ipConflict {
 
 func (s *Server) localConflicts(d *LocalDevice) []ipConflict {
 	var out []ipConflict
+	if d.Probe != "" {
+		return out
+	}
 	for _, a := range s.st.st.Agents {
 		for _, x := range a.Facts.IPs {
 			if canonIP(x) == d.Address {
@@ -317,6 +337,8 @@ type localView struct {
 	SvcOK     int           `json:"svc_ok"` // running services that are up without failed retries
 	SvcPaused int           `json:"svc_paused"`
 	Services  []serviceView `json:"services,omitempty"` // device page only
+
+	Probe *localProbeView `json:"probe,omitempty"` // checked by an agent instead of the master
 }
 
 // pingView: the ping as one of the device's checks, also while paused.
@@ -382,6 +404,10 @@ func (s *Server) localDeviceView(d *LocalDevice, full bool) agentView {
 	lv.SvcTotal = len(running)
 	if !d.pinging() {
 		servicesStatus(lv, running)
+	}
+	if lv.Probe = s.localProbe(d, now); lv.Probe != nil && lv.Probe.State != "ok" {
+		// No results come in: unknown, not down (no takeover by the master).
+		lv.Checked, lv.Up, lv.SvcOK, lv.SvcDown = false, false, 0, 0
 	}
 	if full {
 		lv.Services = svcs
@@ -545,7 +571,7 @@ func (s *Server) pingOne(id string) {
 	ctx, cancel := context.WithTimeout(context.Background(), timeout+time.Second)
 	rtt, err := s.pinger(ctx, ip, timeout)
 	cancel()
-	var se *pingSetupError
+	var se *probe.SetupError
 	s.loc.mu.Lock()
 	if errors.As(err, &se) {
 		if s.loc.setup == "" {
@@ -554,7 +580,7 @@ func (s *Server) pingOne(id string) {
 		s.loc.setup, s.loc.setupAt = err.Error(), time.Now().Unix()
 	} else {
 		s.loc.setup = ""
-		if m := pingMethod(); m != "" {
+		if m := probe.Method(); m != "" {
 			s.loc.method = m
 		}
 	}
@@ -585,7 +611,7 @@ func (s *Server) localLoop(stop <-chan struct{}) {
 		s.loc.mu.Lock()
 		dueSvc := s.dueServices(now)
 		for id, d := range s.st.st.Locals {
-			if !d.pinging() {
+			if !d.pinging() || d.Probe != "" {
 				continue
 			}
 			next, seen := s.loc.next[id]
@@ -601,7 +627,7 @@ func (s *Server) localLoop(stop <-chan struct{}) {
 			}
 		}
 		for id := range s.loc.next {
-			if d := s.st.st.Locals[id]; strings.HasPrefix(id, "l_") && (d == nil || !d.pinging()) {
+			if d := s.st.st.Locals[id]; strings.HasPrefix(id, "l_") && (d == nil || !d.pinging() || d.Probe != "") {
 				delete(s.loc.next, id)
 			}
 		}
@@ -645,17 +671,21 @@ func (s *Server) localOr404(w http.ResponseWriter, r *http.Request) *LocalDevice
 	return d
 }
 
+// writeLocalAudit records a change of an agentless device. Every such
+// change may change a probe agent's check list: it is sent right away.
+// Caller holds s.st.mu.
 func (s *Server) writeLocalAudit(r *http.Request, action string, d *LocalDevice, detail string) {
 	s.audit.add(auditEntry{Actor: actor(r), IP: clientIP(r), Action: action, Agent: d.ID, Target: d.Name, Detail: detail})
+	s.probeSyncAll(time.Now())
 }
 
 // checkAddress: a valid IP that no other device uses. Caller holds s.st.mu.
-func (s *Server) checkAddress(addr, except string) (string, int, error) {
+func (s *Server) checkAddress(addr, except, probe string) (string, int, error) {
 	ip, err := parseDeviceIP(addr)
 	if err != nil {
 		return "", http.StatusBadRequest, err
 	}
-	if _, name := s.ipOwner(ip, except); name != "" {
+	if _, name := s.ipOwner(ip, except, probe); name != "" {
 		return "", http.StatusConflict, fmt.Errorf("IP address %s is already used by %s: a device can only be added once, with one type of monitoring", ip, name)
 	}
 	return ip, 0, nil
@@ -666,6 +696,7 @@ func (s *Server) handleLocalCreate(w http.ResponseWriter, r *http.Request) {
 		Name    string `json:"name"`
 		Address string `json:"address"`
 		GroupID string `json:"group_id"`
+		Probe   string `json:"probe"`
 	}
 	if !readJSON(w, r, &req, 4096) {
 		return
@@ -685,7 +716,7 @@ func (s *Server) handleLocalCreate(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, fmt.Sprintf("at most %d agentless devices", maxLocalDevices), http.StatusBadRequest)
 		return
 	}
-	ip, code, err := s.checkAddress(req.Address, "")
+	ip, code, err := s.checkAddress(req.Address, "", req.Probe)
 	if err != nil {
 		http.Error(w, err.Error(), code)
 		return
@@ -695,10 +726,18 @@ func (s *Server) handleLocalCreate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	d := &LocalDevice{ID: "l_" + randHex(8), Name: name, Address: ip, GroupID: req.GroupID, AddedAt: time.Now().Unix()}
+	if req.Probe != "" {
+		if err := s.probeAllowed(req.Probe, 1, s.ownIPs()); err != nil {
+			http.Error(w, err.Error(), http.StatusConflict)
+			return
+		}
+		d.Probe = req.Probe
+	}
 	d.Order = s.st.nextOrder(d.GroupID)
 	s.st.st.Locals[d.ID] = d
 	s.st.markDirty()
-	s.writeLocalAudit(r, "device.local_added", d, "address "+ip)
+	s.writeLocalAudit(r, "device.local_added", d, "address "+ip+", checked by "+s.probeName(d.Probe))
+	s.probeSyncAll(time.Now())
 	writeJSON(w, s.localDeviceView(d, false))
 }
 
@@ -707,6 +746,7 @@ func (s *Server) handleLocalUpdate(w http.ResponseWriter, r *http.Request) {
 		Name    *string `json:"name"`
 		Address *string `json:"address"`
 		GroupID *string `json:"group_id"`
+		Probe   *string `json:"probe"`
 	}
 	if !readJSON(w, r, &req, 4096) {
 		return
@@ -717,42 +757,73 @@ func (s *Server) handleLocalUpdate(w http.ResponseWriter, r *http.Request) {
 	if d == nil {
 		return
 	}
-	var changes []string
+	// Everything is checked before anything changes.
+	name := ""
 	if req.Name != nil {
 		n, err := checkName("device name", *req.Name, maxSystemName)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
-		if n != "" && n != d.Name {
-			changes = append(changes, "name "+d.Name+" → "+n)
-			d.Name = n
-		}
+		name = n
 	}
-	if req.Address != nil {
-		ip, code, err := s.checkAddress(*req.Address, d.ID)
-		if err != nil {
-			http.Error(w, err.Error(), code)
-			return
-		}
-		if ip != d.Address {
-			changes = append(changes, "address "+d.Address+" → "+ip)
-			d.Address = ip
-			// A new address starts over.
-			d.resetPing()
-			s.loc.mu.Lock()
-			delete(s.loc.next, d.ID)
-			s.loc.mu.Unlock()
-			for _, sv := range d.Services {
-				s.resetService(sv)
+	if req.GroupID != nil && *req.GroupID != "" && s.st.group(*req.GroupID) == nil {
+		http.Error(w, "group not found", http.StatusBadRequest)
+		return
+	}
+	probe := d.Probe
+	if req.Probe != nil && *req.Probe != d.Probe {
+		probe = *req.Probe
+		if probe != "" {
+			if err := s.probeAllowed(probe, d.activeChecks(), s.ownIPs()); err != nil {
+				http.Error(w, err.Error(), http.StatusConflict)
+				return
 			}
 		}
 	}
-	if req.GroupID != nil && *req.GroupID != d.GroupID {
-		if *req.GroupID != "" && s.st.group(*req.GroupID) == nil {
-			http.Error(w, "group not found", http.StatusBadRequest)
+	ip := d.Address
+	if req.Address != nil || probe != d.Probe {
+		addr := d.Address
+		if req.Address != nil {
+			addr = *req.Address
+		}
+		var code int
+		var err error
+		if ip, code, err = s.checkAddress(addr, d.ID, probe); err != nil {
+			http.Error(w, err.Error(), code)
 			return
 		}
+	}
+
+	var changes []string
+	if probe != d.Probe {
+		// The history stays: it is the same device, checked from elsewhere.
+		changes = append(changes, "checked by "+s.probeName(d.Probe)+" → "+s.probeName(probe))
+		d.Probe = probe
+		s.loc.mu.Lock()
+		delete(s.loc.next, d.ID)
+		for _, sv := range d.Services {
+			delete(s.loc.next, sv.ID)
+		}
+		s.loc.mu.Unlock()
+	}
+	if name != "" && name != d.Name {
+		changes = append(changes, "name "+d.Name+" → "+name)
+		d.Name = name
+	}
+	if ip != d.Address {
+		changes = append(changes, "address "+d.Address+" → "+ip)
+		d.Address = ip
+		// A new address starts over.
+		d.resetPing()
+		s.loc.mu.Lock()
+		delete(s.loc.next, d.ID)
+		s.loc.mu.Unlock()
+		for _, sv := range d.Services {
+			s.resetService(sv)
+		}
+	}
+	if req.GroupID != nil && *req.GroupID != d.GroupID {
 		d.Order = s.st.nextOrder(*req.GroupID)
 		d.GroupID = *req.GroupID
 	}
@@ -761,6 +832,7 @@ func (s *Server) handleLocalUpdate(w http.ResponseWriter, r *http.Request) {
 	if len(changes) > 0 {
 		s.writeLocalAudit(r, "device.local_changed", d, strings.Join(changes, "; "))
 	}
+	s.probeSyncAll(time.Now())
 	writeJSON(w, s.localDeviceView(d, false))
 }
 
@@ -785,8 +857,12 @@ func (s *Server) handleLocalPing(w http.ResponseWriter, r *http.Request) {
 		s.st.mu.Unlock()
 		return
 	}
-	id, pinging := d.ID, d.pinging()
+	id, pinging, probe := d.ID, d.pinging(), d.Probe
 	s.st.mu.Unlock()
+	if probe != "" {
+		http.Error(w, remoteCheckMsg, http.StatusConflict)
+		return
+	}
 	if !pinging {
 		http.Error(w, "ping is paused or removed for this device", http.StatusConflict)
 		return
@@ -840,6 +916,12 @@ func (s *Server) handlePingState(w http.ResponseWriter, r *http.Request) {
 	if mode != "" && d.pinging() && d.activeChecks() <= 1 {
 		http.Error(w, noCheckMsg, http.StatusConflict)
 		return
+	}
+	if mode == "" {
+		if err := s.probeRoom(d); err != nil {
+			http.Error(w, err.Error(), http.StatusConflict)
+			return
+		}
 	}
 	action := map[string]string{"": "device.ping_resumed", pingPaused: "device.ping_paused", pingRemoved: "device.ping_removed"}[mode]
 	switch {
@@ -925,6 +1007,7 @@ func (s *Server) handleLocalSettingsSave(w http.ResponseWriter, r *http.Request)
 	if old.IntervalSec != req.IntervalSec {
 		s.replanPings(req.IntervalSec, time.Now())
 	}
+	s.probeSyncAll(time.Now()) // the ping settings are part of the check lists
 	s.st.mu.Unlock()
 	s.audit.write(actor(r), clientIP(r), "settings.local", "", fmt.Sprintf("ping every %ds, timeout %ds, down after %d failed", req.IntervalSec, req.TimeoutSec, req.DownAfter))
 	writeJSON(w, map[string]any{"settings": req})

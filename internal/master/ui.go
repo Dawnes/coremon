@@ -61,6 +61,7 @@ type agentView struct {
 	Monitor      string                     `json:"monitor"` // "agent" or "local"
 	Local        *localView                 `json:"local,omitempty"`
 	Conflicts    []ipConflict               `json:"ip_conflicts,omitempty"`
+	Probe        *agentProbeView            `json:"probe,omitempty"` // the agent checks agentless devices
 }
 
 func (s *Server) view(a *Agent, full bool) agentView {
@@ -99,6 +100,9 @@ func (s *Server) view(a *Agent, full bool) agentView {
 		v.State, v.StateAt = a.State, a.StateAt
 	}
 	v.Vulns = s.vulnsFor(a, full)
+	if full {
+		v.Probe = s.agentProbe(a, own)
+	}
 	if s.belowMin(a) {
 		v.BelowMin, v.MinAgent = true, s.minAgent()
 		v.Facts = proto.Facts{OS: a.Facts.OS, Arch: a.Facts.Arch}

@@ -87,6 +87,56 @@ type PollRequest struct {
 	Running     []string      `json:"running"`
 	ReportOnly  bool          `json:"report_only"`
 	Pins        [2]string     `json:"pins"`
+	// Probe: set by agents that can check agentless devices for the master
+	// (remote probe); older agents leave it out.
+	Probe *ProbeReport `json:"probe,omitempty"`
+}
+
+// Remote probe: the master gives an agent a complete check list (never only
+// the changes); the agent runs the checks on its own schedule and reports
+// the results with every poll, and right away when a status changes (op
+// "probe", body ProbeReport). The list lives in the agent's memory only.
+const (
+	CmdProbeList  = "probe.list"  // params ProbeList; result data ProbeAck
+	CmdProbeClear = "probe.clear" // drop the list and all pending results; result data ProbeAck
+)
+
+type ProbeCheck struct {
+	ID        string `json:"id"`   // the master's id of the check
+	Kind      string `json:"kind"` // "ping" or "tcp"
+	Address   string `json:"address"`
+	Port      int    `json:"port,omitempty"`
+	Greeting  bool   `json:"greeting,omitempty"`
+	Reverse   bool   `json:"reverse,omitempty"`    // tcp: reachable counts as down
+	Interval  int    `json:"interval"`             // seconds
+	Timeout   int    `json:"timeout"`              // seconds
+	Retries   int    `json:"retries,omitempty"`    // tcp: failed checks 30 s apart before down
+	DownAfter int    `json:"down_after,omitempty"` // ping: unanswered pings before down
+}
+
+type ProbeList struct {
+	Version string       `json:"version"` // "" = no checks
+	Checks  []ProbeCheck `json:"checks"`
+}
+
+type ProbeResult struct {
+	ID     string `json:"id"`
+	AgoMs  int64  `json:"ago_ms"` // how long before sending the check finished (no clock comparison needed)
+	OK     bool   `json:"ok"`     // ping answered, or TCP connected (and greeted when asked)
+	RTTUs  int64  `json:"rtt_us,omitempty"`
+	Banner string `json:"banner,omitempty"`
+	Error  string `json:"error,omitempty"`
+	Setup  bool   `json:"setup,omitempty"` // the agent could not run the check at all (no permission)
+}
+
+type ProbeReport struct {
+	Version string        `json:"version"` // the list the agent runs
+	Results []ProbeResult `json:"results,omitempty"`
+}
+
+type ProbeAck struct {
+	Version string `json:"version"`
+	Checks  int    `json:"checks"`
 }
 
 type PollResponse struct {

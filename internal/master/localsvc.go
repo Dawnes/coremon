@@ -5,17 +5,14 @@ package master
 // to see whether it is up. Nothing is sent and nothing is logged in to.
 
 import (
-	"bufio"
 	"context"
 	"errors"
 	"fmt"
-	"net"
 	"net/http"
-	"os"
-	"strconv"
 	"strings"
-	"syscall"
 	"time"
+
+	"coremon/internal/probe"
 )
 
 type Service struct {
@@ -111,48 +108,8 @@ func presetByKey(k string) *svcPreset {
 type svcCheckFunc func(ctx context.Context, addr string, port int, greeting bool, timeout time.Duration) (time.Duration, string, error)
 
 func tcpCheck(ctx context.Context, addr string, port int, greeting bool, timeout time.Duration) (time.Duration, string, error) {
-	d := net.Dialer{Timeout: timeout}
-	start := time.Now()
-	c, err := d.DialContext(ctx, "tcp", net.JoinHostPort(addr, strconv.Itoa(port)))
-	if err != nil {
-		var ne net.Error
-		if errors.As(err, &ne) && ne.Timeout() {
-			return 0, "", fmt.Errorf("no connection within %s", timeout)
-		}
-		return 0, "", dialError(err)
-	}
-	defer c.Close()
-	rtt := time.Since(start)
-	if !greeting {
-		return rtt, "", nil
-	}
-	c.SetReadDeadline(time.Now().Add(timeout))
-	line, err := bufio.NewReaderSize(c, 512).ReadSlice('\n')
-	if len(line) == 0 && err != nil {
-		var ne net.Error
-		if errors.As(err, &ne) && ne.Timeout() {
-			return 0, "", fmt.Errorf("connected, but no greeting within %s", timeout)
-		}
-		return 0, "", fmt.Errorf("connected, but no greeting: %v", unwrapOp(err))
-	}
-	return rtt, cleanText(string(line), maxBanner), nil
-}
-
-// dialError: a plain reason for a failed connection.
-func dialError(err error) error {
-	switch {
-	case errors.Is(err, syscall.ECONNREFUSED):
-		return errors.New("connection refused: nothing listens on this port")
-	case errors.Is(err, syscall.EHOSTUNREACH):
-		return errors.New("host unreachable")
-	case errors.Is(err, syscall.ENETUNREACH):
-		return errors.New("network unreachable")
-	}
-	var se *os.SyscallError
-	if errors.As(err, &se) {
-		return se.Err
-	}
-	return unwrapOp(err)
+	rtt, line, err := probe.TCP(ctx, addr, port, greeting, timeout)
+	return rtt, cleanText(line, maxBanner), err
 }
 
 // ---- view ----
@@ -198,6 +155,17 @@ func (s *Server) serviceView(sv *Service, now int64, full bool) serviceView {
 // last one fails the service is down, and it is then checked every 30 s
 // until it is up again. Caller holds s.st.mu and s.loc.mu.
 func (s *Server) recordService(sv *Service, rtt time.Duration, banner string, reached bool, cerr error, now time.Time) {
+	if s.storeService(sv, rtt, banner, reached, cerr, now) {
+		s.loc.next[sv.ID] = now.Add(time.Duration(sv.Interval) * time.Second)
+	} else {
+		s.loc.next[sv.ID] = now.Add(svcRetryEvery)
+	}
+}
+
+// storeService stores one result without planning the next check (a
+// remote probe plans its own); true when the service counted as up.
+// Caller holds s.st.mu.
+func (s *Server) storeService(sv *Service, rtt time.Duration, banner string, reached bool, cerr error, now time.Time) bool {
 	t := now.Unix()
 	ok := reached != sv.Reverse
 	sv.LastCheck = t
@@ -214,7 +182,6 @@ func (s *Server) recordService(sv *Service, rtt time.Duration, banner string, re
 		if !sv.Checked || !sv.Up {
 			sv.Checked, sv.Up, sv.Since = true, true, t
 		}
-		s.loc.next[sv.ID] = now.Add(time.Duration(sv.Interval) * time.Second)
 	} else {
 		sv.Fails++
 		if reached {
@@ -225,10 +192,10 @@ func (s *Server) recordService(sv *Service, rtt time.Duration, banner string, re
 		if sv.Fails > sv.Retries && (!sv.Checked || sv.Up) {
 			sv.Checked, sv.Up, sv.Since = true, false, t
 		}
-		s.loc.next[sv.ID] = now.Add(svcRetryEvery)
 	}
 	sv.Hist = addHist(sv.Hist, ok, t)
 	s.markChecks()
+	return ok
 }
 
 type svcKey struct{ dev, svc string }
@@ -240,6 +207,9 @@ func (s *Server) dueServices(now time.Time) []svcKey {
 	known := map[string]bool{}
 	i := 0
 	for _, d := range s.st.st.Locals {
+		if d.Probe != "" {
+			continue // checked by a remote probe on its own schedule
+		}
 		for _, sv := range d.Services {
 			if sv.Paused {
 				continue
@@ -413,6 +383,10 @@ func (s *Server) handleServiceCreate(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, fmt.Sprintf("at most %d services per device", maxServices), http.StatusBadRequest)
 		return
 	}
+	if err := s.probeRoom(d); err != nil {
+		http.Error(w, err.Error(), http.StatusConflict)
+		return
+	}
 	sv := &Service{ID: "s_" + randHex(8), Interval: defaultSvcInterval, Retries: defaultSvcRetries, Timeout: defaultSvcTimeout}
 	if err := req.apply(sv); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
@@ -510,6 +484,11 @@ func (s *Server) handleServiceCheck(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "service not found", http.StatusNotFound)
 		return
 	}
+	if d.Probe != "" {
+		s.st.mu.Unlock()
+		http.Error(w, remoteCheckMsg, http.StatusConflict)
+		return
+	}
 	devID := d.ID
 	s.st.mu.Unlock()
 	s.loc.mu.Lock()
@@ -532,6 +511,8 @@ func (s *Server) handleServiceCheck(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, s.localDeviceView(d, true))
 }
+
+const remoteCheckMsg = "this device is checked by a remote probe agent, on that agent's own schedule: the master cannot check it now"
 
 const noCheckMsg = "nothing would be checked on this device any more: keep the ping or at least one service running"
 
@@ -560,6 +541,12 @@ func (s *Server) handleServicePause(w http.ResponseWriter, r *http.Request) {
 	if req.Paused && d.activeChecks() <= 1 {
 		http.Error(w, noCheckMsg, http.StatusConflict)
 		return
+	}
+	if !req.Paused {
+		if err := s.probeRoom(d); err != nil {
+			http.Error(w, err.Error(), http.StatusConflict)
+			return
+		}
 	}
 	sv.Paused = req.Paused
 	if !sv.Paused {

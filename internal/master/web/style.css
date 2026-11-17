@@ -239,6 +239,7 @@ ul.plainlist { margin: 0; padding-left: 18px; line-height: 1.8; }
 .dot.off { background: var(--red); box-shadow: 0 0 0 3px rgba(248, 113, 113, 0.15); }
 .dot.pend { background: var(--amber); box-shadow: 0 0 0 3px rgba(251, 191, 36, 0.15), 0 0 12px rgba(251, 191, 36, 0.6); animation: pulse 1.6s infinite; }
 .dot.pause { background: var(--blue); }
+.dot.unk { background: #94a3b8; box-shadow: 0 0 0 3px rgba(148, 163, 184, 0.15); }
 @keyframes pulse { 50% { opacity: 0.45; } }
 
 .spin { width: 14px; height: 14px; border-radius: 50%; border: 2px solid rgba(34, 211, 238, 0.25); border-top-color: var(--cyan); animation: rot .8s linear infinite; display: inline-block; flex: none; }
@@ -258,6 +259,7 @@ ul.plainlist { margin: 0; padding-left: 18px; line-height: 1.8; }
 .card.a-ok { --accent-bar: linear-gradient(90deg, #34d399, #22d3ee); }
 .card.a-off { --accent-bar: linear-gradient(90deg, #64748b, #475569); }
 .card.a-pend { --accent-bar: var(--grad); }
+.card.a-unk { --accent-bar: repeating-linear-gradient(90deg, #94a3b8 0 10px, transparent 10px 16px); }
 .card .top { display: flex; align-items: center; gap: 9px; }
 .card .name { font-weight: 600; font-size: 15px; letter-spacing: -0.01em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .card .os { color: var(--muted); font-size: 12.5px; margin-top: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -460,6 +462,7 @@ pre.legal { white-space: pre-wrap; word-wrap: break-word; font-size: 12.5px; lin
 .notice.red { border-color: rgba(248, 113, 113, 0.3); background: rgba(248, 113, 113, 0.06); color: #fca5a5; }
 .notice.blue { border-color: rgba(96, 165, 250, 0.3); background: rgba(96, 165, 250, 0.06); color: #93c5fd; }
 .notice.green { border-color: rgba(74, 222, 128, 0.3); background: rgba(74, 222, 128, 0.06); color: #86efac; }
+.notice.grey { border-color: rgba(148, 163, 184, 0.3); background: rgba(148, 163, 184, 0.06); color: #cbd5e1; }
 
 .bulkbar {
   position: sticky; bottom: 16px; margin-top: 18px; display: flex; align-items: center; gap: 10px; padding: 10px 14px;

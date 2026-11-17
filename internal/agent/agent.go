@@ -47,6 +47,7 @@ type Agent struct {
 	exitReq   chan int
 	agentKey  ed25519.PrivateKey
 	mode      Mode
+	pr        *prober
 }
 
 type Mode struct {
@@ -83,7 +84,7 @@ func (a *Agent) setMode(reportOnly bool) error {
 
 func Run(ctx context.Context, opt Options) (int, error) {
 	a := &Agent{opt: opt, running: map[string]bool{}, exitReq: make(chan int, 1),
-		feats: map[string]feature.Feature{}, locks: map[string]*sync.Mutex{}, heartbeat: 60}
+		feats: map[string]feature.Feature{}, locks: map[string]*sync.Mutex{}, heartbeat: 60, pr: newProber()}
 	for _, f := range features() {
 		info := f.Info()
 		a.feats[info.Name] = f
@@ -122,6 +123,8 @@ func Run(ctx context.Context, opt Options) (int, error) {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	go a.out.loop(ctx)
+	go a.pr.loop(ctx)
+	go a.probeSendLoop(ctx)
 	go a.pollLoop(ctx)
 
 	log.Printf("coremon agent %s running as %s, master %s", opt.Version, a.id.AgentID, a.cfg.MasterURL)
@@ -187,6 +190,7 @@ func (a *Agent) pollLoop(ctx context.Context) {
 		var resp proto.PollResponse
 
 		timeout := time.Duration(a.heartbeat+30) * time.Second
+		rep, taken := a.pr.take(probeBatch, time.Now())
 		err := a.cl.postJSON(ctx, "/api/agent/poll", proto.PollRequest{
 			Protocol:    proto.ProtocolVersion,
 			CoreVersion: a.opt.Version,
@@ -195,8 +199,10 @@ func (a *Agent) pollLoop(ctx context.Context) {
 			Running:     a.runningIDs(),
 			ReportOnly:  a.reportOnly(),
 			Pins:        pinsNow(a.cl),
+			Probe:       &rep,
 		}, &resp, timeout)
 		if err != nil {
+			a.pr.putBack(taken)
 			if ctx.Err() != nil {
 				return
 			}
@@ -253,7 +259,7 @@ func (a *Agent) pollLoop(ctx context.Context) {
 }
 
 func immediate(t string) bool {
-	return t == proto.CmdSetMode || t == proto.CmdSetPins || t == proto.CmdPing
+	return t == proto.CmdSetMode || t == proto.CmdSetPins || t == proto.CmdPing || t == proto.CmdProbeList || t == proto.CmdProbeClear
 }
 
 func (a *Agent) claim(id string) bool {
@@ -372,6 +378,21 @@ func (a *Agent) execute(ctx context.Context, c proto.Command) {
 				logf("changes allowed")
 			}
 		}
+	case proto.CmdProbeList:
+		// Allowed in report-only mode too: probing only looks at the network.
+		var l proto.ProbeList
+		if err = json.Unmarshal(c.Params, &l); err == nil {
+			err = a.pr.setList(l, time.Now())
+		}
+		if err == nil {
+			v, n := a.pr.version()
+			data, _ = json.Marshal(proto.ProbeAck{Version: v, Checks: n})
+			logf("check list %s: %d check(s)", shortVer(v), n)
+		}
+	case proto.CmdProbeClear:
+		a.pr.clear()
+		data, _ = json.Marshal(proto.ProbeAck{})
+		logf("check list cleared; waiting for a new one")
 	case proto.CmdCoreUpdate:
 		err = selfUpdate(ctx, a.cl, a.id.SigningKey, c.Artifact, logf)
 		if err == nil {
@@ -408,6 +429,16 @@ func (a *Agent) execute(ctx context.Context, c proto.Command) {
 	delete(a.running, c.ID)
 	a.mu.Unlock()
 	after()
+}
+
+func shortVer(v string) string {
+	if v == "" {
+		return "(empty)"
+	}
+	if len(v) > 8 {
+		return v[:8]
+	}
+	return v
 }
 
 const exitRestart = 75
