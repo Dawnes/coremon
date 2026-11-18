@@ -346,7 +346,10 @@ ul.plainlist { margin: 0; padding-left: 18px; line-height: 1.8; }
 /* An offline device: a word that flashes red and yellow. */
 .flash-off { font-weight: 700; text-transform: uppercase; letter-spacing: 0.04em; color: var(--red); animation: flash-off 1s steps(1, end) infinite; }
 @keyframes flash-off { 50% { color: var(--amber); } }
-@media (prefers-reduced-motion: reduce) { .flash-off { animation: none; } }
+/* The same on the red dot of an offline or down device on the Overview cards. */
+.card .dot.off { animation: flash-dot 1s steps(1, end) infinite; }
+@keyframes flash-dot { 50% { background: var(--amber); box-shadow: 0 0 0 3px rgba(251, 191, 36, 0.2); } }
+@media (prefers-reduced-motion: reduce) { .flash-off, .card .dot.off { animation: none; } }
 /* Settings > General: blocks side by side on wide screens, stacked on narrow ones. */
 .setgrid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; align-items: start; }
 .setgrid > .panel { min-width: 0; }
