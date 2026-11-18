@@ -137,7 +137,8 @@ type Agent struct {
 	// Maint: in maintenance; no automatic jobs, no failures shown.
 	Maint *Maintenance `json:"maint,omitempty"`
 	// Checks: services (and optionally a ping) checked from outside, by the
-	// master or another agent; nil until the first service is added.
+	// master or another agent; nil until a service is added or the address
+	// and checker are set.
 	Checks *Checks `json:"checks,omitempty"`
 
 	ProbeCap    bool                       `json:"-"` // the agent can probe agentless devices

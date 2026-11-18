@@ -609,7 +609,6 @@ func (s *Server) handleServiceDelete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	d.Services = keep
-	s.tidy(d)
 	s.st.markDirty()
 	s.markChecks()
 	s.writeDevAudit(r, "device.service_removed", d.ID, d.Name, gone.describe())

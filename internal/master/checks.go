@@ -2,8 +2,9 @@ package master
 
 // Checks: what is checked on a device from outside, by the master or by a
 // remote probe agent: the ping and the services. An agentless device always
-// has them; an agent device once a service is added on its Services tab
-// (its own status still comes from its agent's contact). Both kinds share
+// has them; an agent device once a service is added on its Services tab or
+// its address and checker are set (its own status still comes from its
+// agent's contact). They stay when its last service is removed. Both kinds share
 // the scheduling, the remote probes, the history and the website views.
 
 import (
@@ -133,14 +134,6 @@ func (d *checkDev) minChecks() int {
 	return 0
 }
 
-// tidy drops the checks block of an agent device that checks nothing any
-// more (no services, no ping). Caller holds s.st.mu.
-func (s *Server) tidy(d *checkDev) {
-	if d.Agent != nil && len(d.Services) == 0 && d.PingMode == pingRemoved {
-		d.Agent.Checks = nil
-	}
-}
-
 // devView: the device's own view (after a change), as the website needs it.
 func (s *Server) devView(d *checkDev, full bool) agentView {
 	if d.Local != nil {
@@ -192,10 +185,11 @@ func (s *Server) handleAgentChecks(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, a.Name+" is waiting for approval", http.StatusConflict)
 		return
 	}
+	// No checks yet: the settings are stored first, for the services to come.
 	c := a.Checks
-	if c == nil {
-		http.Error(w, "add a service first", http.StatusConflict)
-		return
+	isNew := c == nil
+	if isNew {
+		c = &Checks{PingMode: pingRemoved}
 	}
 	probe := c.Probe
 	if req.Probe != nil && *req.Probe != c.Probe {
@@ -214,6 +208,11 @@ func (s *Server) handleAgentChecks(w http.ResponseWriter, r *http.Request) {
 	addr := c.Address
 	if req.Address != nil {
 		addr = *req.Address
+	}
+	if addr == "" {
+		if l := agentAddresses(a); len(l) > 0 {
+			addr = l[0]
+		}
 	}
 	ip, code, err := s.checkAddress(addr, a.ID, probe)
 	if err != nil {
@@ -245,6 +244,9 @@ func (s *Server) handleAgentChecks(w http.ResponseWriter, r *http.Request) {
 		for _, sv := range c.Services {
 			s.resetService(sv)
 		}
+	}
+	if isNew {
+		a.Checks = c
 	}
 	s.st.markDirty()
 	s.markChecks()

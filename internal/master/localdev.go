@@ -948,7 +948,6 @@ func (s *Server) handlePingState(w http.ResponseWriter, r *http.Request) {
 	s.loc.mu.Lock()
 	delete(s.loc.next, d.ID)
 	s.loc.mu.Unlock()
-	s.tidy(d)
 	s.st.markDirty()
 	s.markChecks()
 	s.writeDevAudit(r, action, d.ID, d.Name, "")

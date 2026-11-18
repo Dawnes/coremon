@@ -44,10 +44,11 @@ func TestAgentDeviceServices(t *testing.T) {
 	if code, _ := c.do("POST", "/api/ui/locals/a_new/services", `{"preset":"ssh"}`); code != 409 {
 		t.Error("service on a pending agent")
 	}
-	if code, _ := c.do("POST", "/api/ui/agents/a_web/checks", `{"address":"10.1.0.6"}`); code != 409 {
-		t.Error("checks settings before any service")
+	// Address and checker can be set before any service: the first usable
+	// address (IPv4 first) by default, checked by the master, no ping.
+	if code, b := c.do("POST", "/api/ui/agents/a_web/checks", `{}`); code != 200 || a.Checks == nil || a.Checks.Address != "10.1.0.5" || len(a.Checks.Services) != 0 {
+		t.Fatalf("checks settings before any service: %d %s", code, b)
 	}
-	// The first service: the first usable address (IPv4 first), checked by the master, no ping.
 	code, body := c.do("POST", "/api/ui/locals/a_web/services", `{"preset":"ssh"}`)
 	var v agentView
 	json.Unmarshal([]byte(body), &v)
@@ -103,19 +104,21 @@ func TestAgentDeviceServices(t *testing.T) {
 		t.Errorf("checks.dat: %s", js)
 	}
 
-	// All services gone and no ping: the checks block goes too (nothing is checked).
+	// All services gone: the address and checker stay; the probe keeps the
+	// device until another checker is chosen.
 	for len(a.Checks.Services) > 0 {
 		if code, b := c.do("POST", "/api/ui/locals/a_web/services/"+a.Checks.Services[0].ID+"/delete", ""); code != 200 {
 			t.Fatalf("delete: %d %s", code, b)
 		}
-		if a.Checks == nil {
-			break
-		}
 	}
-	if a.Checks != nil {
-		t.Error("empty checks kept")
+	if a.Checks == nil || a.Checks.Probe != "a_p" {
+		t.Fatal("settings lost with the last service")
 	}
+	if code, _ := c.do("POST", "/api/ui/agents/a_p/probe/enabled", `{"on":false}`); code != 409 {
+		t.Error("probe switched off while still chosen")
+	}
+	c.do("POST", "/api/ui/agents/a_web/checks", `{"probe":""}`)
 	if code, _ := c.do("POST", "/api/ui/agents/a_p/probe/enabled", `{"on":false}`); code != 200 {
-		t.Error("probe switch-off blocked by a removed device")
+		t.Error("probe switch-off blocked")
 	}
 }

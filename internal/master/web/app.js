@@ -1618,8 +1618,8 @@ function AgentPage([id, tab]) {
     const L = a.checks, out = L?.probe && L.probe.state !== 'ok' ? L.probe : null;
     const head = html`<div class="row" style="margin-bottom:12px"><span class="muted small">${L
       ? html`Checked on <span class="mono">${L.address}</span> ${L.probe ? html`by the agent <a href="#/device/${L.probe.id}"><b>${L.probe.name}</b></a>, on its own schedule` : 'from the master'}.`
-      : 'Services of this device checked from outside, by the master or another agent, as for an agentless device. The device\'s own status still comes from its agent.'} ${SVC_HOW}</span>
-      <span class="spacer"></span>${ifChange(html`${L ? html`<button class="btn sm" data-act="checks-edit">${icon('edit')} Address and checker</button>` : ''}<button class="btn primary sm" data-act="svc-add">${icon('plus')} Add service</button>`)}</div>
+      : 'Services of this device checked from outside, by the master or another agent, as for an agentless device. The device\'s own status still comes from its agent.'}</span>
+      <span class="spacer"></span>${ifChange(html`<button class="btn sm" data-act="checks-edit">${icon('edit')} Address and checker</button><button class="btn primary sm" data-act="svc-add">${icon('plus')} Add service</button>`)}</div>
       ${out && !a.maint ? html`<div class="notice grey"><b>Unknown – ${out.note}.</b> The shown results are the last ones received from <a href="#/device/${out.id}">${out.name}</a>.</div>` : ''}`;
     return html`${head}${servicesTable(st, L)}`;
   }
@@ -1964,8 +1964,10 @@ function serviceModal(dev, svc, presets, lim, methods, done) {
 async function checksModal(a, done) {
   let pa = { agents: [], max: 200 };
   try { pa = await GET('probe-agents'); } catch { /* only Master can be chosen */ }
-  const L = a.checks, cur = L.probe?.id || '';
-  const addrs = a.check_addrs || [], other = !addrs.includes(L.address);
+  const addrs = a.check_addrs || [];
+  // No checks yet: the defaults, stored on Save for the services to come.
+  const L = a.checks || { address: addrs[0] || '', probe: null }, cur = L.probe?.id || '';
+  const other = !addrs.includes(L.address);
   const agents = pa.agents.filter((p) => p.id !== a.id); // never its own agent
   const opts = html`<option value="" ${cur ? '' : 'selected'}>Master</option>${agents.map((p) => html`<option value="${p.id}" ${cur === p.id ? 'selected' : ''} ${p.note && cur !== p.id ? 'disabled' : ''}>${p.name}${p.note ? ` (${p.note})` : !p.online ? ' (offline)' : ` (${p.checks} of ${pa.max} checks)`}</option>`)}
     ${cur && !agents.some((p) => p.id === cur) ? html`<option value="${cur}" selected>${L.probe.name}</option>` : ''}`;
@@ -2031,7 +2033,7 @@ function LocalPage([id, tab]) {
           : html`<div class="dim small">No services</div>`}</div>`;
   }
   function servicesTab(a, L) {
-    const head = html`<div class="row" style="margin-bottom:12px"><span class="muted small">The ping and the services are checked ${L.probe ? html`by the agent <b>${L.probe.name}</b>, on its own schedule` : 'from the master'}. ${SVC_HOW}</span>
+    const head = html`<div class="row" style="margin-bottom:12px"><span class="muted small">The ping and the services are checked ${L.probe ? html`by the agent <b>${L.probe.name}</b>, on its own schedule` : 'from the master'}.</span>
       <span class="spacer"></span>${ifChange(html`<button class="btn primary sm" data-act="svc-add">${icon('plus')} Add service</button>`)}</div>`;
     return html`${head}${servicesTable(st, L)}`;
   }
@@ -2086,7 +2088,6 @@ function LocalPage([id, tab]) {
 
 // ---- the Services tab: ping and services, of agentless and agent devices ----
 
-const SVC_HOW = 'A TCP check only connects; an HTTPS check also asks the web server for the page (HEAD, or GET when that fails). Nothing is logged in to.';
 function pauseBtn(paused, act, extra) {
   return html`<button class="btn ghost sm iconbtn" data-act="${act}" ${raw(extra)} title="${paused ? 'Resume: check it again' : 'Pause: stop checking it for now'}">${icon(paused ? 'play' : 'pause')}</button>`;
 }
