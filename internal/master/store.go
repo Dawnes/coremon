@@ -31,6 +31,8 @@ type Settings struct {
 	// TFAMode: "" always ask the 2FA code, "untrusted" not from TFATrusted.
 	TFAMode    string   `json:"tfa_mode,omitempty"`
 	TFATrusted []string `json:"tfa_trusted,omitempty"`
+	// TFANever: never trusted, also inside a trusted network (always wins).
+	TFANever []string `json:"tfa_never,omitempty"`
 }
 
 var osInfoChoices = []int{3, 14, 30, 90}
@@ -83,6 +85,11 @@ func (s *Settings) normalize() {
 		s.TFATrusted = nil
 	} else {
 		s.TFATrusted = nets
+	}
+	if nets, err := parseNever(strings.Join(s.TFANever, ",")); err != nil {
+		s.TFANever = nil
+	} else {
+		s.TFANever = nets
 	}
 	if s.TFAMode != tfaUntrusted || len(s.TFATrusted) == 0 {
 		s.TFAMode = tfaAlways

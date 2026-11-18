@@ -23,6 +23,7 @@ type settingsBlock struct {
 	MasterURL          string `json:"master_url"`
 	TFAMode            string `json:"tfa_mode"`
 	TFATrusted         string `json:"tfa_trusted"`
+	TFANever           string `json:"tfa_never"`
 	OSInfoDays         int    `json:"os_info_days"`
 	VulnDays           int    `json:"vuln_days"`
 	GitHubRepo         string `json:"github_repo"`
@@ -37,7 +38,7 @@ func (s *Server) handleSettingsBlock(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	bad := func(msg string) { http.Error(w, msg, http.StatusBadRequest) }
-	var nets []string
+	var nets, never []string
 	switch block {
 	case "agents":
 		if req.CheckIntervalHours < 1 || req.CheckIntervalHours > 168 {
@@ -65,6 +66,10 @@ func (s *Server) handleSettingsBlock(w http.ResponseWriter, r *http.Request) {
 		var err error
 		if nets, err = parseTrusted(req.TFATrusted); err != nil {
 			bad(err.Error())
+			return
+		}
+		if never, err = parseNever(req.TFANever); err != nil {
+			bad("never trust: " + err.Error())
 			return
 		}
 		if len(nets) == 0 {
@@ -113,7 +118,7 @@ func (s *Server) handleSettingsBlock(w http.ResponseWriter, r *http.Request) {
 		set.CheckIntervalHours, set.HeartbeatSec = req.CheckIntervalHours, req.HeartbeatSec
 		detail = fmt.Sprintf("heartbeat=%ds check=%dh min-agent=%s", set.HeartbeatSec, set.CheckIntervalHours, set.MinAgentVersion)
 	case "access":
-		set.UIPort, set.MasterURL, set.TFAMode, set.TFATrusted = req.UIPort, req.MasterURL, req.TFAMode, nets
+		set.UIPort, set.MasterURL, set.TFAMode, set.TFATrusted, set.TFANever = req.UIPort, req.MasterURL, req.TFAMode, nets, never
 		detail = fmt.Sprintf("port=%d url=%q", set.UIPort, set.MasterURL)
 	case "lookups":
 		set.OSInfoDays, set.VulnDays, set.GitHubRepo, set.GitHubSeeded = req.OSInfoDays, req.VulnDays, req.GitHubRepo, true
@@ -130,8 +135,9 @@ func (s *Server) handleSettingsBlock(w http.ResponseWriter, r *http.Request) {
 	if old.ProbeResultsShown != now.ProbeResultsShown {
 		s.audit.write(who, ip, "settings.probe_results", "", "show received probe results on Remote Probes: "+onOff(now.ProbeResultsShown))
 	}
-	if old.TFAMode != now.TFAMode || strings.Join(old.TFATrusted, ",") != strings.Join(now.TFATrusted, ",") {
-		s.audit.write(who, ip, "settings.2fa_trusted", "", fmt.Sprintf("ask 2FA code: %s; trusted networks: %s", tfaModeText(now.TFAMode), orNone(strings.Join(now.TFATrusted, ", "))))
+	if old.TFAMode != now.TFAMode || strings.Join(old.TFATrusted, ",") != strings.Join(now.TFATrusted, ",") || strings.Join(old.TFANever, ",") != strings.Join(now.TFANever, ",") {
+		s.audit.write(who, ip, "settings.2fa_trusted", "", fmt.Sprintf("ask 2FA code: %s; trusted networks: %s; never trust: %s", tfaModeText(now.TFAMode),
+			orNone(strings.Join(now.TFATrusted, ", ")), orNone(strings.Join(now.TFANever, ", "))))
 	}
 	if old.OSInfoDays != now.OSInfoDays {
 		s.kickOSInfo()
@@ -148,6 +154,9 @@ func (s *Server) handleSettingsBlock(w http.ResponseWriter, r *http.Request) {
 	if old.UIPort != now.UIPort && s.handler != nil {
 		s.applyUIPort(s.handler)
 	}
-	writeJSON(w, map[string]any{"settings": now, "next_purge": s.nextPurgeAt().Unix(), "ui_port_error": s.uiPortError(),
-		"client_ip": ip, "client_trusted": trustedIP(now, ip)})
+	res := map[string]any{"settings": now, "next_purge": s.nextPurgeAt().Unix(), "ui_port_error": s.uiPortError()}
+	for k, v := range tfaView(now, ip) {
+		res[k] = v
+	}
+	writeJSON(w, res)
 }

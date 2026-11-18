@@ -1552,7 +1552,7 @@ function AgentPage([id, tab]) {
     const f = a.facts, h = f.health;
     const kv = [
       ['Hostname', f.hostname], ['Operating system', osLabel(f)], ['Kernel', f.kernel], ['Architecture', `${f.os}/${f.arch}`],
-      ['Virtualization', f.virt], ['Uptime', a.online ? dur(f.uptime_sec) : 'offline'], ['CPUs', f.cpus], ['Memory (assigned)', bytes(f.mem_total)],
+      ['Virtualization', f.virt], ['Uptime', a.online ? dur(f.uptime_sec) : a.maint ? html`<span class="c-blue">not connected (maintenance)</span>` : html`<span class="flash-off">offline</span>`], ['CPUs', f.cpus], ['Memory (assigned)', bytes(f.mem_total)],
       ['IP addresses', (f.ips || []).join(', ')],
       ['IPv4 gateway', f.gateway ? f.gateway + (f.gateway_if ? ` (${f.gateway_if})` : '') : '—'],
       ['DNS servers', f.dns?.length ? f.dns.join(', ') + (f.dns_via ? ` (via ${f.dns_via})` : '') : '—'],
@@ -2797,8 +2797,11 @@ function SettingsGeneral() {
   }
   function meBox() {
     const m = st.me || {};
-    setHTML($('#tfa-me'), m.ip ? html`Your current address: <span class="mono">${m.ip}</span> – ${m.trusted ? html`<span class="badge ok xs">trusted</span>` : html`<span class="badge mute xs">not trusted</span>`}` : '');
+    setHTML($('#tfa-me'), m.ip ? html`Your current address: <span class="mono">${m.ip}</span> – ${m.trusted ? html`<span class="badge ok xs">trusted</span>` : html`<span class="badge mute xs">not trusted${m.never ? ' (never trust)' : ''}</span>`}` : '');
+    const u = m.unused || [];
+    setHTML($('#tfa-never-hint'), u.length ? html`<span class="c-amber">${u.join(', ')}</span> <span class="dim">${u.length === 1 ? 'is' : 'are'} not in a trusted network: no effect.</span>` : '');
   }
+  const meFrom = (x) => ({ ip: x.client_ip, trusted: x.client_trusted, never: x.client_never, unused: x.tfa_never_unused });
   function urlBox() {
     const d = st.d, auto = !st.url;
     const lbl = 'Master URL used in install commands';
@@ -2843,6 +2846,9 @@ function SettingsGeneral() {
             <label class="field">Trusted networks<input type="text" name="tfanets" value="${(s.tfa_trusted || []).join(', ')}" spellcheck="false" autocomplete="off" placeholder="none"></label>
             <div class="dim small">Comma separated, e.g. <span class="mono">192.168.5.0/24, 10.0.0.7/32, fd00::/64</span>. A single address is one host (/32). At most 20; none wider than /8 (IPv4) or /32 (IPv6).
               For users with 2FA on, a sign-in from a trusted network skips the code; the password is always needed. Turning 2FA off and downloading a backup still ask for the code.</div>
+            <label class="field">Never trust<input type="text" name="tfanever" value="${(s.tfa_never || []).join(', ')}" spellcheck="false" autocomplete="off" placeholder="none"></label>
+            <div class="dim small">Comma separated, e.g. <span class="mono">192.168.5.1, 10.8.0.0/24</span>. Never trusted, also when a trusted network above contains them: use it for a reverse proxy or VPN server, through which every sign-in would otherwise look trusted. At most 20.</div>
+            <div class="small" id="tfa-never-hint"></div>
             <div class="small" id="tfa-me"></div>`)}
         ${block('lookups', 'Online lookups', 'What the master fetches from the internet, and how often', html`
             <label class="field">Look up OS support dates<select name="osinfo">
@@ -2860,7 +2866,7 @@ function SettingsGeneral() {
             <div class="dim small">Activity › Remote Probes then also lists each batch of check results a remote probe sends, for 20 seconds, with the checks that failed. For all users.</div>`)}
         </div>`);
       st.d = d;
-      st.me = { ip: d.client_ip, trusted: d.client_trusted };
+      st.me = meFrom(d);
       meBox();
       const fa = form('access');
       const empty = () => !fa.tfanets.value.trim();
@@ -2920,14 +2926,15 @@ function SettingsGeneral() {
       'save-access': async (f) => {
         if (!f.tfanets.value.trim()) f.tfamode.value = '';
         const url = st.editing ? f.url.value.trim() : st.url;
-        const res = await POST('settings/access', { ui_port: +f.port.value, master_url: url, tfa_mode: f.tfamode.value, tfa_trusted: f.tfanets.value });
+        const res = await POST('settings/access', { ui_port: +f.port.value, master_url: url, tfa_mode: f.tfamode.value, tfa_trusted: f.tfanets.value, tfa_never: f.tfanever.value });
         const s = res.settings;
         st.url = s.master_url || '';
         st.editing = false;
         urlBox();
         f.tfamode.value = s.tfa_mode || '';
         f.tfanets.value = (s.tfa_trusted || []).join(', ');
-        st.me = { ip: res.client_ip, trusted: res.client_trusted };
+        f.tfanever.value = (s.tfa_never || []).join(', ');
+        st.me = meFrom(res);
         meBox();
         if (res.ui_port_error) toast(res.ui_port_error, 'err');
         else toast('Website & sign-in settings saved', 'ok');

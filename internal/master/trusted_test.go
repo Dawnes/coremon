@@ -35,6 +35,26 @@ func TestParseTrusted(t *testing.T) {
 	if trustedIP(set, "192.168.5.20") {
 		t.Error("trusted while always")
 	}
+
+	// Never trust: any width, and it always wins.
+	if n, err := parseNever("0.0.0.0/0, 192.168.5.1"); err != nil || len(n) != 2 {
+		t.Errorf("never: %v %v", n, err)
+	}
+	set = Settings{TFAMode: tfaUntrusted, TFATrusted: []string{"192.168.5.0/24"}, TFANever: []string{"192.168.5.1/32", "10.8.0.0/24", "192.168.0.0/16"}}
+	if trustedIP(set, "192.168.5.1") || !neverIP(set, "192.168.5.1") {
+		t.Error("never-trust address trusted")
+	}
+	set.TFANever = []string{"192.168.5.1/32", "10.8.0.0/24"}
+	if !trustedIP(set, "192.168.5.20") {
+		t.Error("other trusted address lost")
+	}
+	if u := neverUnused(set); len(u) != 1 || u[0] != "10.8.0.0/24" {
+		t.Errorf("unused: %v", u)
+	}
+	set.TFANever = []string{"192.168.0.0/16"} // wider than the trusted one: still has effect
+	if u := neverUnused(set); len(u) != 0 || trustedIP(set, "192.168.5.20") {
+		t.Errorf("wide never: %v", u)
+	}
 }
 
 func TestTrustedSignIn(t *testing.T) {
@@ -100,6 +120,18 @@ func TestTrustedSignIn(t *testing.T) {
 		if !acts[a] {
 			t.Errorf("no audit entry %s", a)
 		}
+	}
+
+	// Never trust wins over a wider trusted network.
+	if code, b := admin.do("POST", "/api/ui/settings/access", `{"ui_port":8443,"tfa_mode":"untrusted","tfa_trusted":"127.0.0.0/8","tfa_never":"127.0.0.1, 10.8.0.1"}`); code != 200 ||
+		!strings.Contains(b, `"client_never":true`) || !strings.Contains(b, `"tfa_never_unused":["10.8.0.1/32"]`) {
+		t.Fatalf("never save: %d %s", code, b)
+	}
+	if b := signIn(); !strings.Contains(b, "code_required") {
+		t.Errorf("never-trust address skipped the code: %s", b)
+	}
+	if code, _ := admin.do("POST", "/api/ui/settings/access", `{"ui_port":8443,"tfa_mode":"untrusted","tfa_trusted":"127.0.0.1","tfa_never":"nope"}`); code != 400 {
+		t.Error("bad never-trust entry accepted")
 	}
 
 	// Networks kept while Always; an empty list is always Always.

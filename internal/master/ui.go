@@ -697,8 +697,9 @@ func (s *Server) handleSettingsGet(w http.ResponseWriter, r *http.Request) {
 	vs := s.vulnStatus(s.vulnDays())
 	s.st.mu.Lock()
 	defer s.st.mu.Unlock()
-	ip := clientIP(r)
-	writeJSON(w, map[string]any{"settings": s.st.st.Settings, "client_ip": ip, "client_trusted": trustedIP(s.st.st.Settings, ip), "pin": s.currentPin(), "suggested_url": s.derivedURL(r), "index_url": url, "vulns": vs,
+	tv := tfaView(s.st.st.Settings, clientIP(r))
+	writeJSON(w, map[string]any{"settings": s.st.st.Settings, "client_ip": tv["client_ip"], "client_trusted": tv["client_trusted"],
+		"client_never": tv["client_never"], "tfa_never_unused": tv["tfa_never_unused"], "pin": s.currentPin(), "suggested_url": s.derivedURL(r), "index_url": url, "vulns": vs,
 		"os_info": s.osInfoStatus(s.st.st.Settings.OSInfoDays), "os_info_choices": osInfoChoices,
 		"vuln_choices":   vulnChoices,
 		"agent_versions": s.repo.coreVersions(), "min_agent": s.minAgent(),
