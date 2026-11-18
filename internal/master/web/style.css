@@ -240,6 +240,7 @@ ul.plainlist { margin: 0; padding-left: 18px; line-height: 1.8; }
 .dot.pend { background: var(--amber); box-shadow: 0 0 0 3px rgba(251, 191, 36, 0.15), 0 0 12px rgba(251, 191, 36, 0.6); animation: pulse 1.6s infinite; }
 .dot.pause { background: var(--blue); }
 .dot.unk { background: #94a3b8; box-shadow: 0 0 0 3px rgba(148, 163, 184, 0.15); }
+.dot.maint { background: var(--blue); box-shadow: 0 0 0 3px rgba(96, 165, 250, 0.25); }
 @keyframes pulse { 50% { opacity: 0.45; } }
 
 .spin { width: 14px; height: 14px; border-radius: 50%; border: 2px solid rgba(34, 211, 238, 0.25); border-top-color: var(--cyan); animation: rot .8s linear infinite; display: inline-block; flex: none; }
@@ -260,6 +261,9 @@ ul.plainlist { margin: 0; padding-left: 18px; line-height: 1.8; }
 .card.a-off { --accent-bar: linear-gradient(90deg, #64748b, #475569); }
 .card.a-pend { --accent-bar: var(--grad); }
 .card.a-unk { --accent-bar: repeating-linear-gradient(90deg, #94a3b8 0 10px, transparent 10px 16px); }
+.card.a-maint { --accent-bar: repeating-linear-gradient(90deg, var(--blue) 0 10px, transparent 10px 16px); }
+.big.maint { color: var(--blue); display: flex; align-items: center; }
+.big.maint svg { width: 32px; height: 32px; }
 .card .top { display: flex; align-items: center; gap: 9px; }
 .card .name { font-weight: 600; font-size: 15px; letter-spacing: -0.01em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .card .os { color: var(--muted); font-size: 12.5px; margin-top: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -338,6 +342,7 @@ ul.plainlist { margin: 0; padding-left: 18px; line-height: 1.8; }
 .fold.shut svg { transform: rotate(-90deg); }
 .gempty { padding: 18px; text-align: center; color: var(--dim); font-size: 12.5px; border: 1px dashed var(--line-hi); border-radius: var(--radius); }
 .c-amber { color: var(--amber); font-weight: 600; }
+.c-blue { color: var(--blue); font-weight: 600; }
 .c-red { color: var(--red); font-weight: 600; }
 .when { cursor: help; }
 .tag svg { width: 12px; height: 12px; vertical-align: -2px; }

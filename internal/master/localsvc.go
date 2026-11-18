@@ -207,8 +207,8 @@ func (s *Server) dueServices(now time.Time) []svcKey {
 	known := map[string]bool{}
 	i := 0
 	for _, d := range s.st.st.Locals {
-		if d.Probe != "" {
-			continue // checked by a remote probe on its own schedule
+		if d.Probe != "" || d.Maint != nil {
+			continue // checked by a remote probe on its own schedule, or in maintenance
 		}
 		for _, sv := range d.Services {
 			if sv.Paused {

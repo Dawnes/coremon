@@ -49,7 +49,7 @@ func (s *Server) probeList(agentID string) proto.ProbeList {
 	ls := s.st.st.Local
 	var devs []*LocalDevice
 	for _, d := range s.st.st.Locals {
-		if d.Probe == agentID {
+		if d.Probe == agentID && d.Maint == nil { // in maintenance: not checked
 			devs = append(devs, d)
 		}
 	}
@@ -138,8 +138,8 @@ func (s *Server) probeIntake(a *Agent, rep *proto.ProbeReport, now time.Time) {
 	svcs := map[string]*Service{}
 	svcDev := map[string]string{} // service ID -> device name
 	for _, d := range s.st.st.Locals {
-		if d.Probe != a.ID {
-			continue
+		if d.Probe != a.ID || d.Maint != nil {
+			continue // late results for a device in maintenance are dropped
 		}
 		pings[d.ID] = d
 		for _, sv := range d.Services {

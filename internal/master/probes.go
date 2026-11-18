@@ -157,6 +157,9 @@ func (s *Server) probeRequests(now int64, local map[string]bool) []probeRequest 
 		default:
 			continue
 		}
+		if a.Maint != nil && (p.State == "overdue" || p.State == "offline") {
+			p.State, p.Note = "maintenance", "the device is in maintenance"
+		}
 		if !j.done() && p.Note == "" {
 			switch j.Type {
 			case proto.CmdProbeList:
@@ -223,7 +226,7 @@ func (s *Server) overdueChecks(now int64, local map[string]bool) []probeRequest 
 	ls := s.st.st.Local
 	for _, d := range s.st.st.Locals {
 		a := s.st.st.Agents[d.Probe]
-		if d.Probe == "" || a == nil || onMaster(a, local) || !s.online(a, now) || a.ProbeHold != nil ||
+		if d.Probe == "" || d.Maint != nil || a == nil || onMaster(a, local) || !s.online(a, now) || a.ProbeHold != nil ||
 			a.ProbeVer == "" || a.ProbeVer != s.probeWanted(a.ID) {
 			continue
 		}

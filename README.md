@@ -27,9 +27,12 @@ as **agentless** devices: the master itself pings them and checks their services
   ping and per-service TCP checks (heartbeat, retries, timeout, reverse mode),
   with a 24-hour history and a graph of the ping's round-trip time. For a network
   the master cannot reach, an agent there can do the checks instead ("Checked by").
+* **Maintenance**: pause all checks of a device for 5 minutes up to 4 hours, or
+  until ended by hand; no automatic jobs run and no failures are shown meanwhile.
 * **Releases**: update the master and the agents from the website.
 * **Users**: administrators and read-only users, optional two-factor sign-in
-  with an authenticator app, and accounts can be locked.
+  with an authenticator app (optionally not asked from trusted networks), and
+  accounts can be locked.
 * **Activity**: every job, the upcoming scheduled tasks, the requests remote agents
   have not answered yet (optionally also the check results remote probes just sent),
   and an audit log of who did what.

@@ -129,8 +129,8 @@ func (s *Server) nextChecks(now time.Time) []upcomingCheck {
 	defer s.loc.mu.Unlock()
 	var out []upcomingCheck
 	for _, d := range s.st.st.Locals {
-		if d.Probe != "" {
-			continue // checked by a remote probe on its own schedule
+		if d.Probe != "" || d.Maint != nil {
+			continue // checked by a remote probe on its own schedule, or in maintenance
 		}
 		if d.pinging() {
 			if next, ok := s.loc.next[d.ID]; ok {

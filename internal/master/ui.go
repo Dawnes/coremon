@@ -33,6 +33,7 @@ type updatesSummary struct {
 }
 
 type agentView struct {
+	Maint        *Maintenance               `json:"maint,omitempty"` // in maintenance
 	ID           string                     `json:"id"`
 	Name         string                     `json:"name"`
 	GroupID      string                     `json:"group_id"`
@@ -70,6 +71,7 @@ func (s *Server) view(a *Agent, full bool) agentView {
 		ID: a.ID, Name: a.Name, GroupID: a.GroupID, Order: a.Order, Status: a.Status, Online: s.online(a, now),
 		LastSeen: a.LastSeen, EnrolledAt: a.EnrolledAt, CoreVersion: a.CoreVersion,
 		Facts: a.Facts, Removing: a.Removing, DesiredCore: a.DesiredCore, Features: []string{}, Monitor: "agent",
+		Maint: a.Maint,
 	}
 	v.Conflicts = s.agentConflicts(a)
 	v.CoreLatest = s.repo.coreLatest()
@@ -371,6 +373,10 @@ func (s *Server) handleCoreUpdate(w http.ResponseWriter, r *http.Request) {
 	if a == nil {
 		return
 	}
+	if s.maintOffline(a) {
+		http.Error(w, a.Name+maintOfflineMsg, http.StatusConflict)
+		return
+	}
 	if req.Version == "" {
 		req.Version = s.repo.coreLatest()
 	}
@@ -453,6 +459,10 @@ func (s *Server) handleActions(w http.ResponseWriter, r *http.Request) {
 		}
 		if a.Status != StatusActive && a.Status != StatusReportOnly {
 			errs = append(errs, a.Name+": agent is "+a.Status)
+			continue
+		}
+		if s.maintOffline(a) {
+			errs = append(errs, a.Name+maintOfflineMsg)
 			continue
 		}
 		f := a.feature(req.Feature)
@@ -687,7 +697,8 @@ func (s *Server) handleSettingsGet(w http.ResponseWriter, r *http.Request) {
 	vs := s.vulnStatus(s.vulnDays())
 	s.st.mu.Lock()
 	defer s.st.mu.Unlock()
-	writeJSON(w, map[string]any{"settings": s.st.st.Settings, "pin": s.currentPin(), "suggested_url": s.derivedURL(r), "index_url": url, "vulns": vs,
+	ip := clientIP(r)
+	writeJSON(w, map[string]any{"settings": s.st.st.Settings, "client_ip": ip, "client_trusted": trustedIP(s.st.st.Settings, ip), "pin": s.currentPin(), "suggested_url": s.derivedURL(r), "index_url": url, "vulns": vs,
 		"os_info": s.osInfoStatus(s.st.st.Settings.OSInfoDays), "os_info_choices": osInfoChoices,
 		"vuln_choices":   vulnChoices,
 		"agent_versions": s.repo.coreVersions(), "min_agent": s.minAgent(),
@@ -765,14 +776,13 @@ func (s *Server) handleSettingsSave(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	req.BackupSchedule = old.BackupSchedule // set on the Backups page
+	// Saved by the right-hand block (handleSettingsMore).
+	req.ProbeResultsShown, req.TFAMode, req.TFATrusted = old.ProbeResultsShown, old.TFAMode, old.TFATrusted
 	s.st.st.Settings = req
 	s.st.markDirty()
 	s.st.mu.Unlock()
-	s.audit.write(actor(r), clientIP(r), "settings.saved", "", fmt.Sprintf("check=%dh heartbeat=%ds retention=%dd port=%d url=%q repo=%q os-info=%dd min-agent=%s vulns=%dd probe-results=%s",
-		req.CheckIntervalHours, req.HeartbeatSec, req.RetentionDays, req.UIPort, req.MasterURL, req.GitHubRepo, req.OSInfoDays, req.MinAgentVersion, req.VulnDays, onOff(req.ProbeResultsShown)))
-	if old.ProbeResultsShown != req.ProbeResultsShown {
-		s.audit.write(actor(r), clientIP(r), "settings.probe_results", "", "show received probe results on Remote Probes: "+onOff(req.ProbeResultsShown))
-	}
+	s.audit.write(actor(r), clientIP(r), "settings.saved", "", fmt.Sprintf("check=%dh heartbeat=%ds retention=%dd port=%d url=%q repo=%q os-info=%dd min-agent=%s vulns=%dd",
+		req.CheckIntervalHours, req.HeartbeatSec, req.RetentionDays, req.UIPort, req.MasterURL, req.GitHubRepo, req.OSInfoDays, req.MinAgentVersion, req.VulnDays))
 	if old.OSInfoDays != req.OSInfoDays {
 		s.kickOSInfo()
 	}

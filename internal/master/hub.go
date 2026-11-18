@@ -537,6 +537,7 @@ func (s *Server) schedulerTick() {
 	s.st.mu.Lock()
 	defer s.st.mu.Unlock()
 	nowU := time.Now().Unix()
+	s.maintExpire(time.Now())
 	interval := int64(s.st.st.Settings.CheckIntervalHours) * 3600
 	// Update checks run for all systems at once, one round per interval.
 	round := nowU-s.st.st.CheckRoundAt >= interval
@@ -571,8 +572,8 @@ func (s *Server) schedulerTick() {
 		if !s.recentFailure(a.ID, proto.CmdSetMode, "", 2*time.Minute) {
 			s.syncMode(a, "scheduler")
 		}
-		if a.Status != StatusActive {
-			continue
+		if a.Status != StatusActive || a.Maint != nil {
+			continue // no automatic jobs during maintenance
 		}
 
 		// No results at all (new agent, or agents.dat lost): check it now

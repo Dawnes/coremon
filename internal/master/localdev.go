@@ -41,6 +41,8 @@ type LocalDevice struct {
 	Services  []*Service `json:"services,omitempty"`
 	// Probe: the agent that checks this device ("Checked by"); "" = the master.
 	Probe string `json:"probe,omitempty"`
+	// Maint: in maintenance; nothing is checked.
+	Maint *Maintenance `json:"maint,omitempty"`
 }
 
 const (
@@ -414,7 +416,7 @@ func (s *Server) localDeviceView(d *LocalDevice, full bool) agentView {
 	}
 	v := agentView{
 		ID: d.ID, Name: d.Name, GroupID: d.GroupID, Order: d.Order, Status: StatusActive, Monitor: "local",
-		Online: lv.Checked && lv.Up, LastSeen: lv.LastUp, EnrolledAt: d.AddedAt, Features: []string{},
+		Online: lv.Checked && lv.Up, LastSeen: lv.LastUp, EnrolledAt: d.AddedAt, Features: []string{}, Maint: d.Maint,
 	}
 	v.Facts.IPs = []string{d.Address}
 	v.Local = lv
@@ -611,7 +613,7 @@ func (s *Server) localLoop(stop <-chan struct{}) {
 		s.loc.mu.Lock()
 		dueSvc := s.dueServices(now)
 		for id, d := range s.st.st.Locals {
-			if !d.pinging() || d.Probe != "" {
+			if !d.pinging() || d.Probe != "" || d.Maint != nil {
 				continue
 			}
 			next, seen := s.loc.next[id]
@@ -627,7 +629,7 @@ func (s *Server) localLoop(stop <-chan struct{}) {
 			}
 		}
 		for id := range s.loc.next {
-			if d := s.st.st.Locals[id]; strings.HasPrefix(id, "l_") && (d == nil || !d.pinging() || d.Probe != "") {
+			if d := s.st.st.Locals[id]; strings.HasPrefix(id, "l_") && (d == nil || !d.pinging() || d.Probe != "" || d.Maint != nil) {
 				delete(s.loc.next, id)
 			}
 		}

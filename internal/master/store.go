@@ -28,6 +28,9 @@ type Settings struct {
 	BackupSchedule     string `json:"backup_schedule"`
 	// ProbeResultsShown: Remote Probes also lists result deliveries.
 	ProbeResultsShown bool `json:"probe_results_shown,omitempty"`
+	// TFAMode: "" always ask the 2FA code, "untrusted" not from TFATrusted.
+	TFAMode    string   `json:"tfa_mode,omitempty"`
+	TFATrusted []string `json:"tfa_trusted,omitempty"`
 }
 
 var osInfoChoices = []int{3, 14, 30, 90}
@@ -76,6 +79,14 @@ func (s *Settings) normalize() {
 	if !validSchedule(s.BackupSchedule) {
 		s.BackupSchedule = defaultSchedule
 	}
+	if nets, err := parseTrusted(strings.Join(s.TFATrusted, ",")); err != nil {
+		s.TFATrusted = nil
+	} else {
+		s.TFATrusted = nets
+	}
+	if s.TFAMode != tfaUntrusted || len(s.TFATrusted) == 0 {
+		s.TFAMode = tfaAlways
+	}
 }
 
 func clamp(v, lo, hi int) int {
@@ -116,6 +127,8 @@ type Agent struct {
 	// ProbeOn: an admin allowed the agent to act as a remote probe; only
 	// then is it offered under "Checked by". Off again only without checks.
 	ProbeOn bool `json:"probe_on,omitempty"`
+	// Maint: in maintenance; no automatic jobs, no failures shown.
+	Maint *Maintenance `json:"maint,omitempty"`
 
 	ProbeCap    bool                       `json:"-"` // the agent can probe agentless devices
 	ProbeVer    string                     `json:"-"` // the check list the agent runs

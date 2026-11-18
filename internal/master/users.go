@@ -191,14 +191,19 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 	s.sess.forgiveLogin(ip)
 	s.st.mu.Lock()
 	twoFA := u.TOTPSecret != ""
+	trusted := twoFA && trustedIP(s.st.st.Settings, ip)
 	s.st.mu.Unlock()
-	if twoFA {
+	if twoFA && !trusted {
 		writeJSON(w, map[string]any{"code_required": true, "ticket": s.tfa.newTicket(uid, ip, time.Now())})
 		return
 	}
 	s.setCookie(w, s.sess.create(uid))
 	s.signedInNow(uid, ip)
-	s.audit.write(name, ip, "login", "", "")
+	detail := ""
+	if trusted {
+		detail = "2FA skipped: trusted network"
+	}
+	s.audit.write(name, ip, "login", "", detail)
 	writeJSON(w, map[string]bool{"ok": true})
 }
 

@@ -516,7 +516,14 @@ function showMustChange() {
 
 const isLocal = (a) => a.monitor === 'local';
 // Down: an agent device that stopped reporting, or a local device that stopped answering.
-const isDown = (a) => (isLocal(a) ? a.local.checked && !a.local.up : !a.online && a.status !== 'pending');
+const isDown = (a) => !a.maint && (isLocal(a) ? a.local.checked && !a.local.up : !a.online && a.status !== 'pending');
+// Maintenance: nothing checked or started automatically, no failures shown.
+const hhmm = (ts) => new Date(ts * 1000).toTimeString().slice(0, 5);
+const maintUntil = (m) => (m.until ? `until ${hhmm(m.until)}` : 'until ended');
+const maintText = (m) => `in maintenance since ${hhmm(m.since)} by ${m.by}, ${maintUntil(m)}`;
+// During maintenance agent actions need a connected agent (not queued).
+const maintBlocked = (a) => !!a.maint && !a.online;
+const MAINT_OFF = 'In maintenance and the agent is not connected';
 const pctText = (x) => (x >= 1 ? '100%' : x >= 0.999 ? '99.9%' : (Math.floor(x * 1000) / 10).toFixed(1) + '%');
 const rttText = (us) => (us < 1000 ? '<1 ms' : us < 10000 ? (us / 1000).toFixed(1) + ' ms' : Math.round(us / 1000) + ' ms');
 // The remote probe of an agentless device, when it delivers no results
@@ -524,6 +531,7 @@ const rttText = (us) => (us < 1000 ? '<1 ms' : us < 10000 ? (us / 1000).toFixed(
 const probeOut = (a) => (isLocal(a) && a.local.probe && a.local.probe.state !== 'ok' ? a.local.probe : null);
 const unknownText = (p) => `unknown – ${p.note}`;
 function agentDot(a) {
+  if (a.maint) return html`<span class="dot maint" title="${maintText(a.maint)}"></span>`;
   if (isLocal(a)) {
     const L = a.local, p = probeOut(a);
     if (p) return html`<span class="dot unk" title="${unknownText(p)}"></span>`;
@@ -707,10 +715,11 @@ function Dashboard() {
   const matches = (a) => agentMatches(a, st.filter, st.q, st.data.groups);
   function localCard(a) {
     const L = a.local, p = probeOut(a);
-    const state = p ? 'unk' : !L.checked ? 'wait' : L.up ? 'up' : 'down';
+    const state = a.maint ? 'maint' : p ? 'unk' : !L.checked ? 'wait' : L.up ? 'up' : 'down';
     const svcDown = state === 'up' && L.svc_down > 0;
-    const accent = svcDown ? 'a-upd' : { unk: 'a-unk', wait: 'a-pend', up: 'a-ok', down: 'a-off' }[state];
-    const big = { unk: html`<div class="big dim">?</div><div class="biglbl">unknown<br>${p ? p.note.replace(/:.*/, '') : ''}</div>`,
+    const accent = svcDown ? 'a-upd' : { maint: 'a-maint', unk: 'a-unk', wait: 'a-pend', up: 'a-ok', down: 'a-off' }[state];
+    const big = { maint: html`<div class="big maint">${icon('pause')}</div><div class="biglbl">in maintenance<br>${a.maint ? maintUntil(a.maint) : ''}</div>`,
+      unk: html`<div class="big dim">?</div><div class="biglbl">unknown<br>${p ? p.note.replace(/:.*/, '') : ''}</div>`,
       wait: L.fails ? html`<div class="big some">?</div><div class="biglbl">no answer yet<br>${L.fails} of ${L.down_after} checks</div>`
       : L.last_error ? html`<div class="big sec" title="${L.last_error}">!</div><div class="biglbl">the master cannot<br>check it</div>`
       : html`<div class="big dim">—</div><div class="biglbl">waiting for<br>first check</div>`,
@@ -722,7 +731,7 @@ function Dashboard() {
         <div class="top">${ifChange(html`<span class="grip" title="Drag to reorder or move to another group">${icon('grip')}</span>`)}${agentDot(a)}
           <div style="min-width:0"><div class="name">${a.name}</div><div class="os">Agentless${L.probe ? html` · via ${L.probe.name}` : ''}</div><div class="os"><span class="ip">${L.address}</span></div></div></div>
         <div class="mid">${big}<div class="badges">${uptime}</div></div>
-        <div class="inforow"><span class="uptime">${icon('clock')}${state === 'unk' ? 'no results now' : state === 'wait' ? (L.fails ? 'not decided yet' : 'not checked yet') : `${L.up ? 'up' : 'down'} ${dur(now() - L.since)}`}</span><span class="spacer"></span>${state === 'up' && L.ping && L.rtt_us ? html`<span class="tag mono">${rttText(L.rtt_us)}</span>` : ''}</div>
+        <div class="inforow"><span class="uptime">${icon('clock')}${state === 'maint' ? 'no checks now' : state === 'unk' ? 'no results now' : state === 'wait' ? (L.fails ? 'not decided yet' : 'not checked yet') : `${L.up ? 'up' : 'down'} ${dur(now() - L.since)}`}</span><span class="spacer"></span>${state === 'up' && L.ping && L.rtt_us ? html`<span class="tag mono">${rttText(L.rtt_us)}</span>` : ''}</div>
         <div class="foot"><span>${L.last_check ? when(L.last_check, 'checked ') : 'waiting'}</span></div>
       </div>`;
   }
@@ -732,13 +741,16 @@ function Dashboard() {
     const f = a.facts;
     let accent = 'a-ok';
     if (a.status === 'pending') accent = 'a-pend';
+    else if (a.maint) accent = 'a-maint';
     else if (a.below_min) accent = 'a-upd';
     else if (!a.online) accent = 'a-off';
     else if (u?.security) accent = 'a-sec';
     else if (u?.total) accent = 'a-upd';
     const selectable = a.status === 'active' && !a.below_min && canChange();
     let mid;
-    if (a.status === 'pending') {
+    if (a.maint) {
+      mid = html`<div class="mid"><div class="big maint">${icon('pause')}</div><div class="biglbl">in maintenance<br>${maintUntil(a.maint)}</div><div class="badges">${updBadges(a)}</div></div>`;
+    } else if (a.status === 'pending') {
       mid = html`<div class="mid"><div><div class="biglbl">Waiting for approval</div><div class="dim small">enrolled ${when(a.enrolled_at)}</div></div>
         <div class="badges">${ifChange(html`<button class="btn primary sm" data-act="approve" data-id="${a.id}">${icon('check')} Approve</button>`)}</div></div>`;
     } else if (a.below_min) {
@@ -758,7 +770,7 @@ function Dashboard() {
             : html`<div class="os">${osLabel(f)} · ${f.arch || '?'} · ${f.virt || ''}</div><div class="os">${ipLabel(f)}</div>`}</div>
           ${selectable ? html`<input type="checkbox" class="selbox" data-act="sel" data-id="${a.id}" ${st.sel.has(a.id) ? 'checked' : ''} title="Select">` : ''}</div>
         ${mid}
-        ${a.status !== 'pending' ? html`<div class="inforow"><span class="uptime" title="${a.below_min ? '' : lastReboot(a)}">${icon('clock')}${!a.online ? 'offline' : a.below_min ? 'online' : 'up ' + dur(f.uptime_sec)}</span>${healthBadges(a)}<span class="spacer"></span>${verPill(a)}</div>` : ''}
+        ${a.status !== 'pending' ? html`<div class="inforow"><span class="uptime" title="${a.below_min ? '' : lastReboot(a)}">${icon('clock')}${!a.online ? (a.maint ? 'not connected' : 'offline') : a.below_min ? 'online' : 'up ' + dur(f.uptime_sec)}</span>${a.maint ? '' : healthBadges(a)}<span class="spacer"></span>${verPill(a)}</div>` : ''}
         <div class="foot">
           ${a.busy ? html`<span class="spin"></span><span>${a.busy} job${a.busy > 1 ? 's' : ''}</span>` : html`<span>${a.online ? (u ? when(u.checked_at, 'checked ') : 'online') : a.status === 'pending' ? '' : when(a.last_seen, 'seen ')}</span>`}
         </div>
@@ -802,7 +814,10 @@ function Dashboard() {
     let svcTotal = 0, svcOK = 0, svcDown = 0, devClean = 0;
     for (const a of active) {
       let t = 0, ok = 0, down = 0;
-      if (!isLocal(a)) {
+      if (a.maint) {
+        // In maintenance: counts, but not as OK and not as down.
+        t = isLocal(a) ? (a.local.ping && a.local.ping_info ? 1 : 0) + a.local.svc_total : 1;
+      } else if (!isLocal(a)) {
         t = 1;
         if (a.online) ok = 1; else down = 1;
       } else {
@@ -827,7 +842,7 @@ function Dashboard() {
     setPending(pending);
     let oldest = null, anyOffline = false, anyUnchecked = false;
     for (const a of A) {
-      if (a.status !== 'active' || a.below_min || isLocal(a)) continue;
+      if (a.status !== 'active' || a.below_min || isLocal(a) || a.maint) continue;
       const ts = a.online ? a.updates?.checked_at : a.last_seen;
       if (!a.online) anyOffline = true;
       if (a.online && !ts && hasUpdates(a)) anyUnchecked = true;
@@ -1026,6 +1041,7 @@ const clipText = (s, n) => (s && s.length > n ? s.slice(0, n - 1).trimEnd() + '�
 function healthCell(a) {
   const h = a.facts?.health;
   if (!h || h.failed_count < 0) return html`<span class="dim">—</span>`;
+  if (a.maint) return html`<span class="dim">maintenance</span>`;
   const main = h.failed_count > 0
     ? html`<span class="badge sec xs" title="Failed services: ${(h.failed || []).join(', ')}${h.failed_count > (h.failed || []).length ? ', …' : ''}">${h.failed_count} failed</span>`
     : html`<span class="badge ok xs">ok</span>`;
@@ -1037,7 +1053,7 @@ function DeviceList() {
   lastDashSub = 'devices';
   const st = { filter: 'all', q: '', data: null, sort: 'name', dir: 1 };
   const byText = (x, y) => String(x).localeCompare(String(y), undefined, { numeric: true, sensitivity: 'base' });
-  const statusText = (a) => (isLocal(a) ? (probeOut(a) ? 'unknown' : !a.local.checked ? 'waiting' : a.local.up ? (a.local.svc_down ? `${a.local.svc_down} service${a.local.svc_down === 1 ? '' : 's'} down` : 'online') : 'down')
+  const statusText = (a) => (a.maint ? 'maintenance' : isLocal(a) ? (probeOut(a) ? 'unknown' : !a.local.checked ? 'waiting' : a.local.up ? (a.local.svc_down ? `${a.local.svc_down} service${a.local.svc_down === 1 ? '' : 's'} down` : 'online') : 'down')
     : a.status === 'pending' ? 'pending' : a.below_min ? 'update required' : !a.online ? 'offline' : a.status === 'report_only' ? 'report only' : 'online');
   const lastTs = (a) => (isLocal(a) ? a.local.last_check || 0 : a.online ? a.updates?.checked_at || 0 : a.last_seen || 0);
   const healthN = (a) => (a.facts?.health?.failed_count > 0 ? 2 : 0) + (a.facts?.health?.auto_updates === 'on' ? 1 : 0);
@@ -1062,6 +1078,7 @@ function DeviceList() {
     return st.dir * (c || byText(x.name, y.name));
   }
   function last(a) {
+    if (a.maint) return html`<span class="c-blue">maintenance</span><span class="dim">, ${maintUntil(a.maint)}</span>`;
     if (isLocal(a)) {
       const L = a.local, p = probeOut(a);
       if (p) return html`<span class="dim">${unknownText(p)}</span>`;
@@ -1076,7 +1093,7 @@ function DeviceList() {
   function row(a) {
     const u = a.updates, o = a.os_support, f = a.facts;
     return html`<tr>
-      <td class="nowrap" title="${statusText(a)}${a.below_min ? ` (agent ${a.core_version}, lowest allowed ${a.min_agent})` : ''}">${agentDot(a)}${statusText(a) === 'online' ? '' : html` <span class="small ${statusText(a) === 'unknown' ? 'dim' : a.status === 'pending' || a.status === 'report_only' || a.below_min || statusText(a) === 'waiting' || statusText(a).includes('service') ? 'c-amber' : 'c-red'}">${statusText(a)}</span>`}</td>
+      <td class="nowrap" title="${statusText(a)}${a.below_min ? ` (agent ${a.core_version}, lowest allowed ${a.min_agent})` : ''}">${agentDot(a)}${statusText(a) === 'online' ? '' : html` <span class="small ${a.maint ? 'c-blue' : statusText(a) === 'unknown' ? 'dim' : a.status === 'pending' || a.status === 'report_only' || a.below_min || statusText(a) === 'waiting' || statusText(a).includes('service') ? 'c-amber' : 'c-red'}">${statusText(a)}</span>`}</td>
       <td class="nowrap"><a href="#/device/${a.id}"><b>${a.name}</b></a></td>
       <td class="opt muted">${groupName(a.group_id)}</td>
       <td class="opt small nowrap">${(f.ips || [])[0] || ''}</td>
@@ -1211,6 +1228,48 @@ async function pingModal(a) {
   { acts: { close: () => closeModal(), job: () => openJob(p.job_id) } });
 }
 
+// Maintenance button and notice, on both device pages.
+function maintButton(a) {
+  return ifChange(a.maint
+    ? html`<button class="btn primary sm" data-act="maint-end" title="Restore all checks now">${icon('play')} End Maintenance</button>`
+    : html`<button class="btn sm" data-act="maint-start" title="Pause all checks for a while; no failures are reported">${icon('pause')} Maintenance</button>`);
+}
+function maintNotice(a) {
+  if (!a.maint) return '';
+  const m = a.maint;
+  return html`<div class="notice blue"><b>In maintenance</b> since ${hhmm(m.since)} by ${m.by}, ${m.until ? `until ${hhmm(m.until)} (ends by itself)` : 'until ended by hand'}.
+    <span class="small">${isLocal(a)
+      ? `No checks run${a.local.probe ? ` (also not on ${a.local.probe.name})` : ''} and no failures are shown.`
+      : html`No automatic jobs run and no failures are shown. Actions on the device work only while the agent is connected${a.online ? '' : html` — <b>it is not connected now</b>`}.`}</span></div>`;
+}
+async function maintStart(a, done) {
+  openModal(html`<h3>Maintenance for ${a.name}</h3>
+    <form class="form" data-submit="go">
+      <div class="muted small">${isLocal(a)
+        ? `The ping and all services stop${a.local.probe ? `, also on ${a.local.probe.name}` : ''}, and no failures are shown.`
+        : 'No automatic jobs run (waiting ones are cancelled) and no failures are shown. Your own actions stay possible while the agent is connected.'}</div>
+      <label class="field">How long<select name="min">
+        <option value="5">5 minutes</option><option value="30">30 minutes</option><option value="60" selected>1 hour</option>
+        <option value="240">4 hours</option><option value="0">Manual (until ended)</option></select></label>
+      <div class="actions"><button type="button" class="btn ghost" data-act="cancel">Cancel</button><button class="btn primary">${icon('pause')} Start maintenance</button></div>
+    </form>`, {
+    acts: {
+      cancel: () => closeModal(),
+      go: async (f) => {
+        await POST(`devices/${a.id}/maintenance`, { minutes: +f.min.value });
+        closeModal();
+        toast(`${a.name}: maintenance started`, 'ok');
+        done();
+      },
+    },
+  });
+}
+async function maintEnd(a, done) {
+  await POST(`devices/${a.id}/maintenance/end`);
+  toast(`${a.name}: maintenance ended — checks run again`, 'ok');
+  done();
+}
+
 function AgentPage([id, tab]) {
   const st = { tab: ['updates', 'jobs', 'system', 'apps'].includes(tab) ? tab : 'system', sel: new Set(), data: null, appsAll: false };
   const upd = () => st.data?.agent?.state?.updates || null;
@@ -1229,8 +1288,10 @@ function AgentPage([id, tab]) {
         ${a.status === 'active' && !a.below_min && canChange() ? html`<button class="btn sm" data-act="report-only">${icon('pause')} Report only</button>` : ''}
         ${a.status === 'report_only' && !a.below_min && canChange() ? html`<button class="btn sm" data-act="allow-changes">${icon('play')} Allow changes</button>` : ''}
         ${a.status === 'active' && !a.below_min && canChange() ? html`<button class="btn warn sm" data-act="reboot" ${a.online ? '' : 'disabled'}
-          title="${a.online ? 'Reboot this device' : 'The device is offline'}">${icon('refresh')} Reboot</button>` : ''}
+          title="${a.online ? 'Reboot this device' : maintBlocked(a) ? MAINT_OFF : 'The device is offline'}">${icon('refresh')} Reboot</button>` : ''}
+        ${a.status !== 'pending' ? maintButton(a) : ''}
       </div>
+      ${maintNotice(a)}
       ${a.below_min ? html`<div class="notice row"><span><b>Agent update required.</b> Agent ${a.core_version} is older than the lowest allowed version ${a.min_agent}:
         the master stores and shows none of this device's data and runs nothing on it until the agent is updated.</span><span class="spacer"></span>
         ${ifChange(html`<button class="btn primary sm" data-act="agent-update" ${a.online ? '' : 'disabled'}>${icon('up')} Update agent to ${a.core_latest}</button>`)}</div>` : ''}
@@ -1482,6 +1543,8 @@ function AgentPage([id, tab]) {
           ${p.devices ? html`Its ${p.devices} device${p.devices === 1 ? '' : 's'} show “unknown” until ` : 'Nothing is checked until '}you press “Resend check list” or the checks of its devices change.`, { okText: 'Clear probe checks', danger: true }))) return;
         await POST(`agents/${id}/probe/clear`); toast('Clear sent to the agent', 'ok'); refresh();
       },
+      'maint-start': () => maintStart(a(), refresh),
+      'maint-end': () => maintEnd(a(), refresh),
       'probe-on': async (t) => {
         const on = t.checked;
         try {
@@ -1691,7 +1754,7 @@ function LocalPage([id, tab]) {
   const pingNote = (L) => (L.ping_mode === 'paused' ? 'Ping is paused for this device.' : 'This device is not pinged.');
   function systemTab(a, L) {
     const P = L.ping_info, on = L.ping, out = probeOut(a);
-    const status = out ? html`<span class="badge mute xs" title="${out.note}">unknown</span>` : !L.checked ? html`<span class="badge mute xs">waiting</span>` : L.up ? html`<span class="badge ok xs">up</span>` : html`<span class="badge sec xs">down</span>`;
+    const status = a.maint ? html`<span class="badge info xs">maintenance</span>` : out ? html`<span class="badge mute xs" title="${out.note}">unknown</span>` : !L.checked ? html`<span class="badge mute xs">waiting</span>` : L.up ? html`<span class="badge ok xs">up</span>` : html`<span class="badge sec xs">down</span>`;
     const svcs = L.services || [];
     const kv = [
       ['Status', html`${status} ${L.checked ? `since ${fmtDate(L.since)}` : ''}`],
@@ -1762,18 +1825,20 @@ function LocalPage([id, tab]) {
     const a = d.agent, L = a.local;
     const g = d.groups.find((x) => x.id === a.group_id);
     const out = probeOut(a);
-    const state = out ? unknownText(out) : !L.checked ? (L.fails ? `no answer yet (${L.fails} of ${L.down_after} checks before down)` : 'waiting for the first check') : L.up ? `up for ${dur(now() - L.since)}` : `down for ${dur(now() - L.since)}`;
+    const state = a.maint ? 'in maintenance' : out ? unknownText(out) : !L.checked ? (L.fails ? `no answer yet (${L.fails} of ${L.down_after} checks before down)` : 'waiting for the first check') : L.up ? `up for ${dur(now() - L.since)}` : `down for ${dur(now() - L.since)}`;
     const total = (L.services || []).length + (L.ping_info ? 1 : 0);
     setHTML($('#a-head'), html`
       <div class="page-head syshead">
         <div class="headinfo"><div class="row"><a href="#/dashboard/${lastDashSub}" class="btn ghost sm iconbtn" title="Back">${icon('back')}</a>${agentDot(a)}<h1>${a.name}</h1>
           <span class="tag">${icon('folder')} ${g ? g.name : 'Ungrouped'}</span><span class="verpill loc" title="${L.probe ? `Checked by the agent ${L.probe.name}` : 'Monitored by the master itself'}; no agent is installed on it">agentless${L.probe ? ` · via ${L.probe.name}` : ''}</span></div>
-          <div class="sub">${L.address} · ${state}${!out && L.up && L.svc_down ? ` · ${L.svc_down} of ${L.svc_total} services down` : ''}</div></div>
+          <div class="sub">${L.address} · ${state}${!a.maint && !out && L.up && L.svc_down ? ` · ${L.svc_down} of ${L.svc_total} services down` : ''}</div></div>
         <span class="spacer"></span>
         <button class="btn sm" data-act="ping" ${st.pinging || !L.ping || L.probe ? 'disabled' : ''} title="${L.probe ? `Checked by ${L.probe.name} on its own schedule` : L.ping ? 'Ping the device now' : pingNote(L)}">${st.pinging ? html`<span class="spin"></span>` : icon('pulse')} Ping now</button>
         ${ifChange(html`<button class="btn sm" data-act="edit">${icon('edit')} Edit</button><button class="btn danger sm" data-act="delete" title="Delete">${icon('trash')}</button>`)}
+        ${maintButton(a)}
       </div>
-      ${out ? html`<div class="notice grey"><b>Unknown – ${out.note}.</b> ${{
+      ${maintNotice(a)}
+      ${out && !a.maint ? html`<div class="notice grey"><b>Unknown – ${out.note}.</b> ${{
         offline: html`The agent <a href="#/device/${out.id}">${out.name}</a> that checks this device has no contact with the master. The master does not take over: the shown results are the last ones received.`,
         cleared: html`An administrator cleared the check list of <a href="#/device/${out.id}">${out.name}</a>. Checks resume after “Resend check list” on that agent's page, or when the checks change.`,
         waiting: html`<a href="#/device/${out.id}">${out.name}</a> has not confirmed its check list yet.`,
@@ -1813,6 +1878,8 @@ function LocalPage([id, tab]) {
         setAgent(await POST(`locals/${id}/pingstate`, { state: 'removed' }));
         toast('Ping deleted', 'ok');
       },
+      'maint-start': () => maintStart(st.data.agent, refresh),
+      'maint-end': () => maintEnd(st.data.agent, refresh),
       edit: () => localEditModal(st.data.agent, st.data.groups, refresh),
       delete: () => localDelete(st.data.agent, () => { location.hash = '#/dashboard/' + lastDashSub; }),
       'svc-add': () => serviceModal(st.data.agent, null, st.data.presets, st.data.svc_limits, setAgent),
@@ -1871,7 +1938,7 @@ function Devices() {
         <tr>${ifChange(html`<td></td>`)}<td class="dim">Ungrouped</td><td class="muted">${count('')} device(s)</td>${ifChange(html`<td class="dim small w1">always last</td>`)}</tr></tbody></table>`
         : html`<div class="muted small" style="margin-top:10px">No groups yet. All devices are shown together.</div>`}`);
     const act = d.agents.filter((a) => a.status !== 'pending').sort(byName);
-    const seen = (a) => (isLocal(a) ? (probeOut(a) ? html`<span class="dim">${unknownText(probeOut(a))}</span>` : !a.local.checked ? html`<span class="dim">waiting</span>` : a.local.up ? 'up' : html`<span class="c-red">down</span>, last answer ${when(a.local.last_up)}`)
+    const seen = (a) => (a.maint ? html`<span class="c-blue">maintenance</span>` : isLocal(a) ? (probeOut(a) ? html`<span class="dim">${unknownText(probeOut(a))}</span>` : !a.local.checked ? html`<span class="dim">waiting</span>` : a.local.up ? 'up' : html`<span class="c-red">down</span>, last answer ${when(a.local.last_up)}`)
       : a.online ? 'online' : when(a.last_seen));
     setHTML($('#s-all'), act.length ? html`<div class="panel scrollx"><table class="tbl"><thead><tr><th>Device</th><th>Type</th><th>IP address</th><th>Group</th><th>OS</th><th>Agent</th><th>Last seen</th><th class="w1"></th></tr></thead>
       <tbody>${act.map((a) => html`<tr><td class="nowrap">${agentDot(a)} <a href="#/device/${a.id}"><b>${a.name}</b></a> ${a.status === 'report_only' ? html`<span class="badge info">report only</span>` : ''}${a.below_min ? html`<span class="badge upd xs">update required</span>` : ''}${a.ip_conflicts?.length ? html` <span class="badge sec xs" title="${a.ip_conflicts.map((c) => `IP ${c.ip} is also used by ${c.name}`).join('\n')}">IP also used</span>` : ''}</td>
@@ -1880,7 +1947,7 @@ function Devices() {
         <td>${canChange() ? html`<select class="sm" data-change="set-group" data-id="${a.id}" title="Group">${groupOptions(d.groups, a.group_id)}</select>` : html`<span class="muted">${d.groups.find((g) => g.id === a.group_id)?.name || 'Ungrouped'}</span>`}</td>
         <td class="muted">${isLocal(a) ? html`<span class="dim">—</span>` : osLabel(a.facts)}</td><td>${isLocal(a) ? html`<span class="dim">—</span>` : verPill(a)}</td>
         <td class="muted nowrap">${seen(a)}</td>
-        ${ifChange(html`<td class="w1"><div class="row" style="flex-wrap:nowrap;justify-content:flex-end">${isLocal(a)
+        ${ifChange(html`<td class="w1"><div class="row" style="flex-wrap:nowrap;justify-content:flex-start">${isLocal(a)
     ? html`<button class="btn ghost sm" data-act="l-edit" data-id="${a.id}">${icon('edit')} Edit</button><button class="btn danger sm" data-act="l-delete" data-id="${a.id}" title="Delete">${icon('trash')}</button>`
     : html`<button class="btn ghost sm" data-act="rename" data-id="${a.id}">${icon('edit')} Rename</button><button class="btn danger sm" data-act="remove" data-id="${a.id}" title="Remove">${icon('trash')}</button>`}</div></td>`)}</tr>`)}</tbody></table></div>` : html`<div class="panel empty">No devices yet.</div>`);
     if (!st.addShown) { st.addShown = true; addPanel(); }
@@ -2316,6 +2383,7 @@ function RemoteProbes() {
     running: html`<span class="badge info"><span class="spin" style="width:10px;height:10px"></span>running</span>`,
     overdue: html`<span class="badge sec" title="${p.note || ''}">not answered in time</span>`,
     offline: html`<span class="badge upd" title="${p.note || ''}">agent offline</span>`,
+    maintenance: html`<span class="badge info" title="${p.note || ''}">${icon('pause')} maintenance</span>`,
     gave_up: html`<span class="badge mute" title="${p.note || ''}">gave up</span>`,
     answered: html`<span class="badge ok">${icon('check')} answered</span>`,
     failed: html`<span class="badge sec" title="${p.note || ''}">failed</span>`,
@@ -2339,7 +2407,7 @@ function RemoteProbes() {
         <td class="nowrap ${p.state === 'overdue' ? 'c-red' : 'muted'}" title="requested ${fmtDate(p.since, true)}">${p.state === 'gave_up' ? html`gave up ${ago(p.finished)}` : done(p) ? `answered in ${secs(Math.max(0, p.finished - p.since))}` : secs(Math.max(0, d.now - p.since))}</td>
         <td class="nowrap">${stateBadge(p)}</td></tr>`)}</tbody></table></div>
       <div class="dim small" style="margin-top:10px">${open} open · answered requests${d.results_shown ? ' and received results' : ''} stay 20 seconds; requests that gave up stay 10 minutes.</div>`
-      : html`<div class="panel empty">Nothing outstanding: every request to a remote agent has been answered.</div>`);
+      : html`<div class="panel empty">Empty queue</div>`);
   }
   return {
     interval: 2000,
@@ -2608,6 +2676,10 @@ function SettingsGeneral() {
         ${ifChange(html`<button type="button" class="btn sm" data-act="nvd-save">Save key</button>${v.nvd_key_set ? html`<button type="button" class="btn ghost sm" data-act="nvd-remove">Remove</button>` : ''}`)}</div></label>
       <div class="dim small">${v.nvd_key_set ? html`<span class="badge ok xs">key set</span> ` : ''}Without a key NVD allows about 10 lookups a minute; a free key from nvd.nist.gov makes them about 8 times faster.</div>`);
   }
+  function meBox() {
+    const m = st.me || {};
+    setHTML($('#tfa-me'), m.ip ? html`Your current address: <span class="mono">${m.ip}</span> – ${m.trusted ? html`<span class="badge ok xs">trusted</span>` : html`<span class="badge mute xs">not trusted</span>`}` : '');
+  }
   function urlBox() {
     const d = st.d, auto = !st.url;
     const lbl = 'Master URL used in install commands';
@@ -2629,7 +2701,8 @@ function SettingsGeneral() {
       st.saved = s.retention_days;
       el.innerHTML = r(html`${settingsHead('general', 'General', 'How the master checks, cleans up and is reached')}
         ${canChange() ? '' : html`<div class="notice blue">Your account is read-only: you can see these settings but not change them.</div>`}
-        <div class="panel panel-pad" style="max-width:720px">
+        <div class="row" style="align-items:flex-start;gap:16px;flex-wrap:wrap">
+        <div class="panel panel-pad" style="flex:1 1 480px;max-width:720px;min-width:0">
           <form class="form" data-submit="save" style="margin-top:0"><fieldset class="plain" ${canChange() ? '' : 'disabled'}>
             <label class="field">Automatic update check interval (hours)<input type="number" name="interval" min="1" max="168" value="${s.check_interval_hours}"></label>
             <label class="field">Heartbeat (seconds)<input type="number" name="hb" min="${L.heartbeat_min}" max="${L.heartbeat_max}" value="${s.heartbeat_sec}"></label>
@@ -2652,14 +2725,33 @@ function SettingsGeneral() {
             <label class="field">Lowest allowed agent version<select name="minagent">
               ${[...(d.agent_versions || [])].reverse().map((v, i) => html`<option value="${v}" ${v === (s.min_agent_version || d.min_agent) ? 'selected' : ''}>${v}${i === 0 ? ' (oldest stored)' : ''}</option>`)}</select></label>
             <div class="dim small">Older agents can still connect, but only to be updated: the master stores and shows none of their data and runs nothing else on them.</div>
-            <label class="checkrow"><input type="checkbox" name="proberesults" ${s.probe_results_shown ? 'checked' : ''}> Show received probe results on Remote Probes</label>
-            <div class="dim small">Activity › Remote Probes then also lists each batch of check results a remote probe sends, for 20 seconds, with the checks that failed. For all users.</div>
             <label class="field">GitHub repository for releases<input type="text" name="gh" placeholder="owner/name" value="${s.github_repo}"></label>
             <div class="dim small mono" style="word-break:break-all">${d.index_url ? 'Version index: ' + d.index_url : ''}</div>
             ${ifChange(html`<div><button class="btn primary">Save</button></div>`)}
           </fieldset></form>
+        </div>
+        <div class="panel panel-pad" style="flex:1 1 320px;max-width:520px;min-width:0">
+          <form class="form" data-submit="save-more" style="margin-top:0"><fieldset class="plain" ${canChange() ? '' : 'disabled'}>
+            <label class="checkrow"><input type="checkbox" name="proberesults" ${s.probe_results_shown ? 'checked' : ''}> Show received probe results on Remote Probes</label>
+            <div class="dim small">Activity › Remote Probes then also lists each batch of check results a remote probe sends, for 20 seconds, with the checks that failed. For all users.</div>
+            <label class="field">Ask for the 2FA code<select name="tfamode">
+              <option value="" ${s.tfa_mode !== 'untrusted' ? 'selected' : ''}>Always</option>
+              <option value="untrusted" ${s.tfa_mode === 'untrusted' ? 'selected' : ''}>From untrusted networks</option></select></label>
+            <label class="field">Trusted networks<input type="text" name="tfanets" value="${(s.tfa_trusted || []).join(', ')}" spellcheck="false" autocomplete="off" placeholder="none"></label>
+            <div class="dim small">Comma separated, e.g. <span class="mono">192.168.5.0/24, 10.0.0.7/32, fd00::/64</span>. A single address is one host (/32). At most 20; none wider than /8 (IPv4) or /32 (IPv6).
+              For users with 2FA on, a sign-in from a trusted network skips the code; the password is always needed. Turning 2FA off and downloading a backup still ask for the code.</div>
+            <div class="small" id="tfa-me"></div>
+            ${ifChange(html`<div><button class="btn primary">Save</button></div>`)}
+          </fieldset></form>
+        </div>
         </div>`);
       st.d = d;
+      st.me = { ip: d.client_ip, trusted: d.client_trusted };
+      meBox();
+      const fm = $('form[data-submit="save-more"]', el);
+      const empty = () => !fm.tfanets.value.trim();
+      fm.tfanets.addEventListener('input', () => { if (empty() && fm.tfamode.value) fm.tfamode.value = ''; });
+      fm.tfamode.addEventListener('change', () => { if (fm.tfamode.value && empty()) { fm.tfamode.value = ''; toast('Enter a trusted network first', 'err'); } });
       st.url = s.master_url || '';
       st.editing = false;
       urlBox();
@@ -2705,13 +2797,23 @@ function SettingsGeneral() {
         st.d.vulns = (await POST('vulns/nvdkey', { key: '' })).vulns;
         vulnBox(st.d.vulns); toast('NVD API key removed', 'ok');
       },
+      'save-more': async (f) => {
+        if (!f.tfanets.value.trim()) f.tfamode.value = '';
+        const res = await POST('settings/more', { probe_results_shown: f.proberesults.checked, tfa_mode: f.tfamode.value, tfa_trusted: f.tfanets.value });
+        const s = res.settings;
+        f.tfamode.value = s.tfa_mode || '';
+        f.tfanets.value = (s.tfa_trusted || []).join(', ');
+        st.me = { ip: res.client_ip, trusted: res.client_trusted };
+        meBox();
+        toast('Saved', 'ok');
+      },
       'url-change': () => { st.editing = true; urlBox(); },
       'url-auto': () => { st.url = ''; st.editing = false; urlBox(); toast('Automatic address — press Save to apply'); },
       save: async (f) => {
         const url = st.editing ? f.url.value.trim() : st.url;
         const res = await POST('settings', { check_interval_hours: +f.interval.value, heartbeat_sec: +f.hb.value, retention_days: +f.ret.value,
           ui_port: +f.port.value, master_url: url, github_repo: f.gh.value, os_info_days: +f.osinfo.value, min_agent_version: f.minagent?.value || '',
-          vuln_days: +f.vulns.value, probe_results_shown: f.proberesults.checked });
+          vuln_days: +f.vulns.value });
         if (f.nvdkey?.value.trim()) {
           st.d.vulns = (await POST('vulns/nvdkey', { key: f.nvdkey.value.trim() })).vulns;
           vulnBox(st.d.vulns);
