@@ -62,8 +62,9 @@ func (s *Server) probeList(agentID string) proto.ProbeList {
 		}
 		for _, sv := range d.Services {
 			if !sv.Paused {
-				l.Checks = append(l.Checks, proto.ProbeCheck{ID: sv.ID, Kind: "tcp", Address: d.Address, Port: sv.Port,
-					Greeting: sv.Greeting, Reverse: sv.Reverse, Interval: sv.Interval, Timeout: sv.Timeout, Retries: sv.Retries})
+				l.Checks = append(l.Checks, proto.ProbeCheck{ID: sv.ID, Kind: sv.kind(), Address: d.Address, Port: sv.Port,
+					Greeting: sv.Greeting, Reverse: sv.Reverse, Interval: sv.Interval, Timeout: sv.Timeout, Retries: sv.Retries,
+					Host: sv.Host, Path: sv.Path, Codes: sv.Codes, CertValid: sv.CertValid, CertDays: sv.CertDays})
 			}
 		}
 	}
@@ -196,7 +197,7 @@ func (s *Server) probeIntake(a *Agent, rep *proto.ProbeReport, now time.Time) {
 			if sv.Paused || t <= sv.LastCheck {
 				continue
 			}
-			ok := s.storeService(sv, rtt, cleanText(r.Banner, maxBanner), r.OK, cerr, at)
+			ok := s.storeService(sv, rtt, cleanText(r.Banner, maxBanner), r.OK, cerr, r.Failed, at)
 			what := outcome(r.OK, "reached", rtt, cerr)
 			if sv.Reverse {
 				what += " (expected closed)"

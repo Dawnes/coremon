@@ -140,9 +140,10 @@ func recentRTT(rs []rttSlot, now int64) []rttPoint {
 
 // histSlot: the pings of one quarter of an hour, for the 24-hour bar.
 type histSlot struct {
-	T  int64 `json:"t"`
-	OK int   `json:"ok"`
-	N  int   `json:"n"`
+	T  int64  `json:"t"`
+	OK int    `json:"ok"`
+	N  int    `json:"n"`
+	F  string `json:"f,omitempty"` // services: the sub-probe of the slot's latest failure
 }
 
 const (
@@ -338,9 +339,18 @@ type localView struct {
 	SvcDown   int           `json:"svc_down"`
 	SvcOK     int           `json:"svc_ok"` // running services that are up without failed retries
 	SvcPaused int           `json:"svc_paused"`
+	SvcFail   *svcFailView  `json:"svc_fail,omitempty"` // the first running service that is down: what failed
 	Services  []serviceView `json:"services,omitempty"` // device page only
 
 	Probe *localProbeView `json:"probe,omitempty"` // checked by an agent instead of the master
+}
+
+// svcFailView: a service that is down, the sub-probe that failed and why.
+type svcFailView struct {
+	Name   string `json:"name"`
+	Step   string `json:"step,omitempty"`
+	Method string `json:"method"`
+	Error  string `json:"error,omitempty"`
 }
 
 // pingView: the ping as one of the device's checks, also while paused.
@@ -399,6 +409,9 @@ func (s *Server) localDeviceView(d *LocalDevice, full bool) agentView {
 		switch {
 		case v.Checked && !v.Up:
 			lv.SvcDown++
+			if lv.SvcFail == nil {
+				lv.SvcFail = &svcFailView{Name: v.Name, Step: v.Failed, Method: v.Method, Error: v.LastError}
+			}
 		case v.Checked && v.Fails == 0:
 			lv.SvcOK++
 		}
@@ -409,7 +422,7 @@ func (s *Server) localDeviceView(d *LocalDevice, full bool) agentView {
 	}
 	if lv.Probe = s.localProbe(d, now); lv.Probe != nil && lv.Probe.State != "ok" {
 		// No results come in: unknown, not down (no takeover by the master).
-		lv.Checked, lv.Up, lv.SvcOK, lv.SvcDown = false, false, 0, 0
+		lv.Checked, lv.Up, lv.SvcOK, lv.SvcDown, lv.SvcFail = false, false, 0, 0, nil
 	}
 	if full {
 		lv.Services = svcs
@@ -512,24 +525,29 @@ func (s *Server) record(d *LocalDevice, rtt time.Duration, err error, now time.T
 			d.Checked, d.Up, d.Since = true, false, t
 		}
 	}
-	d.Hist = addHist(d.Hist, ok, t)
+	d.Hist = addHist(d.Hist, ok, "", t)
 	d.RTT = addRTT(d.RTT, ok, rtt.Microseconds(), t)
 	s.markChecks()
 }
 
 // addHist counts one result in its quarter of an hour and drops what is
-// older than 24 hours.
-func addHist(hist []histSlot, ok bool, t int64) []histSlot {
+// older than 24 hours. failed: the sub-probe that failed (services), kept
+// as the slot's latest failure.
+func addHist(hist []histSlot, ok bool, failed string, t int64) []histSlot {
 	slot := t - t%histSlotSec
 	if n := len(hist); n > 0 && hist[n-1].T == slot {
 		hist[n-1].N++
 		if ok {
 			hist[n-1].OK++
+		} else if failed != "" {
+			hist[n-1].F = failed
 		}
 	} else {
 		h := histSlot{T: slot, N: 1}
 		if ok {
 			h.OK = 1
+		} else {
+			h.F = failed
 		}
 		hist = append(hist, h)
 	}

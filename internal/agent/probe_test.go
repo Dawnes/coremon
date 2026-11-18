@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"coremon/internal/probe"
 	"coremon/internal/proto"
 )
 
@@ -105,8 +106,11 @@ func TestProberRun(t *testing.T) {
 		}
 		return 0, errors.New("no answer within 2s")
 	}
-	p.fn.tcp = func(ctx context.Context, addr string, port int, greeting bool, timeout time.Duration) (time.Duration, string, error) {
-		return time.Millisecond, "220 ready", nil
+	p.fn.svc = func(ctx context.Context, addr string, s probe.Service, timeout time.Duration) probe.Outcome {
+		if s.Method == probe.MethodHTTPS {
+			return probe.Outcome{RTT: time.Millisecond, Detail: "certificate valid until 2026-01-01", Failed: probe.StepCertDays, Err: errors.New("certificate expires in 3 days (needs 14)")}
+		}
+		return probe.Outcome{RTT: time.Millisecond, Detail: "220 ready"}
 	}
 	r := p.run(context.Background(), proto.ProbeCheck{ID: "l_1", Kind: "ping", Address: "10.0.0.5", Interval: 60, Timeout: 2})
 	if !r.OK || r.RTTUs != 3000 {
@@ -117,7 +121,31 @@ func TestProberRun(t *testing.T) {
 		t.Errorf("unanswered ping: %+v", r)
 	}
 	r = p.run(context.Background(), proto.ProbeCheck{ID: "s_1", Kind: "tcp", Address: "10.0.0.5", Port: 25, Greeting: true, Interval: 60, Timeout: 2})
-	if !r.OK || r.Banner != "220 ready" {
+	if !r.OK || r.Banner != "220 ready" || r.Failed != "" {
 		t.Errorf("tcp: %+v", r)
+	}
+	r = p.run(context.Background(), proto.ProbeCheck{ID: "s_2", Kind: "https", Address: "10.0.0.5", Port: 443, Host: "www.example.com", Path: "/", Codes: "200-399", CertDays: 14, Interval: 60, Timeout: 2})
+	if r.OK || r.Failed != "cert_days" || r.Error != "certificate expires in 3 days (needs 14)" {
+		t.Errorf("https: %+v", r)
+	}
+}
+
+func TestProbeListHTTPS(t *testing.T) {
+	p := newProber()
+	ok := proto.ProbeCheck{ID: "s_1", Kind: "https", Address: "10.0.0.5", Port: 443, Host: "www.example.com", Path: "/", Codes: "200-399", CertValid: true, CertDays: 14, Interval: 60, Timeout: 5}
+	if err := p.setList(proto.ProbeList{Version: "v1", Checks: []proto.ProbeCheck{ok}}, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	bad := ok
+	bad.Host = ""
+	if p.setList(proto.ProbeList{Version: "v2", Checks: []proto.ProbeCheck{bad}}, time.Now()) == nil {
+		t.Error("https check without hostname accepted")
+	}
+	// A failed https check is retried like a tcp check.
+	p.due(time.Now().Add(time.Minute))
+	at := time.Now()
+	p.record(ok, proto.ProbeResult{ID: "s_1", Failed: "http", Error: "HTTP 500, expected 200-399"}, at)
+	if p.checks["s_1"].next != at.Add(probeRetryEvery) {
+		t.Error("no retry 30 s later")
 	}
 }

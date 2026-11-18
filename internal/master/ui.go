@@ -187,7 +187,7 @@ func (s *Server) handleAgentGet(w http.ResponseWriter, r *http.Request) {
 	defer s.st.mu.Unlock()
 	if d := s.st.st.Locals[r.PathValue("id")]; d != nil {
 		writeJSON(w, map[string]any{"agent": s.localDeviceView(d, true), "jobs": []*Job{}, "repo": s.repo.summary(), "groups": s.st.st.Groups,
-			"presets": svcPresets, "svc_limits": map[string]int{"interval_min": minSvcInterval, "interval_max": maxSvcInterval, "interval": defaultSvcInterval,
+			"presets": svcPresets, "svc_methods": svcMethods, "svc_limits": map[string]int{"interval_min": minSvcInterval, "interval_max": maxSvcInterval, "interval": defaultSvcInterval,
 				"retries_max": maxSvcRetries, "retries": defaultSvcRetries, "timeout_min": minSvcTimeout, "timeout_max": maxSvcTimeout, "timeout": defaultSvcTimeout}})
 		return
 	}

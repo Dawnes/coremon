@@ -196,7 +196,7 @@ func New(cfg Config) (*Server, error) {
 	}
 	s := &Server{cfg: cfg, st: st, sess: newSessions(), keys: keyState{cert: &cert, tlsPin: pin}, exit: os.Exit,
 		audit: &auditLog{path: filepath.Join(cfg.DataDir, "audit.jsonl")}, wakes: map[string]chan struct{}{},
-		hashSem: make(chan struct{}, hashAtOnce), pinger: icmpPing, svcCheck: tcpCheck}
+		hashSem: make(chan struct{}, hashAtOnce), pinger: icmpPing, svcCheck: serviceCheck}
 	s.loc.next, s.loc.busy = map[string]time.Time{}, map[string]bool{}
 	s.loadChecks()
 

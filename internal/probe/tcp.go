@@ -37,11 +37,30 @@ func TCP(ctx context.Context, addr string, port int, greeting bool, timeout time
 	if len(line) == 0 && err != nil {
 		var ne net.Error
 		if errors.As(err, &ne) && ne.Timeout() {
-			return 0, "", fmt.Errorf("connected, but no greeting within %s", timeout)
+			return rtt, "", greetingError{fmt.Errorf("connected, but no greeting within %s", timeout)}
 		}
-		return 0, "", fmt.Errorf("connected, but no greeting: %v", UnwrapOp(err))
+		return rtt, "", greetingError{fmt.Errorf("connected, but no greeting: %v", UnwrapOp(err))}
 	}
 	return rtt, strings.TrimSpace(string(line)), nil
+}
+
+// greetingError: connected, but the greeting did not come.
+type greetingError struct{ error }
+
+func (e greetingError) Unwrap() error { return e.error }
+
+// dial connects to addr:port with a plain error when that fails.
+func dial(ctx context.Context, addr string, port int, timeout time.Duration) (net.Conn, error) {
+	d := net.Dialer{Timeout: timeout}
+	c, err := d.DialContext(ctx, "tcp", net.JoinHostPort(addr, strconv.Itoa(port)))
+	if err != nil {
+		var ne net.Error
+		if errors.As(err, &ne) && ne.Timeout() {
+			return nil, fmt.Errorf("no connection within %s", timeout)
+		}
+		return nil, dialError(err)
+	}
+	return c, nil
 }
 
 // dialError: a plain reason for a failed connection.

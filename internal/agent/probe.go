@@ -1,7 +1,7 @@
 package agent
 
-// Remote probe: the agent checks agentless devices for the master (ping
-// and TCP), on its own schedule, from a complete check list the master
+// Remote probe: the agent checks agentless devices for the master (ping,
+// TCP and HTTPS), on its own schedule, from a complete check list the master
 // sends. The list is kept in memory only: after a restart the agent starts
 // empty and the master sends the list again (unless an admin cleared it).
 
@@ -30,7 +30,13 @@ const (
 
 type probeFuncs struct {
 	ping func(ctx context.Context, ip net.IP, timeout time.Duration) (time.Duration, error)
-	tcp  func(ctx context.Context, addr string, port int, greeting bool, timeout time.Duration) (time.Duration, string, error)
+	svc  func(ctx context.Context, addr string, s probe.Service, timeout time.Duration) probe.Outcome
+}
+
+// svcSpec: the service check of a tcp or https check.
+func svcSpec(c proto.ProbeCheck) probe.Service {
+	return probe.Service{Method: c.Kind, Port: c.Port, Greeting: c.Greeting, Host: c.Host, Path: c.Path, Codes: c.Codes,
+		CertValid: c.CertValid, CertDays: c.CertDays}
 }
 
 type pcheck struct {
@@ -58,7 +64,7 @@ type prober struct {
 
 func newProber() *prober {
 	return &prober{checks: map[string]*pcheck{}, urgent: make(chan struct{}, 1), sem: make(chan struct{}, probeAtOnce),
-		fn: probeFuncs{ping: probe.Ping, tcp: probe.TCP}}
+		fn: probeFuncs{ping: probe.Ping, svc: probe.Check}}
 }
 
 func validProbeList(l proto.ProbeList) error {
@@ -75,16 +81,19 @@ func validProbeList(l proto.ProbeList) error {
 			return fmt.Errorf("invalid or duplicate check id %q", c.ID)
 		case net.ParseIP(c.Address) == nil:
 			return fmt.Errorf("check %s: %q is not an IP address", c.ID, c.Address)
-		case c.Kind != "ping" && c.Kind != "tcp":
+		case c.Kind != "ping" && c.Kind != probe.MethodTCP && c.Kind != probe.MethodHTTPS:
 			return fmt.Errorf("check %s: unknown kind %q", c.ID, c.Kind)
-		case c.Kind == "tcp" && (c.Port < 1 || c.Port > 65535):
-			return fmt.Errorf("check %s: invalid port", c.ID)
 		case c.Interval < probeMinInterval || c.Interval > 86400:
 			return fmt.Errorf("check %s: invalid interval", c.ID)
 		case c.Timeout < 1 || c.Timeout > 60:
 			return fmt.Errorf("check %s: invalid timeout", c.ID)
 		case c.Retries < 0 || c.Retries > 10 || c.DownAfter < 0 || c.DownAfter > 10:
 			return fmt.Errorf("check %s: invalid retries", c.ID)
+		}
+		if c.Kind != "ping" {
+			if err := probe.Validate(svcSpec(c)); err != nil {
+				return fmt.Errorf("check %s: %v", c.ID, err)
+			}
 		}
 		seen[c.ID] = true
 	}
@@ -190,7 +199,7 @@ func (p *prober) due(now time.Time) []proto.ProbeCheck {
 // run performs one check.
 func (p *prober) run(ctx context.Context, c proto.ProbeCheck) proto.ProbeResult {
 	timeout := time.Duration(c.Timeout) * time.Second
-	ctx, cancel := context.WithTimeout(ctx, 2*timeout+time.Second)
+	ctx, cancel := context.WithTimeout(ctx, 4*timeout+time.Second) // HTTPS may need a second connection
 	defer cancel()
 	res := proto.ProbeResult{ID: c.ID}
 	var rtt time.Duration
@@ -202,7 +211,11 @@ func (p *prober) run(ctx context.Context, c proto.ProbeCheck) proto.ProbeResult 
 			res.Setup = true
 		}
 	} else {
-		rtt, res.Banner, err = p.fn.tcp(ctx, c.Address, c.Port, c.Greeting, timeout)
+		o := p.fn.svc(ctx, c.Address, svcSpec(c), timeout)
+		rtt, res.Banner, err = o.RTT, o.Detail, o.Err
+		if err != nil {
+			res.Failed = o.Failed
+		}
 		if len(res.Banner) > 200 {
 			res.Banner = res.Banner[:200]
 		}
@@ -245,7 +258,7 @@ func (p *prober) record(c proto.ProbeCheck, res proto.ProbeResult, now time.Time
 	} else {
 		pc.fails++
 		limit := c.DownAfter
-		if c.Kind == "tcp" {
+		if c.Kind != "ping" {
 			limit = c.Retries + 1
 		}
 		if pc.fails >= max(limit, 1) {

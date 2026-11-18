@@ -11,21 +11,27 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"coremon/internal/probe"
 )
 
 func TestServices(t *testing.T) {
 	pub, _ := keys(t)
 	s := testServer(t, pub, "http://127.0.0.1:1/none", "0.3.0")
 	open := map[int]bool{22: true}
-	s.svcCheck = func(ctx context.Context, addr string, port int, greeting bool, timeout time.Duration) (time.Duration, string, error) {
-		if open[port] {
+	s.svcCheck = func(ctx context.Context, addr string, spec probe.Service, timeout time.Duration) probe.Outcome {
+		if spec.Method == probe.MethodHTTPS {
+			return probe.Outcome{RTT: time.Millisecond, Detail: "certificate valid until 2026-01-01", Failed: probe.StepCertDays,
+				Err: errors.New("certificate expires in 9 days (needs 14)")}
+		}
+		if open[spec.Port] {
 			b := ""
-			if greeting {
+			if spec.Greeting {
 				b = "SSH-2.0-OpenSSH_9.2"
 			}
-			return 2 * time.Millisecond, b, nil
+			return probe.Outcome{RTT: 2 * time.Millisecond, Detail: b}
 		}
-		return 0, "", errors.New("connection refused")
+		return probe.Outcome{Failed: probe.StepConnect, Err: errors.New("connection refused")}
 	}
 	srv := httptest.NewTLSServer(s.routes())
 	defer srv.Close()
@@ -184,6 +190,95 @@ func TestServices(t *testing.T) {
 	}
 }
 
+func TestHTTPSService(t *testing.T) {
+	pub, _ := keys(t)
+	s := testServer(t, pub, "http://127.0.0.1:1/none", "0.3.0")
+	s.svcCheck = func(ctx context.Context, addr string, spec probe.Service, timeout time.Duration) probe.Outcome {
+		if spec.CertDays > 0 {
+			return probe.Outcome{RTT: time.Millisecond, Detail: "certificate valid until 2026-01-01", Failed: probe.StepCertDays,
+				Err: errors.New("certificate expires in 9 days (needs 14)")}
+		}
+		return probe.Outcome{RTT: time.Millisecond, Detail: "HTTP 200 · certificate valid until 2027-01-01"}
+	}
+	srv := httptest.NewTLSServer(s.routes())
+	defer srv.Close()
+	pw, _ := os.ReadFile(filepath.Join(s.cfg.DataDir, "initial-password.txt"))
+	c := newUIClient(t, srv.URL)
+	c.do("POST", "/api/ui/login", `{"username":"admin","password":"`+strings.TrimSpace(string(pw))+`"}`)
+	_, body := c.do("POST", "/api/ui/locals", `{"name":"web","address":"10.0.0.2"}`)
+	var dv agentView
+	json.Unmarshal([]byte(body), &dv)
+	base := "/api/ui/locals/" + dv.ID
+
+	for body, want := range map[string]int{
+		`{"preset":"https"}`: 400, // no hostname
+		`{"preset":"https","host":"www.example.com","codes":"abc"}`:                          400,
+		`{"preset":"https","host":"www.example.com","path":"no-slash"}`:                      400,
+		`{"preset":"https","host":"bad host"}`:                                               400,
+		`{"preset":"https","host":"www.example.com","cert_days":400}`:                        400,
+		`{"preset":"https","host":"WWW.Example.com","codes":" 200-299, 301","reverse":true}`: 200,
+		`{"preset":"proxmox","host":"pve.example.com"}`:                                      200,
+		`{"preset":"","name":"alt","port":8443,"method":"https","host":"10.0.0.2"}`:          200,
+		`{"preset":"","name":"x","port":8444,"method":"ftp"}`:                                400,
+	} {
+		if code, b := c.do("POST", base+"/services", body); code != want {
+			t.Errorf("%s: %d %s, want %d", body, code, b, want)
+		}
+	}
+	d := s.st.st.Locals[dv.ID]
+	byName := map[string]*Service{}
+	for _, sv := range d.Services {
+		byName[sv.Name] = sv
+	}
+	h, p, alt := byName["HTTPS"], byName["Proxmox"], byName["alt"]
+	if h == nil || h.Method != "https" || h.Host != "www.example.com" || h.Path != "/" || h.Codes != "200-299,301" || !h.CertValid || h.CertDays != 14 || h.Reverse {
+		t.Fatalf("https preset: %+v", h)
+	}
+	if p == nil || p.Method != "https" || p.CertValid || p.CertDays != 14 || p.Port != 8006 {
+		t.Errorf("proxmox preset: %+v", p)
+	}
+	if alt == nil || alt.Method != "https" || !alt.CertValid {
+		t.Errorf("custom https: %+v", alt)
+	}
+
+	// A failed sub-probe is stored, kept in the hour slot and shown.
+	s.checkService(dv.ID, h.ID)
+	if h.Failed != probe.StepCertDays || h.LastError != "certificate expires in 9 days (needs 14)" || len(h.Hist) != 1 || h.Hist[0].F != probe.StepCertDays {
+		t.Errorf("failed sub-probe: %+v", h)
+	}
+	_, body = c.do("GET", "/api/ui/agents/"+dv.ID, "")
+	if !strings.Contains(body, `"steps":["connect","tls","cert","cert_days","http"]`) || !strings.Contains(body, `"failed":"cert_days"`) || !strings.Contains(body, `"svc_methods"`) {
+		t.Errorf("view: %s", body)
+	}
+
+	// Without the days check it passes; back to TCP clears the HTTPS settings.
+	if code, b := c.do("POST", base+"/services/"+h.ID, `{"cert_days":0}`); code != 200 || h.Checked {
+		t.Fatalf("days off: %d %s", code, b)
+	}
+	s.checkService(dv.ID, h.ID)
+	if h.Failed != "" || !h.Up || !strings.HasPrefix(h.Banner, "HTTP 200") {
+		t.Errorf("passed: %+v", h)
+	}
+	if code, b := c.do("POST", base+"/services/"+h.ID, `{"method":"tcp","reverse":true}`); code != 200 || h.Method != "" || h.Host != "" || h.Codes != "" || !h.Reverse {
+		t.Errorf("back to tcp: %d %s %+v", code, b, h)
+	}
+
+	// The remote probe list carries the HTTPS settings.
+	s.st.mu.Lock()
+	d.Probe = "a_x"
+	l := s.probeList("a_x")
+	s.st.mu.Unlock()
+	found := false
+	for _, ck := range l.Checks {
+		if ck.ID == p.ID {
+			found = ck.Kind == "https" && ck.Host == "pve.example.com" && ck.Path == "/" && ck.Codes == "200-399" && !ck.CertValid && ck.CertDays == 14
+		}
+	}
+	if !found {
+		t.Errorf("probe list: %+v", l.Checks)
+	}
+}
+
 // The real check, against listeners on this machine.
 func TestTCPCheck(t *testing.T) {
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
@@ -208,21 +303,21 @@ func TestTCPCheck(t *testing.T) {
 	port := ln.Addr().(*net.TCPAddr).Port
 	ctx := context.Background()
 	greet <- true
-	if _, b, err := tcpCheck(ctx, "127.0.0.1", port, true, 2*time.Second); err != nil || b != "220 mail.example ESMTP ready" {
-		t.Errorf("greeting: %q %v", b, err)
+	if o := serviceCheck(ctx, "127.0.0.1", probe.Service{Port: port, Greeting: true}, 2*time.Second); o.Err != nil || o.Detail != "220 mail.example ESMTP ready" {
+		t.Errorf("greeting: %+v", o)
 	}
 	greet <- false
-	if _, _, err := tcpCheck(ctx, "127.0.0.1", port, false, 2*time.Second); err != nil {
-		t.Errorf("connect only: %v", err)
+	if o := serviceCheck(ctx, "127.0.0.1", probe.Service{Port: port}, 2*time.Second); o.Err != nil {
+		t.Errorf("connect only: %+v", o)
 	}
 	greet <- false
-	if _, _, err := tcpCheck(ctx, "127.0.0.1", port, true, time.Second); err == nil || !strings.Contains(err.Error(), "no greeting") {
-		t.Errorf("silent service with greeting required: %v", err)
+	if o := serviceCheck(ctx, "127.0.0.1", probe.Service{Port: port, Greeting: true}, time.Second); o.Err == nil || !strings.Contains(o.Err.Error(), "no greeting") || o.Failed != probe.StepGreeting {
+		t.Errorf("silent service with greeting required: %+v", o)
 	}
 	ln2, _ := net.Listen("tcp", "127.0.0.1:0")
 	closed := ln2.Addr().(*net.TCPAddr).Port
 	ln2.Close()
-	if _, _, err := tcpCheck(ctx, "127.0.0.1", closed, false, time.Second); err == nil || !strings.Contains(err.Error(), "refused") {
-		t.Errorf("closed port: %v", err)
+	if o := serviceCheck(ctx, "127.0.0.1", probe.Service{Port: closed}, time.Second); o.Err == nil || !strings.Contains(o.Err.Error(), "refused") || o.Failed != probe.StepConnect {
+		t.Errorf("closed port: %+v", o)
 	}
 }

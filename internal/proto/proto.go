@@ -102,12 +102,19 @@ const (
 )
 
 type ProbeCheck struct {
-	ID        string `json:"id"`   // the master's id of the check
-	Kind      string `json:"kind"` // "ping" or "tcp"
-	Address   string `json:"address"`
-	Port      int    `json:"port,omitempty"`
-	Greeting  bool   `json:"greeting,omitempty"`
-	Reverse   bool   `json:"reverse,omitempty"`    // tcp: reachable counts as down
+	ID       string `json:"id"`   // the master's id of the check
+	Kind     string `json:"kind"` // "ping", "tcp" or "https" (agent 0.3.10 and later)
+	Address  string `json:"address"`
+	Port     int    `json:"port,omitempty"`
+	Greeting bool   `json:"greeting,omitempty"`
+	Reverse  bool   `json:"reverse,omitempty"` // tcp: reachable counts as down
+	// https: hostname for SNI and the Host header (not looked up), path,
+	// accepted status codes, certificate checks.
+	Host      string `json:"host,omitempty"`
+	Path      string `json:"path,omitempty"`
+	Codes     string `json:"codes,omitempty"`
+	CertValid bool   `json:"cert_valid,omitempty"`
+	CertDays  int    `json:"cert_days,omitempty"`
 	Interval  int    `json:"interval"`             // seconds
 	Timeout   int    `json:"timeout"`              // seconds
 	Retries   int    `json:"retries,omitempty"`    // tcp: failed checks 30 s apart before down
@@ -126,7 +133,8 @@ type ProbeResult struct {
 	RTTUs  int64  `json:"rtt_us,omitempty"`
 	Banner string `json:"banner,omitempty"`
 	Error  string `json:"error,omitempty"`
-	Setup  bool   `json:"setup,omitempty"` // the agent could not run the check at all (no permission)
+	Setup  bool   `json:"setup,omitempty"`  // the agent could not run the check at all (no permission)
+	Failed string `json:"failed,omitempty"` // the sub-probe that failed (connect, greeting, tls, cert, cert_days, http)
 }
 
 type ProbeReport struct {

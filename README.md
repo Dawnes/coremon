@@ -24,8 +24,11 @@ as **agentless** devices: the master itself pings them and checks their services
 * **Vulnerabilities**: known CVEs of those applications, with severity, fixes
   and actively exploited ones highlighted.
 * **Agentless devices**: devices without an agent, checked by the master with a
-  ping and per-service TCP checks (heartbeat, retries, timeout, reverse mode),
-  with a 24-hour history and a graph of the ping's round-trip time. For a network
+  ping and per-service checks (heartbeat, retries, timeout): TCP (optionally
+  waiting for a greeting, or in reverse mode) or HTTPS (hostname, path, accepted
+  status codes, valid certificate, certificate valid for at least N days). Each
+  check shows which step failed. With a 24-hour history and a graph of the
+  ping's round-trip time. For a network
   the master cannot reach, an agent there can do the checks instead ("Checked by").
 * **Map**: a live drawing of every device and who monitors it (the master or a
   remote probe), coloured green, red or grey.

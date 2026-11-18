@@ -30,6 +30,7 @@ type runFields struct {
 	Fails     int        `json:"fails,omitempty"`
 	LastError string     `json:"last_error,omitempty"`
 	Banner    string     `json:"banner,omitempty"`
+	Failed    string     `json:"failed,omitempty"` // services: the sub-probe of the last failed check
 	Hist      []histSlot `json:"hist,omitempty"`
 	RTT       []rttSlot  `json:"rtt,omitempty"` // ping only: round-trip times in five-minute slots
 }
@@ -56,12 +57,12 @@ func (d *LocalDevice) setRun(r runFields) {
 
 func (sv *Service) run() runFields {
 	return runFields{Checked: sv.Checked, Up: sv.Up, Since: sv.Since, LastCheck: sv.LastCheck, LastOK: sv.LastOK,
-		RTTUs: sv.RTTUs, Fails: sv.Fails, LastError: sv.LastError, Banner: sv.Banner, Hist: sv.Hist}
+		RTTUs: sv.RTTUs, Fails: sv.Fails, LastError: sv.LastError, Banner: sv.Banner, Failed: sv.Failed, Hist: sv.Hist}
 }
 
 func (sv *Service) setRun(r runFields) {
-	sv.Checked, sv.Up, sv.Since, sv.LastCheck, sv.LastOK, sv.RTTUs, sv.Fails, sv.LastError, sv.Banner, sv.Hist =
-		r.Checked, r.Up, r.Since, r.LastCheck, r.LastOK, r.RTTUs, r.Fails, r.LastError, r.Banner, r.Hist
+	sv.Checked, sv.Up, sv.Since, sv.LastCheck, sv.LastOK, sv.RTTUs, sv.Fails, sv.LastError, sv.Banner, sv.Failed, sv.Hist =
+		r.Checked, r.Up, r.Since, r.LastCheck, r.LastOK, r.RTTUs, r.Fails, r.LastError, r.Banner, r.Failed, r.Hist
 }
 
 func (s *Server) checksPath() string { return filepath.Join(s.cfg.DataDir, checksFileName) }

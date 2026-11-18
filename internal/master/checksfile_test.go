@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"testing"
 	"time"
+
+	"coremon/internal/probe"
 )
 
 // Round-trip times: five-minute slots with average, lowest and highest, 24 hours.
@@ -73,7 +75,7 @@ func TestChecksFile(t *testing.T) {
 	s.st.st.Locals[d.ID] = d
 	s.loc.mu.Lock()
 	s.record(d, 3*time.Millisecond, nil, time.Now())
-	s.recordService(d.Services[0], time.Millisecond, "", true, nil, time.Now())
+	s.recordService(d.Services[0], probe.Outcome{RTT: time.Millisecond}, time.Now())
 	s.loc.mu.Unlock()
 	s.st.markDirty()
 	s.st.writeNow()
@@ -124,7 +126,7 @@ func TestChecksFile(t *testing.T) {
 	// Failed checks are results too.
 	s3.st.mu.Lock()
 	s3.loc.mu.Lock()
-	s3.recordService(s3.st.st.Locals[d.ID].Services[0], 0, "", false, errors.New("refused"), time.Now())
+	s3.recordService(s3.st.st.Locals[d.ID].Services[0], probe.Outcome{Failed: probe.StepConnect, Err: errors.New("refused")}, time.Now())
 	s3.loc.mu.Unlock()
 	s3.st.mu.Unlock()
 	if !s3.checksDirty {
