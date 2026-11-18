@@ -1914,7 +1914,9 @@ function serviceModal(dev, svc, presets, lim, methods, done) {
     }
     drawFields(f, f.preset.value === (s.preset || '') && f.method.value === (s.method || 'tcp'));
   };
-  openModal(html`<h3>${isNew ? `Add a service to ${dev.name}` : `Edit ${s.name}`}</h3>
+  // The address the service is checked on (an agent device without checks yet: its first one).
+  const addr = chk(dev)?.address || (dev.check_addrs || [])[0] || '';
+  openModal(html`<h3>${isNew ? `Add a service to ${dev.name}${addr ? ` on ${addr}` : ''}` : `Edit ${s.name}`}</h3>
     <form class="form" data-submit="save">
       <label class="field">Service<select name="preset" data-change="preset">
         ${canPing ? html`<option value="ping" ${pingFirst ? 'selected' : ''}>Ping (ICMP)</option>` : ''}
