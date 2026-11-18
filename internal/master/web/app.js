@@ -385,7 +385,7 @@ const NAV = [
   ['about', 'info', 'About'],
 ];
 const SUBNAV = {
-  dashboard: () => [['overview', 'Overview'], ['devices', 'Device List'], ['apps', 'Application List']],
+  dashboard: () => [['overview', 'Overview'], ['devices', 'Device List'], ['apps', 'Application List'], ['map', 'Map']],
   about: () => [['about', 'About'], ['license', 'License']],
   activity: () => [['jobs', 'Jobs'], ['probes', 'Remote Probes'], ['audit', 'Audit log']],
   settings: () => [['general', 'General'], ['devices', 'Devices'], ['agentless', 'Agentless'], ['releases', 'Releases'], ...(canChange() ? [['users', 'Users']] : []), ['account', 'My Account'], ['identity', 'Identity'], ...(canChange() ? [['backups', 'Backups']] : [])],
@@ -450,7 +450,7 @@ function route() {
   const subViews = {
     settings: { general: SettingsGeneral, devices: Devices, agentless: SettingsLocal, releases: Releases, users: SettingsUsers, backups: SettingsBackups, account: SettingsAccount, identity: SettingsIdentity },
     activity: { jobs: Jobs, probes: RemoteProbes, audit: Audit },
-    dashboard: { overview: Dashboard, devices: DeviceList, apps: AppList },
+    dashboard: { overview: Dashboard, devices: DeviceList, apps: AppList, map: MapPage },
     about: { about: AboutPage, license: LicensePage },
   };
   const views = { device: (p) => (/^l_/.test(p[0]) ? LocalPage(p) : AgentPage(p)) };
@@ -1135,6 +1135,119 @@ function DeviceList() {
       filter: (t) => { st.filter = t.dataset.f; render(); },
       sort: (t) => { const k = t.dataset.k; st.dir = st.sort === k ? -st.dir : 1; st.sort = k; render(); },
     },
+  };
+}
+
+// Dashboard > Map: every device in a box, with a line to whoever monitors
+// it. That is always a tree: the master on the left (its own agent device,
+// or a "Master" box), the devices it monitors in the next column, and the
+// devices a remote probe checks in a column right of that probe. Parents sit
+// centred on their children, so boxes never overlap and lines never cross.
+// Colours refresh in place; the drawing is only rebuilt when the tree changes.
+function MapPage() {
+  lastDashSub = 'map';
+  const W = 176, H = 34, ROW = 46, GAP = 96, PAD = 8;
+  const st = { key: '', data: null };
+  const byText = (x, y) => String(x).localeCompare(String(y), undefined, { numeric: true, sensitivity: 'base' });
+  // Monitoring colour: ok (green), bad (red) or unk (grey), with a short status.
+  function health(a) {
+    if (!a) return ['ok', 'the master'];
+    if (a.maint) return ['unk', maintText(a.maint)];
+    if (isLocal(a)) {
+      const L = a.local, p = probeOut(a);
+      if (p) return ['unk', unknownText(p)];
+      if (!L.checked) return ['unk', L.fails ? 'no answer yet' : 'waiting for the first check'];
+      if (!L.up) return ['bad', `down for ${dur(now() - L.since)}`];
+      if (L.svc_down) return ['bad', `${L.svc_down} of ${L.svc_total} service${L.svc_total === 1 ? '' : 's'} down`];
+      return ['ok', `up for ${dur(now() - L.since)}`];
+    }
+    if (a.status === 'pending') return ['unk', 'pending approval'];
+    if (!a.online) return ['bad', `offline since ${fmtDate(a.last_seen)}`];
+    return ['ok', a.status === 'report_only' ? 'online (report only)' : 'online'];
+  }
+  // The tree: root (master), its devices, and each probe's devices.
+  function tree(d) {
+    const A = d.agents, groups = d.groups || [];
+    const gi = (a) => { const i = groups.findIndex((g) => g.id === a.group_id); return i < 0 ? groups.length : i; };
+    const rootA = A.find((a) => a.is_master && a.status !== 'pending' && !isLocal(a)) || null;
+    const agents = new Map(A.filter((a) => !isLocal(a)).map((a) => [a.id, a]));
+    const kids = new Map();
+    const add = (pid, a, remote) => { if (!kids.has(pid)) kids.set(pid, []); kids.get(pid).push({ a, remote }); };
+    for (const a of A) {
+      if (a === rootA) continue;
+      const pid = isLocal(a) && a.local.probe && agents.has(a.local.probe.id) && a.local.probe.id !== rootA?.id ? a.local.probe.id : 'root';
+      add(pid, a, pid !== 'root');
+    }
+    for (const l of kids.values()) l.sort((x, y) => gi(x.a) - gi(y.a) || byText(x.a.name, y.a.name));
+    // Probe agents are level 1 (monitored by the master), their devices level 2.
+    const node = (id, a, remote, depth) => ({ id, a, remote, depth, kids: (kids.get(id) || []).map((k) => node(k.a.id, k.a, k.remote, depth + 1)) });
+    return node('root', rootA, false, 0);
+  }
+  // Positions: leaves take the next free row; a parent is centred on its children.
+  function place(root) {
+    let row = 0;
+    const all = [];
+    (function walk(n) {
+      n.x = PAD + n.depth * (W + GAP);
+      if (!n.kids.length) { n.y = PAD + row * ROW; row++; }
+      else { n.kids.forEach(walk); n.y = (n.kids[0].y + n.kids[n.kids.length - 1].y) / 2; }
+      all.push(n);
+    })(root);
+    const depth = Math.max(...all.map((n) => n.depth));
+    return { all, w: PAD * 2 + (depth + 1) * W + depth * GAP, h: PAD * 2 + Math.max(1, row) * ROW - (ROW - H) };
+  }
+  // Right-angled connectors: one trunk per parent, a branch to each child.
+  function lines(all) {
+    const out = [];
+    for (const n of all) {
+      if (!n.kids.length) continue;
+      const tx = n.x + W + GAP / 2, py = n.y + H / 2;
+      const ys = n.kids.map((k) => k.y + H / 2);
+      const remote = n.kids.some((k) => k.remote);
+      out.push(html`<path class="mapline ${remote ? 'remote' : ''}" d="M${n.x + W} ${py} H${tx} M${tx} ${Math.min(py, ...ys)} V${Math.max(py, ...ys)}"/>`);
+      for (const k of n.kids) out.push(html`<path class="mapline ${k.remote ? 'remote' : ''}" d="M${tx} ${k.y + H / 2} H${k.x}"/>`);
+    }
+    return out;
+  }
+  function box(n) {
+    const a = n.a, [cls, why] = health(a), name = a ? a.name : 'Master';
+    const tip = `${name}: ${why}${n.remote ? ` · checked by ${a.local.probe.name}` : ''}`;
+    return html`<g class="mapbox ${cls} ${a ? 'click' : ''}" id="map-${n.id}" ${a ? raw(`data-act="open" data-id="${esc(a.id)}"`) : ''} transform="translate(${n.x} ${n.y})">
+      <title>${tip}</title><rect width="${W}" height="${H}" rx="8"/><circle cx="16" cy="${H / 2}" r="5"/>
+      <text x="30" y="${H / 2 + 4.5}">${clipText(name, 20)}</text></g>`;
+  }
+  function render() {
+    const d = st.data;
+    if (!d) return;
+    const root = tree(d);
+    const { all, w, h } = place(root);
+    const key = all.map((n) => `${n.id}@${n.x},${n.y}${n.remote ? 'r' : ''}`).join('|') + '|' + all.map((n) => (n.a ? n.a.name : '')).join(',');
+    if (key === st.key) {
+      // Same tree: only colours and status texts change.
+      for (const n of all) {
+        const g = document.getElementById('map-' + n.id);
+        if (!g) continue;
+        const [cls, why] = health(n.a);
+        g.classList.remove('ok', 'bad', 'unk');
+        g.classList.add(cls);
+        const t = g.querySelector('title');
+        if (t) t.textContent = `${n.a ? n.a.name : 'Master'}: ${why}${n.remote ? ` · checked by ${n.a.local.probe.name}` : ''}`;
+      }
+      return;
+    }
+    st.key = key;
+    setHTML($('#map'), html`<div class="panel mapwrap"><svg class="mapsvg" width="${w}" height="${h}" viewBox="0 0 ${w} ${h}" role="img" aria-label="Monitoring map">
+      ${lines(all)}${all.map(box)}</svg></div>
+      <div class="row dim small" style="margin-top:10px;gap:16px"><span><i class="lg ok"></i>up</span><span><i class="lg bad"></i>down or a service down</span><span><i class="lg none"></i>unknown, waiting, pending or maintenance</span>
+        <span><svg width="28" height="8"><path class="mapline" d="M0 4 H28"/></svg> monitored by the master</span><span><svg width="28" height="8"><path class="mapline remote" d="M0 4 H28"/></svg> checked by a remote probe</span></div>`);
+  }
+  return {
+    interval: 5000,
+    mount(el) {
+      el.innerHTML = r(html`${subTabs('dashboard', 'map')}<div class="page-head"><div><h1>Map</h1><div class="sub">Every device and who monitors it</div></div></div><div id="map"></div>`);
+    },
+    async refresh() { const d = await GET('overview'); d.groups ||= []; st.data = d; render(); },
+    acts: { open: (t) => { location.hash = '#/device/' + t.dataset.id; } },
   };
 }
 

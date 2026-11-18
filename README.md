@@ -27,6 +27,8 @@ as **agentless** devices: the master itself pings them and checks their services
   ping and per-service TCP checks (heartbeat, retries, timeout, reverse mode),
   with a 24-hour history and a graph of the ping's round-trip time. For a network
   the master cannot reach, an agent there can do the checks instead ("Checked by").
+* **Map**: a live drawing of every device and who monitors it (the master or a
+  remote probe), coloured green, red or grey.
 * **Maintenance**: pause all checks of a device for 5 minutes up to 4 hours, or
   until ended by hand; no automatic jobs run and no failures are shown meanwhile.
 * **Releases**: update the master and the agents from the website.
