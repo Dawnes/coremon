@@ -1,7 +1,6 @@
 package master
 
 import (
-	"encoding/json"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
@@ -59,7 +58,7 @@ func TestTrustedSignIn(t *testing.T) {
 	}
 
 	// From a trusted network: no code.
-	if code, b := admin.do("POST", "/api/ui/settings/more", `{"tfa_mode":"untrusted","tfa_trusted":"127.0.0.1"}`); code != 200 || !strings.Contains(b, `"client_trusted":true`) {
+	if code, b := admin.do("POST", "/api/ui/settings/access", `{"ui_port":8443,"tfa_mode":"untrusted","tfa_trusted":"127.0.0.1"}`); code != 200 || !strings.Contains(b, `"client_trusted":true`) {
 		t.Fatalf("save: %d %s", code, b)
 	}
 	if b := signIn(); strings.Contains(b, "code_required") || !strings.Contains(b, `"ok":true`) {
@@ -75,29 +74,44 @@ func TestTrustedSignIn(t *testing.T) {
 		t.Error("no audit note for the skipped code")
 	}
 
-	// Saving General keeps the right-hand block.
-	_, body := admin.do("GET", "/api/ui/settings", "")
-	var g struct {
-		Settings json.RawMessage `json:"settings"`
+	// Each block saves only its own settings.
+	for _, c := range []struct{ block, body string }{
+		{"agents", `{"heartbeat_sec":45,"check_interval_hours":12}`},
+		{"lookups", `{"os_info_days":30,"vuln_days":7,"github_repo":"owner/name"}`},
+		{"history", `{"retention_days":5,"probe_results_shown":true}`},
+	} {
+		if code, b := admin.do("POST", "/api/ui/settings/"+c.block, c.body); code != 200 {
+			t.Fatalf("%s: %d %s", c.block, code, b)
+		}
 	}
-	json.Unmarshal([]byte(body), &g)
-	if code, b := admin.do("POST", "/api/ui/settings", string(g.Settings)); code != 200 {
-		t.Fatalf("general save: %d %s", code, b)
+	set := s.st.st.Settings
+	if set.TFAMode != tfaUntrusted || len(set.TFATrusted) != 1 || set.UIPort != 8443 || set.HeartbeatSec != 45 || set.CheckIntervalHours != 12 ||
+		set.OSInfoDays != 30 || set.VulnDays != 7 || set.GitHubRepo != "owner/name" || set.RetentionDays != 5 || !set.ProbeResultsShown {
+		t.Errorf("blocks mixed up: %+v", set)
 	}
-	if s.st.st.Settings.TFAMode != tfaUntrusted || len(s.st.st.Settings.TFATrusted) != 1 {
-		t.Errorf("general save changed 2FA: %+v", s.st.st.Settings)
+	if code, _ := admin.do("POST", "/api/ui/settings/nothing", `{}`); code != 404 {
+		t.Error("unknown block accepted")
+	}
+	acts := map[string]bool{}
+	for _, e := range s.audit.list("", "", 100) {
+		acts[e.Action] = true
+	}
+	for _, a := range []string{"settings.agents", "settings.access", "settings.lookups", "settings.history", "settings.2fa_trusted", "settings.probe_results"} {
+		if !acts[a] {
+			t.Errorf("no audit entry %s", a)
+		}
 	}
 
 	// Networks kept while Always; an empty list is always Always.
-	admin.do("POST", "/api/ui/settings/more", `{"tfa_mode":"","tfa_trusted":"127.0.0.1"}`)
+	admin.do("POST", "/api/ui/settings/access", `{"ui_port":8443,"tfa_mode":"","tfa_trusted":"127.0.0.1"}`)
 	if b := signIn(); !strings.Contains(b, "code_required") || len(s.st.st.Settings.TFATrusted) != 1 {
 		t.Errorf("always: %s", b)
 	}
-	admin.do("POST", "/api/ui/settings/more", `{"tfa_mode":"untrusted","tfa_trusted":" "}`)
+	admin.do("POST", "/api/ui/settings/access", `{"ui_port":8443,"tfa_mode":"untrusted","tfa_trusted":" "}`)
 	if s.st.st.Settings.TFAMode != tfaAlways {
 		t.Error("empty list left on untrusted")
 	}
-	if code, _ := admin.do("POST", "/api/ui/settings/more", `{"tfa_mode":"untrusted","tfa_trusted":"0.0.0.0/0"}`); code != 400 {
+	if code, _ := admin.do("POST", "/api/ui/settings/access", `{"ui_port":8443,"tfa_mode":"untrusted","tfa_trusted":"0.0.0.0/0"}`); code != 400 {
 		t.Error("too wide accepted")
 	}
 }

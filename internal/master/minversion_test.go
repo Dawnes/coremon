@@ -88,7 +88,7 @@ func TestMinimumAgentVersion(t *testing.T) {
 	c := newUIClient(t, srv.URL)
 	c.do("POST", "/api/ui/login", `{"username":"admin","password":"`+strings.TrimSpace(string(pw))+`"}`)
 	set := func(min string) (int, string) {
-		return c.do("POST", "/api/ui/settings", `{"check_interval_hours":6,"heartbeat_sec":30,"retention_days":3,"ui_port":8443,"os_info_days":14,"vuln_days":1,"min_agent_version":"`+min+`"}`)
+		return c.do("POST", "/api/ui/settings/agents", `{"check_interval_hours":6,"heartbeat_sec":30,"min_agent_version":"`+min+`"}`)
 	}
 	if code, _ := set("0.3.0"); code != 400 {
 		t.Error("a minimum below the stored versions was accepted")

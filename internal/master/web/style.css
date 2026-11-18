@@ -343,6 +343,10 @@ ul.plainlist { margin: 0; padding-left: 18px; line-height: 1.8; }
 .gempty { padding: 18px; text-align: center; color: var(--dim); font-size: 12.5px; border: 1px dashed var(--line-hi); border-radius: var(--radius); }
 .c-amber { color: var(--amber); font-weight: 600; }
 .c-blue { color: var(--blue); font-weight: 600; }
+/* Settings > General: blocks side by side on wide screens, stacked on narrow ones. */
+.setgrid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; align-items: start; }
+.setgrid > .panel { min-width: 0; }
+@media (max-width: 1100px) { .setgrid { grid-template-columns: 1fr; } }
 .c-red { color: var(--red); font-weight: 600; }
 .when { cursor: help; }
 .tag svg { width: 12px; height: 12px; vertical-align: -2px; }

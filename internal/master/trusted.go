@@ -1,13 +1,11 @@
 package master
 
-// The right-hand block of Settings > General: showing received probe
-// results, and trusted networks from which users with 2FA sign in without
-// the code step (the password is always needed; turning 2FA off and backup
+// Trusted networks (Settings > General, Website & sign-in): users with 2FA
+// sign in from them without the code step (the password is always needed; turning 2FA off and backup
 // downloads still ask for the code).
 
 import (
 	"fmt"
-	"net/http"
 	"net/netip"
 	"strings"
 )
@@ -78,45 +76,6 @@ func trustedIP(set Settings, ip string) bool {
 		}
 	}
 	return false
-}
-
-// handleSettingsMore saves the right-hand block only.
-func (s *Server) handleSettingsMore(w http.ResponseWriter, r *http.Request) {
-	var req struct {
-		ProbeResultsShown bool   `json:"probe_results_shown"`
-		TFAMode           string `json:"tfa_mode"`
-		TFATrusted        string `json:"tfa_trusted"`
-	}
-	if !readJSON(w, r, &req, 8192) {
-		return
-	}
-	if req.TFAMode != tfaAlways && req.TFAMode != tfaUntrusted {
-		http.Error(w, "2FA mode must be always or untrusted", http.StatusBadRequest)
-		return
-	}
-	nets, err := parseTrusted(req.TFATrusted)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
-		return
-	}
-	if len(nets) == 0 {
-		req.TFAMode = tfaAlways // no networks: always ask
-	}
-	ip := clientIP(r)
-	s.st.mu.Lock()
-	old := s.st.st.Settings
-	set := &s.st.st.Settings
-	set.ProbeResultsShown, set.TFAMode, set.TFATrusted = req.ProbeResultsShown, req.TFAMode, nets
-	now := *set
-	s.st.markDirty()
-	s.st.mu.Unlock()
-	if old.ProbeResultsShown != now.ProbeResultsShown {
-		s.audit.write(actor(r), ip, "settings.probe_results", "", "show received probe results on Remote Probes: "+onOff(now.ProbeResultsShown))
-	}
-	if old.TFAMode != now.TFAMode || strings.Join(old.TFATrusted, ",") != strings.Join(now.TFATrusted, ",") {
-		s.audit.write(actor(r), ip, "settings.2fa_trusted", "", fmt.Sprintf("ask 2FA code: %s; trusted networks: %s", tfaModeText(now.TFAMode), orNone(strings.Join(now.TFATrusted, ", "))))
-	}
-	writeJSON(w, map[string]any{"settings": now, "client_ip": ip, "client_trusted": trustedIP(now, ip)})
 }
 
 func tfaModeText(m string) string {

@@ -2635,6 +2635,12 @@ function SettingsLocal() {
 
 function SettingsGeneral() {
   const st = { saved: null, next: 0, timer: null };
+  // One block: heading, description and a form with its own Save.
+  const block = (name, title, sub, body) => html`<div class="panel panel-pad">
+    <h2 style="margin:0">${title}</h2><div class="muted small" style="margin:4px 0 4px">${sub}</div>
+    <form class="form" data-submit="save-${name}"><fieldset class="plain" ${canChange() ? '' : 'disabled'}>${body}
+      ${ifChange(html`<div><button class="btn primary">Save</button></div>`)}</fieldset></form></div>`;
+  const form = (name) => $(`form[data-submit="save-${name}"]`);
   async function preview(f) {
     const days = +f.ret.value;
     const info = $('#ret-info');
@@ -2701,14 +2707,16 @@ function SettingsGeneral() {
       st.saved = s.retention_days;
       el.innerHTML = r(html`${settingsHead('general', 'General', 'How the master checks, cleans up and is reached')}
         ${canChange() ? '' : html`<div class="notice blue">Your account is read-only: you can see these settings but not change them.</div>`}
-        <div class="row" style="align-items:flex-start;gap:16px;flex-wrap:wrap">
-        <div class="panel panel-pad" style="flex:1 1 480px;max-width:720px;min-width:0">
-          <form class="form" data-submit="save" style="margin-top:0"><fieldset class="plain" ${canChange() ? '' : 'disabled'}>
-            <label class="field">Automatic update check interval (hours)<input type="number" name="interval" min="1" max="168" value="${s.check_interval_hours}"></label>
+        <div class="setgrid">
+        ${block('agents', 'Agents', 'How the master works with its agents', html`
             <label class="field">Heartbeat (seconds)<input type="number" name="hb" min="${L.heartbeat_min}" max="${L.heartbeat_max}" value="${s.heartbeat_sec}"></label>
             <div class="dim small" id="hb-hint"></div>
-            <label class="field">Keep audit log and job history<span class="range"><input type="range" name="ret" min="${L.retention_min}" max="${L.retention_max}" step="1" value="${s.retention_days}"><b id="ret-val"></b></span></label>
-            <div class="dim small" id="ret-info"></div>
+            <label class="field">Automatic update check interval (hours)<input type="number" name="interval" min="1" max="168" value="${s.check_interval_hours}"></label>
+            <div class="dim small">Every this many hours, all agents check for package updates at once.</div>
+            <label class="field">Lowest allowed agent version<select name="minagent">
+              ${[...(d.agent_versions || [])].reverse().map((v, i) => html`<option value="${v}" ${v === (s.min_agent_version || d.min_agent) ? 'selected' : ''}>${v}${i === 0 ? ' (oldest stored)' : ''}</option>`)}</select></label>
+            <div class="dim small">Older agents can still connect, but only to be updated: the master stores and shows none of their data and runs nothing else on them.</div>`)}
+        ${block('access', 'Website & sign-in', 'How people and agents reach the master, and how users sign in', html`
             <label class="field">Website port<select name="port">
               <option value="8443" ${s.ui_port !== 443 ? 'selected' : ''}>8443 (default)</option>
               <option value="443" ${s.ui_port === 443 ? 'selected' : ''}>443 (https)</option></select></label>
@@ -2716,58 +2724,50 @@ function SettingsGeneral() {
             ${d.ui_port_error ? html`<div class="notice red" style="margin:0">${d.ui_port_error}</div>` : ''}
             <div id="url-box"></div>
             <div class="dim small">Automatic: the address your browser uses, with the agent port. Change it only if agents reach the master under a different name.</div>
-            <label class="field">Look up OS support dates<select name="osinfo">
-              ${(d.os_info_choices || [3, 14, 30, 90]).map((n) => html`<option value="${n}" ${n === s.os_info_days ? 'selected' : ''}>every ${n} days${n === 14 ? ' (default)' : ''}</option>`)}</select></label>
-            <div id="osinfo-box"></div>
-            <label class="field">Check applications for known vulnerabilities (CVEs)<select name="vulns">
-              ${(d.vuln_choices || [1, 7, 30, 90]).map((n) => html`<option value="${n}" ${n === s.vuln_days ? 'selected' : ''}>every ${n === 1 ? 'day' : n + ' days'}${n === 1 ? ' (default)' : ''}</option>`)}</select></label>
-            <div id="vuln-box"></div>
-            <label class="field">Lowest allowed agent version<select name="minagent">
-              ${[...(d.agent_versions || [])].reverse().map((v, i) => html`<option value="${v}" ${v === (s.min_agent_version || d.min_agent) ? 'selected' : ''}>${v}${i === 0 ? ' (oldest stored)' : ''}</option>`)}</select></label>
-            <div class="dim small">Older agents can still connect, but only to be updated: the master stores and shows none of their data and runs nothing else on them.</div>
-            <label class="field">GitHub repository for releases<input type="text" name="gh" placeholder="owner/name" value="${s.github_repo}"></label>
-            <div class="dim small mono" style="word-break:break-all">${d.index_url ? 'Version index: ' + d.index_url : ''}</div>
-            ${ifChange(html`<div><button class="btn primary">Save</button></div>`)}
-          </fieldset></form>
-        </div>
-        <div class="panel panel-pad" style="flex:1 1 320px;max-width:520px;min-width:0">
-          <form class="form" data-submit="save-more" style="margin-top:0"><fieldset class="plain" ${canChange() ? '' : 'disabled'}>
-            <label class="checkrow"><input type="checkbox" name="proberesults" ${s.probe_results_shown ? 'checked' : ''}> Show received probe results on Remote Probes</label>
-            <div class="dim small">Activity › Remote Probes then also lists each batch of check results a remote probe sends, for 20 seconds, with the checks that failed. For all users.</div>
             <label class="field">Ask for the 2FA code<select name="tfamode">
               <option value="" ${s.tfa_mode !== 'untrusted' ? 'selected' : ''}>Always</option>
               <option value="untrusted" ${s.tfa_mode === 'untrusted' ? 'selected' : ''}>From untrusted networks</option></select></label>
             <label class="field">Trusted networks<input type="text" name="tfanets" value="${(s.tfa_trusted || []).join(', ')}" spellcheck="false" autocomplete="off" placeholder="none"></label>
             <div class="dim small">Comma separated, e.g. <span class="mono">192.168.5.0/24, 10.0.0.7/32, fd00::/64</span>. A single address is one host (/32). At most 20; none wider than /8 (IPv4) or /32 (IPv6).
               For users with 2FA on, a sign-in from a trusted network skips the code; the password is always needed. Turning 2FA off and downloading a backup still ask for the code.</div>
-            <div class="small" id="tfa-me"></div>
-            ${ifChange(html`<div><button class="btn primary">Save</button></div>`)}
-          </fieldset></form>
-        </div>
+            <div class="small" id="tfa-me"></div>`)}
+        ${block('lookups', 'Online lookups', 'What the master fetches from the internet, and how often', html`
+            <label class="field">Look up OS support dates<select name="osinfo">
+              ${(d.os_info_choices || [3, 14, 30, 90]).map((n) => html`<option value="${n}" ${n === s.os_info_days ? 'selected' : ''}>every ${n} days${n === 14 ? ' (default)' : ''}</option>`)}</select></label>
+            <div id="osinfo-box"></div>
+            <label class="field">Check applications for known vulnerabilities (CVEs)<select name="vulns">
+              ${(d.vuln_choices || [1, 7, 30, 90]).map((n) => html`<option value="${n}" ${n === s.vuln_days ? 'selected' : ''}>every ${n === 1 ? 'day' : n + ' days'}${n === 1 ? ' (default)' : ''}</option>`)}</select></label>
+            <div id="vuln-box"></div>
+            <label class="field">GitHub repository for releases<input type="text" name="gh" placeholder="owner/name" value="${s.github_repo}"></label>
+            <div class="dim small mono" style="word-break:break-all">${d.index_url ? 'Version index: ' + d.index_url : ''}</div>`)}
+        ${block('history', 'History & display', 'What is kept, and what is shown in addition', html`
+            <label class="field">Keep audit log and job history<span class="range"><input type="range" name="ret" min="${L.retention_min}" max="${L.retention_max}" step="1" value="${s.retention_days}"><b id="ret-val"></b></span></label>
+            <div class="dim small" id="ret-info"></div>
+            <label class="checkrow"><input type="checkbox" name="proberesults" ${s.probe_results_shown ? 'checked' : ''}> Show received probe results on Remote Probes</label>
+            <div class="dim small">Activity › Remote Probes then also lists each batch of check results a remote probe sends, for 20 seconds, with the checks that failed. For all users.</div>`)}
         </div>`);
       st.d = d;
       st.me = { ip: d.client_ip, trusted: d.client_trusted };
       meBox();
-      const fm = $('form[data-submit="save-more"]', el);
-      const empty = () => !fm.tfanets.value.trim();
-      fm.tfanets.addEventListener('input', () => { if (empty() && fm.tfamode.value) fm.tfamode.value = ''; });
-      fm.tfamode.addEventListener('change', () => { if (fm.tfamode.value && empty()) { fm.tfamode.value = ''; toast('Enter a trusted network first', 'err'); } });
+      const fa = form('access');
+      const empty = () => !fa.tfanets.value.trim();
+      fa.tfanets.addEventListener('input', () => { if (empty() && fa.tfamode.value) fa.tfamode.value = ''; });
+      fa.tfamode.addEventListener('change', () => { if (fa.tfamode.value && empty()) { fa.tfamode.value = ''; toast('Enter a trusted network first', 'err'); } });
       st.url = s.master_url || '';
       st.editing = false;
       urlBox();
       osInfoBox(d.os_info);
       vulnBox(d.vulns);
-      const f = $('form[data-submit=save]', el);
-      const upd = () => {
-        const days = +f.ret.value;
-        $('#ret-val').textContent = `${days} day${days === 1 ? '' : 's'}`;
-        const hb = +f.hb.value || 0;
+      const fg = form('agents'), fh = form('history');
+      const hbHint = () => {
+        const hb = +fg.hb.value || 0;
         $('#hb-hint').textContent = `Agents contact the master at least every ${hb}s. A device is shown offline after ${hb * 3}s without contact. Commands are delivered instantly regardless.`;
       };
-      f.ret.addEventListener('input', () => { upd(); clearTimeout(st.timer); st.timer = setTimeout(() => preview(f), 250); });
-      f.hb.addEventListener('input', upd);
-      upd();
-      preview(f);
+      const retVal = () => { const days = +fh.ret.value; $('#ret-val').textContent = `${days} day${days === 1 ? '' : 's'}`; };
+      fh.ret.addEventListener('input', () => { retVal(); clearTimeout(st.timer); st.timer = setTimeout(() => preview(fh), 250); });
+      fg.hb.addEventListener('input', hbHint);
+      hbHint(); retVal();
+      preview(fh);
     },
     unmount() { clearTimeout(st.timer); },
     acts: {
@@ -2797,33 +2797,40 @@ function SettingsGeneral() {
         st.d.vulns = (await POST('vulns/nvdkey', { key: '' })).vulns;
         vulnBox(st.d.vulns); toast('NVD API key removed', 'ok');
       },
-      'save-more': async (f) => {
+      'url-change': () => { st.editing = true; urlBox(); },
+      'url-auto': () => { st.url = ''; st.editing = false; urlBox(); toast('Automatic address — press Save to apply'); },
+      // Each block saves only its own settings.
+      'save-agents': async (f) => {
+        await POST('settings/agents', { heartbeat_sec: +f.hb.value, check_interval_hours: +f.interval.value, min_agent_version: f.minagent?.value || '' });
+        toast('Agents settings saved', 'ok');
+      },
+      'save-access': async (f) => {
         if (!f.tfanets.value.trim()) f.tfamode.value = '';
-        const res = await POST('settings/more', { probe_results_shown: f.proberesults.checked, tfa_mode: f.tfamode.value, tfa_trusted: f.tfanets.value });
+        const url = st.editing ? f.url.value.trim() : st.url;
+        const res = await POST('settings/access', { ui_port: +f.port.value, master_url: url, tfa_mode: f.tfamode.value, tfa_trusted: f.tfanets.value });
         const s = res.settings;
+        st.url = s.master_url || '';
+        st.editing = false;
+        urlBox();
         f.tfamode.value = s.tfa_mode || '';
         f.tfanets.value = (s.tfa_trusted || []).join(', ');
         st.me = { ip: res.client_ip, trusted: res.client_trusted };
         meBox();
-        toast('Saved', 'ok');
+        if (res.ui_port_error) toast(res.ui_port_error, 'err');
+        else toast('Website & sign-in settings saved', 'ok');
       },
-      'url-change': () => { st.editing = true; urlBox(); },
-      'url-auto': () => { st.url = ''; st.editing = false; urlBox(); toast('Automatic address — press Save to apply'); },
-      save: async (f) => {
-        const url = st.editing ? f.url.value.trim() : st.url;
-        const res = await POST('settings', { check_interval_hours: +f.interval.value, heartbeat_sec: +f.hb.value, retention_days: +f.ret.value,
-          ui_port: +f.port.value, master_url: url, github_repo: f.gh.value, os_info_days: +f.osinfo.value, min_agent_version: f.minagent?.value || '',
-          vuln_days: +f.vulns.value });
+      'save-lookups': async (f) => {
+        await POST('settings/lookups', { os_info_days: +f.osinfo.value, vuln_days: +f.vulns.value, github_repo: f.gh.value });
         if (f.nvdkey?.value.trim()) {
           st.d.vulns = (await POST('vulns/nvdkey', { key: f.nvdkey.value.trim() })).vulns;
           vulnBox(st.d.vulns);
         }
-        st.url = res.settings.master_url || '';
-        st.editing = false;
-        urlBox();
+        toast('Online lookups saved', 'ok');
+      },
+      'save-history': async (f) => {
+        const res = await POST('settings/history', { retention_days: +f.ret.value, probe_results_shown: f.proberesults.checked });
         st.saved = res.settings.retention_days;
-        if (res.ui_port_error) toast(res.ui_port_error, 'err');
-        else toast('Saved', 'ok');
+        toast('History & display saved', 'ok');
         preview(f);
       },
     },

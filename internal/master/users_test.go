@@ -89,7 +89,7 @@ func TestUsersAndRoles(t *testing.T) {
 	}
 	// ...but changes nothing and sees no enrollment tokens.
 	for _, c := range [][2]string{
-		{"GET", "/api/ui/tokens"}, {"POST", "/api/ui/tokens"}, {"POST", "/api/ui/settings"}, {"POST", "/api/ui/actions"},
+		{"GET", "/api/ui/tokens"}, {"POST", "/api/ui/tokens"}, {"POST", "/api/ui/settings/agents"}, {"POST", "/api/ui/settings/access"}, {"POST", "/api/ui/actions"},
 		{"POST", "/api/ui/groups"}, {"POST", "/api/ui/layout"}, {"POST", "/api/ui/master/update"}, {"GET", "/api/ui/users"},
 		{"POST", "/api/ui/users"}, {"POST", "/api/ui/releases/check"},
 	} {
