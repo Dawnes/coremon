@@ -1486,8 +1486,7 @@ function AgentPage([id, tab]) {
         <div class="row">${verPill(a)}${a.core_latest ? html`<span class="muted small">latest available: <span class="ver">${a.core_latest}</span></span>` : ''}</div>
         ${a.desired_core ? html`<div class="notice blue" style="margin:14px 0 0">Change to ${a.desired_core} requested${a.online ? ' — the agent downloads the signed binary and restarts.' : ' — applies as soon as the device is online.'}</div>` : ''}
         <div class="facts" style="margin-top:14px">${kv.map(([k, v]) => html`<div><div class="k">${k}</div><div class="v">${v || '—'}</div></div>`)}</div>
-        <div class="row" style="margin-top:14px"><span class="muted small">Functions:</span>${(a.features || []).map((n) => html`<span class="tag mono">${n}</span>`)}</div>
-        <div style="margin-top:14px"><a href="#/settings/releases">${canChange() ? 'Change the agent version in Releases' : 'Agent versions in Releases'}</a></div>
+        <div class="row" style="margin-top:14px"><span class="muted small">Functions:</span>${[...(a.features || []), ...(a.probe ? ['probe'] : [])].map((n) => html`<span class="tag mono">${n}</span>`)}</div>
       </div>`;
   }
   function jobsTab() {
@@ -1891,12 +1890,12 @@ function LocalPage([id, tab]) {
         <div class="row dim small" style="margin-top:10px;gap:14px"><span><i class="lg ok"></i>all answered</span><span><i class="lg part"></i>some answered</span><span><i class="lg bad"></i>none answered</span><span><i class="lg none"></i>no pings</span></div>
         ${P ? html`<div class="row" style="margin:22px 0 10px"><h3 style="margin:0">Round-trip time</h3><span class="spacer"></span><span class="dim small">average per 5 minutes · point at the graph for lowest and highest</span></div>${rttGraph(P.rtt)}` : ''}</div>
       <div class="panel panel-pad" style="margin-top:16px"><div class="row" style="margin-bottom:12px"><h2 style="margin:0">Services, last 24 hours</h2><span class="spacer"></span>
-        <a href="#" class="small" data-act="tab" data-t="services">${canChange() ? 'Details, add or remove' : 'Details'}</a></div>
+        <button class="btn ghost sm" data-act="tab" data-t="services">${canChange() ? 'Configure' : 'Details'}</button></div>
         ${svcs.length ? html`<div class="svcsum">${svcs.map((s) => html`
           <div class="svcsum-row ${s.paused ? 'paused' : ''}"><div class="svcsum-name">${svcState(s)} <b>${s.name}</b> <span class="dim small mono">TCP ${s.port}</span>${s.reverse ? html` <span class="badge info xs" title="Reverse mode: reachable counts as down">reverse</span>` : ''}</div>
             <div class="svcsum-bar">${uptimeBar(s.hist, { word: 'check', compact: true })}</div>
             <div class="svcsum-pct dim small">${s.uptime >= 0 ? `${pctText(s.uptime)} up` : 'no checks yet'}</div></div>`)}</div>`
-          : html`<div class="dim small">No services yet.</div>`}</div>`;
+          : html`<div class="dim small">No services</div>`}</div>`;
   }
   function pauseBtn(paused, act, extra) {
     return html`<button class="btn ghost sm iconbtn" data-act="${act}" ${raw(extra)} title="${paused ? 'Resume: check it again' : 'Pause: stop checking it for now'}">${icon(paused ? 'play' : 'pause')}</button>`;
@@ -1905,7 +1904,7 @@ function LocalPage([id, tab]) {
     const svcs = L.services || [], P = L.ping_info;
     const head = html`<div class="row" style="margin-bottom:12px"><span class="muted small">The ping and the TCP services are checked ${L.probe ? html`by the agent <b>${L.probe.name}</b>, on its own schedule` : 'from the master'}. For a TCP service it only connects: nothing is sent and nothing is logged in to.</span>
       <span class="spacer"></span>${ifChange(html`<button class="btn primary sm" data-act="svc-add">${icon('plus')} Add service</button>`)}</div>`;
-    if (!svcs.length && !P) return html`${head}<div class="panel empty">No services yet.</div>`;
+    if (!svcs.length && !P) return html`${head}<div class="panel empty">No services</div>`;
     const pingRow = P ? html`<tr class="${P.mode === 'paused' ? 'dimrow' : ''}">
         <td class="nowrap">${pingState(P)}${P.checked && P.mode !== 'paused' ? html`<div class="dim small">${dur(now() - P.since)}</div>` : ''}</td>
         <td class="nowrap"><b>Ping</b><div class="dim small mono">ICMP</div></td>
