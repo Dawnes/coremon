@@ -55,9 +55,9 @@ const icon = (n) => raw(`<svg viewBox="0 0 24 24" fill="none" stroke="currentCol
 const now = () => Date.now() / 1000;
 const p2 = (n) => String(n).padStart(2, '0');
 function fmtDate(ts, seconds = false) {
-  if (!ts) return '—';
+  if (!ts) return 'â€”';
   const d = typeof ts === 'string' ? new Date(ts) : new Date(ts * 1000);
-  if (isNaN(d)) return '—';
+  if (isNaN(d)) return 'â€”';
   const t = `${p2(d.getHours())}:${p2(d.getMinutes())}${seconds ? ':' + p2(d.getSeconds()) : ''}`;
   return `${p2(d.getDate())}-${p2(d.getMonth() + 1)}-${d.getFullYear()} ${t}`;
 }
@@ -76,7 +76,7 @@ function dur(s) {
   return d ? `${d}d ${h}h` : h ? `${h}h ${m}m` : `${m}m`;
 }
 function bytes(n) {
-  if (!n) return '—';
+  if (!n) return 'â€”';
   const u = ['B', 'KB', 'MB', 'GB', 'TB'];
   let i = 0;
   while (n >= 1024 && i < u.length - 1) { n /= 1024; i++; }
@@ -256,15 +256,15 @@ function statusBadge(st) {
 }
 function jobTitle(j) {
   switch (j.type) {
-    case 'action': return `${j.feature} · ${j.action}`;
-    case 'core.update': return `agent → ${j.artifact ? j.artifact.version : '?'}`;
+    case 'action': return `${j.feature} Â· ${j.action}`;
+    case 'core.update': return `agent â†’ ${j.artifact ? j.artifact.version : '?'}`;
     case 'agent.uninstall': return 'uninstall agent';
     case 'agent.mode': return /"report_only":true/.test(JSON.stringify(j.params)) ? 'report only' : 'allow changes';
     case 'agent.ping': return 'ping';
     case 'agent.pins': return 'master keys';
     case 'probe.list': return 'send check list';
     case 'probe.clear': return 'clear check list';
-    default: return j.type + (j.action ? ' · ' + j.action : '');
+    default: return j.type + (j.action ? ' Â· ' + j.action : '');
   }
 }
 function jobParams(j) {
@@ -293,7 +293,7 @@ function openJob(id) {
       const j = d.job;
       $('#jm-title', m.el).textContent = jobTitle(j);
       setHTML($('#jm-status', m.el), statusBadge(j.status));
-      $('#jm-sub', m.el).textContent = `${d.agent_name || j.agent_id} · by ${j.actor} · created ${fmtDate(j.created, true)}${jobParams(j) ? ' · ' + jobParams(j) : ''}`;
+      $('#jm-sub', m.el).textContent = `${d.agent_name || j.agent_id} Â· by ${j.actor} Â· created ${fmtDate(j.created, true)}${jobParams(j) ? ' Â· ' + jobParams(j) : ''}`;
       if (d.log) {
         const atBottom = term.scrollHeight - term.scrollTop - term.clientHeight < 40;
         if (term.querySelector('.dim')) term.innerHTML = '';
@@ -308,10 +308,10 @@ function openJob(id) {
         offset = d.offset;
         if (atBottom) term.scrollTop = term.scrollHeight;
       }
-      const t = j.finished ? `finished ${fmtDate(j.finished, true)} · took ${dur(j.finished - (j.started || j.created))}` : j.started ? `started ${fmtDate(j.started, true)}` : `queued ${fmtDate(j.created, true)} — waiting for agent`;
+      const t = j.finished ? `finished ${fmtDate(j.finished, true)} Â· took ${dur(j.finished - (j.started || j.created))}` : j.started ? `started ${fmtDate(j.started, true)}` : `queued ${fmtDate(j.created, true)} â€” waiting for agent`;
       $('#jm-time', m.el).textContent = t;
       $('#jm-err', m.el).textContent = j.error || '';
-      if (!term.childElementCount && j.status === 'queued') term.innerHTML = '<span class="dim">Waiting for the agent to pick up this job…</span>';
+      if (!term.childElementCount && j.status === 'queued') term.innerHTML = '<span class="dim">Waiting for the agent to pick up this jobâ€¦</span>';
       if (j.status === 'queued' || j.status === 'running') timer = setTimeout(tick, 900);
       else { view?.refresh?.(); }
     } catch (e) { if (!stopped) timer = setTimeout(tick, 2500); }
@@ -365,7 +365,7 @@ document.addEventListener('submit', (e) => {
 
 let session = { version: '', min_password: 5, max_password: 40 };
 const pwMin = () => session.min_password || 5, pwMax = () => session.max_password || 40;
-const pwRange = () => `${pwMin()}–${pwMax()} characters`;
+const pwRange = () => `${pwMin()}â€“${pwMax()} characters`;
 const canChange = () => !!session.can_change;
 const ifChange = (x) => (canChange() ? x : '');
 let refreshTimer = null;
@@ -527,9 +527,9 @@ const MAINT_OFF = 'In maintenance and the agent is not connected';
 const pctText = (x) => (x >= 1 ? '100%' : x >= 0.999 ? '99.9%' : (Math.floor(x * 1000) / 10).toFixed(1) + '%');
 const rttText = (us) => (us < 1000 ? '<1 ms' : us < 10000 ? (us / 1000).toFixed(1) + ' ms' : Math.round(us / 1000) + ' ms');
 // The remote probe of an agentless device, when it delivers no results
-// (offline, cleared, …): the device is then unknown, not down.
+// (offline, cleared, â€¦): the device is then unknown, not down.
 const probeOut = (a) => (isLocal(a) && a.local.probe && a.local.probe.state !== 'ok' ? a.local.probe : null);
-const unknownText = (p) => `unknown – ${p.note}`;
+const unknownText = (p) => `unknown â€“ ${p.note}`;
 function agentDot(a) {
   if (a.maint) return html`<span class="dot maint" title="${maintText(a.maint)}"></span>`;
   if (isLocal(a)) {
@@ -539,14 +539,14 @@ function agentDot(a) {
     return html`<span class="dot ${L.up ? 'on' : 'off'}" title="${L.up ? 'up: answers ping' : 'down since ' + fmtDate(L.since)}"></span>`;
   }
   if (a.status === 'pending') return html`<span class="dot pend" title="pending approval"></span>`;
-  if (a.status === 'report_only') return html`<span class="dot pause" title="report only${a.online ? '' : ' · offline'}"></span>`;
+  if (a.status === 'report_only') return html`<span class="dot pause" title="report only${a.online ? '' : ' Â· offline'}"></span>`;
   return html`<span class="dot ${a.online ? 'on' : 'off'}" title="${a.online ? 'online' : 'offline since ' + fmtDate(a.last_seen)}"></span>`;
 }
 function osLabel(f) { return f.os_name || [f.os_id, f.os_version].filter(Boolean).join(' ') || 'unknown OS'; }
 const hasUpdates = (a) => !a.below_min && !isLocal(a);
 const ymd = (s) => (s ? s.split('-').reverse().join('-') : '');
 function osSupportText(o, osID) {
-  if (!o) return '—';
+  if (!o) return 'â€”';
   const esm = o.esm_until ? ` (ESM with Ubuntu Pro until ${ymd(o.esm_until)})` : '';
   switch (o.phase) {
     case 'security': return `security support until ${ymd(o.until)}${o.lts_until ? `, then LTS until ${ymd(o.lts_until)}` : ''}`;
@@ -565,7 +565,7 @@ function upgradedBy(by) {
 }
 function healthBadges(a, { eol = true } = {}) {
   const h = a.facts?.health, o = eol ? a.os_support : null, out = [];
-  if (h?.failed_count > 0) out.push(html`<span class="badge sec xs" title="Failed services: ${(h.failed || []).join(', ')}${h.failed_count > (h.failed || []).length ? ', …' : ''}">${h.failed_count} failed</span>`);
+  if (h?.failed_count > 0) out.push(html`<span class="badge sec xs" title="Failed services: ${(h.failed || []).join(', ')}${h.failed_count > (h.failed || []).length ? ', â€¦' : ''}">${h.failed_count} failed</span>`);
   if (o?.status === 'expired') out.push(html`<span class="badge sec xs" title="${osLabel(a.facts)}: ${osSupportText(o, a.facts.os_id)}">EOL</span>`);
   else if (o?.status === 'soon') out.push(html`<span class="badge upd xs" title="${osLabel(a.facts)}: ${osSupportText(o, a.facts.os_id)}">EOL soon</span>`);
   if (h?.auto_updates === 'on') out.push(html`<span class="badge info xs" title="Automatic updates (unattended-upgrades) are on">auto</span>`);
@@ -573,7 +573,7 @@ function healthBadges(a, { eol = true } = {}) {
 }
 function ipLabel(f) {
   const ips = f.ips || [];
-  if (!ips.length) return html`<span class="dim">—</span>`;
+  if (!ips.length) return html`<span class="dim">â€”</span>`;
   const first = ips.find((ip) => ip.includes('.')) || ips[0];
   const more = ips.length - 1;
   return html`<span class="ip" title="${ips.join('\n')}">${first}${more ? html` <span class="dim">+${more}</span>` : ''}</span>`;
@@ -584,7 +584,7 @@ function verPill(a) {
   if (!a.core_version) return '';
   const latest = a.core_is_latest;
   const tip = a.core_latest ? (latest ? 'latest agent version' : `latest is ${a.core_latest}`) : 'no agent versions on the master yet';
-  return html`<span class="verpill ${latest ? 'ok' : 'old'}" title="${tip}">agent ${a.core_version}</span>${a.desired_core ? html`<span class="verpill busy" title="change requested"><span class="spin" style="width:9px;height:9px"></span> → ${a.desired_core}</span>` : ''}`;
+  return html`<span class="verpill ${latest ? 'ok' : 'old'}" title="${tip}">agent ${a.core_version}</span>${a.desired_core ? html`<span class="verpill busy" title="change requested"><span class="spin" style="width:9px;height:9px"></span> â†’ ${a.desired_core}</span>` : ''}`;
 }
 function updBadges(a) {
   const u = a.updates;
@@ -611,16 +611,16 @@ function sevBadge(c) {
 function openCves(appName, v) {
   const pct = (x) => (x >= 0.1 ? Math.round(x * 100) + '%' : x >= 0.001 ? (x * 100).toFixed(1) + '%' : '<0.1%');
   const sum = [v.fixable ? `${v.fixable} fixed by an update` : '', v.open ? `${v.open} without a fix yet` : '', v.minor ? `${v.minor} minor` : '']
-    .filter(Boolean).join(' · ');
+    .filter(Boolean).join(' Â· ');
   openModal(html`<h3>${appName}: known vulnerabilities</h3>
-    <div class="muted small">${sum}${v.kev ? html` · <b class="c-red">${v.kev} actively exploited</b>` : ''}</div>
+    <div class="muted small">${sum}${v.kev ? html` Â· <b class="c-red">${v.kev} actively exploited</b>` : ''}</div>
     <div class="tbl-wrap" style="margin-top:14px;max-height:60vh"><table class="tbl">
       <thead><tr><th>CVE</th><th>Severity</th><th>Fixed in</th><th title="EPSS: chance of exploitation in the next 30 days">Exploit chance</th></tr></thead>
       <tbody>${v.cves.map((c) => html`<tr class="${c.minor ? 'dimrow' : ''}">
         <td class="nowrap"><a href="${c.link}" target="_blank" rel="noopener noreferrer">${c.id}</a>${c.kev ? html` <span class="badge sec xs" title="On CISA's list of actively exploited vulnerabilities">actively exploited</span>` : ''}${c.minor ? html` <span class="badge mute xs" title="The distribution rates it ${c.word}: not worth fixing">minor</span>` : ''}</td>
         <td>${sevBadge(c)}</td>
         <td class="mono small">${c.fixed ? html`${c.fixed}${c.by_update ? html` <span class="badge ok xs" title="The waiting update installs this version or newer">in waiting update</span>` : ''}` : html`<span class="dim">no fix yet</span>`}</td>
-        <td class="small">${c.epss ? html`<span title="Higher than ${Math.round(c.pct * 100)}% of all CVEs">${pct(c.epss)}</span>` : html`<span class="dim">—</span>`}</td></tr>`)}</tbody></table></div>
+        <td class="small">${c.epss ? html`<span title="Higher than ${Math.round(c.pct * 100)}% of all CVEs">${pct(c.epss)}</span>` : html`<span class="dim">â€”</span>`}</td></tr>`)}</tbody></table></div>
     <div class="dim small" style="margin-top:12px">Severity: the CVSS score from OSV or NVD, otherwise the distribution's own rating. Dimmed: the distribution considers it minor.
       Data: OSV.dev (Debian's and Ubuntu's advisories), NVD, CISA (actively exploited), FIRST (EPSS). The CVE numbers link to OSV.dev.</div>
     <div class="actions"><button class="btn" data-act="cancel">Close</button></div>`, { wide: true, acts: { cancel: () => closeModal() } });
@@ -629,7 +629,7 @@ function groupOptions(groups, sel) {
   return html`<option value="" ${!sel ? 'selected' : ''}>Ungrouped</option>${groups.map((g) => html`<option value="${g.id}" ${sel === g.id ? 'selected' : ''}>${g.name}</option>`)}`;
 }
 function versionOptions(repo, cur) {
-  return (repo.core || []).map((v, i) => html`<option value="${v.version}" ${v.version === cur ? 'selected' : ''}>${v.version}${i === 0 ? ' (latest)' : ''}${v.version === cur ? ' — installed' : ''}</option>`);
+  return (repo.core || []).map((v, i) => html`<option value="${v.version}" ${v.version === cur ? 'selected' : ''}>${v.version}${i === 0 ? ' (latest)' : ''}${v.version === cur ? ' â€” installed' : ''}</option>`);
 }
 
 async function runAction(ids, feature, action, params, { open = true } = {}) {
@@ -649,7 +649,7 @@ async function setAgentVersion(a, version) {
   let res;
   try { res = await POST(`agents/${a.id}/core`, { version }); }
   catch (e) { throw new Error(`${a.name}: agent update to ${version} not requested: ${e.message || e}`); }
-  toast(`${a.name}: agent ${a.core_version} → ${version} requested${res.job ? '' : ' (applies when the device is online)'}`, 'ok');
+  toast(`${a.name}: agent ${a.core_version} â†’ ${version} requested${res.job ? '' : ' (applies when the device is online)'}`, 'ok');
   if (res.job && down) toast('Downgrade: the agent restarts with the older version');
   view?.refresh?.();
 }
@@ -657,7 +657,7 @@ async function setAgentVersion(a, version) {
 function approveModal(a, groups) {
   openModal(html`
     <h3>Approve ${a.name}</h3>
-    <div class="muted small">${osLabel(a.facts)} · ${a.facts.arch} · ${(a.facts.ips || []).join(', ')} · agent ${a.core_version}</div>
+    <div class="muted small">${osLabel(a.facts)} Â· ${a.facts.arch} Â· ${(a.facts.ips || []).join(', ')} Â· agent ${a.core_version}</div>
     <form class="form" data-submit="approve">
       <label class="field">Display name<input type="text" name="name" value="${a.name}" maxlength="64" autofocus></label>
       <label class="field">Group<select name="group">${groupOptions(groups, a.group_id)}</select></label>
@@ -722,14 +722,14 @@ function Dashboard() {
       unk: html`<div class="big dim">?</div><div class="biglbl">unknown<br>${p ? p.note.replace(/:.*/, '') : ''}</div>`,
       wait: L.fails ? html`<div class="big some">?</div><div class="biglbl">no answer yet<br>${L.fails} of ${L.down_after} checks</div>`
       : L.last_error ? html`<div class="big sec" title="${L.last_error}">!</div><div class="biglbl">the master cannot<br>check it</div>`
-      : html`<div class="big dim">—</div><div class="biglbl">waiting for<br>first check</div>`,
+      : html`<div class="big dim">â€”</div><div class="biglbl">waiting for<br>first check</div>`,
       up: svcDown ? html`<div class="big some">Up</div><div class="biglbl">${L.svc_down} of ${L.svc_total} service${L.svc_total === 1 ? '' : 's'}<br>down</div>` : html`<div class="big zero">Up</div>`,
       down: html`<div class="big sec">Down</div><div class="biglbl">not<br>reachable</div>` }[state];
     const uptime = L.uptime >= 0 ? html`<span class="badge ${L.uptime >= 0.999 ? 'ok' : L.uptime >= 0.9 ? 'upd' : 'sec'} xs" title="Share of successful checks in the last 24 hours">${pctText(L.uptime)} 24 h</span>` : '';
     return html`
       <div class="card ${accent}" data-act="open-agent" data-id="${a.id}" ${canChange() ? raw('data-drag="agent" draggable="true"') : ''}>
         <div class="top">${ifChange(html`<span class="grip" title="Drag to reorder or move to another group">${icon('grip')}</span>`)}${agentDot(a)}
-          <div style="min-width:0"><div class="name">${a.name}</div><div class="os">Agentless${L.probe ? html` · via ${L.probe.name}` : ''}</div><div class="os"><span class="ip">${L.address}</span></div></div></div>
+          <div style="min-width:0"><div class="name">${a.name}</div><div class="os">Agentless${L.probe ? html` Â· via ${L.probe.name}` : ''}</div><div class="os"><span class="ip">${L.address}</span></div></div></div>
         <div class="mid">${big}<div class="badges">${uptime}</div></div>
         <div class="inforow"><span class="uptime">${icon('clock')}${state === 'maint' ? 'no checks now' : state === 'unk' ? 'no results now' : state === 'wait' ? (L.fails ? 'not decided yet' : 'not checked yet') : `${L.up ? 'up' : 'down'} ${dur(now() - L.since)}`}</span><span class="spacer"></span>${state === 'up' && L.ping && L.rtt_us ? html`<span class="tag mono">${rttText(L.rtt_us)}</span>` : ''}</div>
         <div class="foot"><span>${L.last_check ? when(L.last_check, 'checked ') : 'waiting'}</span></div>
@@ -754,10 +754,10 @@ function Dashboard() {
       mid = html`<div class="mid"><div><div class="biglbl">Waiting for approval</div><div class="dim small">enrolled ${when(a.enrolled_at)}</div></div>
         <div class="badges">${ifChange(html`<button class="btn primary sm" data-act="approve" data-id="${a.id}">${icon('check')} Approve</button>`)}</div></div>`;
     } else if (a.below_min) {
-      mid = html`<div class="mid"><div class="big some">↑</div><div class="biglbl">agent update<br>required</div>
+      mid = html`<div class="mid"><div class="big some">â†‘</div><div class="biglbl">agent update<br>required</div>
         <div class="badges">${ifChange(html`<button class="btn primary sm" data-act="agent-update" data-id="${a.id}" ${a.online ? '' : 'disabled'} title="${a.online ? `Update to agent ${a.core_latest}` : 'The device is offline'}">${icon('up')} Update agent</button>`)}</div></div>`;
     } else if (!u) {
-      mid = html`<div class="mid"><div class="big dim">—</div><div class="biglbl">${a.status === 'report_only' ? html`no checks<br>(report only)` : html`waiting for<br>first check`}</div><div class="badges">${updBadges(a)}</div></div>`;
+      mid = html`<div class="mid"><div class="big dim">â€”</div><div class="biglbl">${a.status === 'report_only' ? html`no checks<br>(report only)` : html`waiting for<br>first check`}</div><div class="badges">${updBadges(a)}</div></div>`;
     } else {
       const cls = u.security ? 'sec' : u.total ? 'some' : 'zero';
       mid = html`<div class="mid"><div class="big ${cls}">${u.total}</div><div class="biglbl">${u.total === 1 ? 'update' : 'updates'}<br>available</div><div class="badges">${updBadges(a)}</div></div>`;
@@ -766,8 +766,8 @@ function Dashboard() {
       <div class="card ${accent} ${st.sel.has(a.id) ? 'sel' : ''}" data-act="open-agent" data-id="${a.id}" ${canChange() ? raw('data-drag="agent" draggable="true"') : ''}>
         <div class="top">${ifChange(html`<span class="grip" title="Drag to reorder or move to another group">${icon('grip')}</span>`)}${agentDot(a)}
           <div style="min-width:0"><div class="name">${a.name}</div>${a.below_min
-            ? html`<div class="os">agent ${a.core_version} · lowest allowed ${a.min_agent}</div><div class="os">upgrade only — no data shown</div>`
-            : html`<div class="os">${osLabel(f)} · ${f.arch || '?'} · ${f.virt || ''}</div><div class="os">${ipLabel(f)}</div>`}</div>
+            ? html`<div class="os">agent ${a.core_version} Â· lowest allowed ${a.min_agent}</div><div class="os">upgrade only â€” no data shown</div>`
+            : html`<div class="os">${osLabel(f)} Â· ${f.arch || '?'} Â· ${f.virt || ''}</div><div class="os">${ipLabel(f)}</div>`}</div>
           ${selectable ? html`<input type="checkbox" class="selbox" data-act="sel" data-id="${a.id}" ${st.sel.has(a.id) ? 'checked' : ''} title="Select">` : ''}</div>
         ${mid}
         ${a.status !== 'pending' ? html`<div class="inforow"><span class="uptime" title="${a.below_min ? '' : lastReboot(a)}">${icon('clock')}${!a.online ? (a.maint ? 'not connected' : 'offline') : a.below_min ? 'online' : 'up ' + dur(f.uptime_sec)}</span>${a.maint ? '' : healthBadges(a)}<span class="spacer"></span>${verPill(a)}</div>` : ''}
@@ -795,13 +795,13 @@ function Dashboard() {
         <button class="btn ghost sm iconbtn fold ${folded ? 'shut' : ''}" data-act="fold" data-gid="${g.id}" title="${folded ? 'Unfold' : 'Fold'}">${icon('chev')}</button>
         ${g.id && canChange() ? html`<span class="grip" title="Drag to reorder groups">${icon('grip')}</span>` : ''}
         <span class="gname">${g.name}</span>
-        <span class="gsum">${agents.length} device${agents.length === 1 ? '' : 's'}${upd ? html` · <b class="c-amber">${upd} update${upd === 1 ? '' : 's'}</b>` : ''}${sec ? html` · <b class="c-red">${sec} security</b>` : ''}${off ? html` · <b class="c-red">${off} offline</b>` : ''}</span>
+        <span class="gsum">${agents.length} device${agents.length === 1 ? '' : 's'}${upd ? html` Â· <b class="c-amber">${upd} update${upd === 1 ? '' : 's'}</b>` : ''}${sec ? html` Â· <b class="c-red">${sec} security</b>` : ''}${off ? html` Â· <b class="c-red">${off} offline</b>` : ''}</span>
         <span class="spacer"></span>
         ${selectable.length && canChange() ? html`<label class="gsel" title="Select all devices in this group"><input type="checkbox" data-act="sel-group" data-gid="${g.id}" ${allSel ? 'checked' : ''}> select</label>` : ''}
       </div>` : '';
     const body = folded ? '' : list.length
       ? html`<div class="cards">${list.map(card)}</div>`
-      : html`<div class="gempty">${g.id ? (canChange() ? 'Empty group — drag devices here' : 'Empty group') : 'No ungrouped devices'}</div>`;
+      : html`<div class="gempty">${g.id ? (canChange() ? 'Empty group â€” drag devices here' : 'Empty group') : 'No ungrouped devices'}</div>`;
     return html`<section class="gsec" data-gid="${g.id}">${head}<div class="gbody" data-gid="${g.id}">${body}</div></section>`;
   }
   function render() {
@@ -862,19 +862,19 @@ function Dashboard() {
     const hours = d.settings?.check_interval_hours || 6;
     setHTML($('#d-stats'), html`
       <div class="panel stat ${svcClass}" title="Agents: the connection. Agentless devices: the ping and every service that is not paused."><div class="label">Services OK</div><div class="value">${svcOK}<small> / ${svcTotal}</small></div>
-        <div class="statnote">${active.length} device${active.length === 1 ? '' : 's'} · ${devClean} without failures${reportOnly ? html` · <span title="Report-only devices only report; no checks, installs or reboots">${reportOnly} report only</span>` : ''}</div></div>
+        <div class="statnote">${active.length} device${active.length === 1 ? '' : 's'} Â· ${devClean} without failures${reportOnly ? html` Â· <span title="Report-only devices only report; no checks, installs or reboots">${reportOnly} report only</span>` : ''}</div></div>
       <div class="panel stat c-amber"><div class="label">Pending updates</div><div class="value">${totUpd}</div>
         ${totSec ? html`<div class="statnote"><span class="c-red">${totSec} security</span></div>` : ''}</div>
       <div class="panel stat c-violet"><div class="label">Reboot required</div><div class="value">${reboot}</div></div>
       <div class="panel stat c-cyan"><div class="label">Active jobs</div><div class="value">${d.active_jobs}</div></div>
       <div class="panel stat ${oc} ${oldest ? 'click' : ''}" ${oldest ? raw(`data-act="open-agent" data-id="${esc(oldest.a.id)}"`) : ''} title="${oldest ? 'Oldest information shown on this dashboard: ' + fmtDate(oldest.ts, true) : ''}">
         <div class="label">Oldest information</div>
-        ${oldest ? html`<div class="value datev">${fmtDate(oldest.ts)}</div><div class="statnote">${ago(oldest.ts)} · ${oldest.a.name} (${oldest.a.online ? 'last update check' : 'offline'})</div>`
+        ${oldest ? html`<div class="value datev">${fmtDate(oldest.ts)}</div><div class="statnote">${ago(oldest.ts)} Â· ${oldest.a.name} (${oldest.a.online ? 'last update check' : 'offline'})</div>`
           : allCurrent ? html`<div class="value datev">All current</div><div class="statnote">all checked within ${hours} h</div>`
-          : html`<div class="value">—</div><div class="statnote">nothing to report</div>`}</div>`);
+          : html`<div class="value">â€”</div><div class="statnote">nothing to report</div>`}</div>`);
     setHTML($('#d-chips'), filterChips(A, st.filter, (a, f) => agentMatches(a, f, st.q, d.groups)));
     if (!A.length) {
-      setHTML($('#d-cards'), html`<div class="panel empty"><div class="big">🛰️</div><div>No devices yet.</div>${ifChange(html`<div style="margin-top:14px"><a class="btn primary" href="#/settings/devices">${icon('plus')} Add your first device</a></div>`)}</div>`);
+      setHTML($('#d-cards'), html`<div class="panel empty"><div class="big">ðŸ›°ï¸</div><div>No devices yet.</div>${ifChange(html`<div style="margin-top:14px"><a class="btn primary" href="#/settings/devices">${icon('plus')} Add your first device</a></div>`)}</div>`);
     } else {
       const groups = d.groups;
       const showHead = groups.length > 0;
@@ -981,7 +981,7 @@ function Dashboard() {
           ${ifChange(html`<button class="btn" data-act="check-all">${icon('refresh')} Check now</button>`)}</div>
         <div id="d-notice"></div>
         <div class="stats" id="d-stats"></div>
-        <div class="toolbar"><input type="search" class="search" id="d-q" placeholder="Search name, OS, IP, group…"><div class="chips" id="d-chips"></div></div>
+        <div class="toolbar"><input type="search" class="search" id="d-q" placeholder="Search name, OS, IP, groupâ€¦"><div class="chips" id="d-chips"></div></div>
         <div id="d-cards"></div>
         <div id="d-bulk"></div>`);
       $('#d-q').addEventListener('input', (e) => { st.q = e.target.value; render(); });
@@ -1025,7 +1025,7 @@ function Dashboard() {
         let res;
         try { res = await POST(`agents/${a.id}/core`, {}); }
         catch (e) { throw new Error(`${a.name}: agent update not requested: ${e.message || e}`); }
-        if (res.job) openJob(res.job); else toast('Update requested — it runs when the device is online', 'ok');
+        if (res.job) openJob(res.job); else toast('Update requested â€” it runs when the device is online', 'ok');
         view.refresh();
       },
     },
@@ -1037,13 +1037,13 @@ function lastReboot(a) {
   if (!up || !a.last_seen) return '';
   return `Last reboot: ${fmtDate(a.last_seen - up)}${a.online ? '' : ' (as last reported)'}`;
 }
-const clipText = (s, n) => (s && s.length > n ? s.slice(0, n - 1).trimEnd() + '…' : s);
+const clipText = (s, n) => (s && s.length > n ? s.slice(0, n - 1).trimEnd() + 'â€¦' : s);
 function healthCell(a) {
   const h = a.facts?.health;
-  if (!h || h.failed_count < 0) return html`<span class="dim">—</span>`;
+  if (!h || h.failed_count < 0) return html`<span class="dim">â€”</span>`;
   if (a.maint) return html`<span class="dim">maintenance</span>`;
   const main = h.failed_count > 0
-    ? html`<span class="badge sec xs" title="Failed services: ${(h.failed || []).join(', ')}${h.failed_count > (h.failed || []).length ? ', …' : ''}">${h.failed_count} failed</span>`
+    ? html`<span class="badge sec xs" title="Failed services: ${(h.failed || []).join(', ')}${h.failed_count > (h.failed || []).length ? ', â€¦' : ''}">${h.failed_count} failed</span>`
     : html`<span class="badge ok xs">ok</span>`;
   return html`${main}${h.auto_updates === 'on' ? html` <span class="badge info xs" title="Automatic updates (unattended-upgrades) are on">auto</span>` : ''}`;
 }
@@ -1058,7 +1058,7 @@ function DeviceList() {
   const lastTs = (a) => (isLocal(a) ? a.local.last_check || 0 : a.online ? a.updates?.checked_at || 0 : a.last_seen || 0);
   const healthN = (a) => (a.facts?.health?.failed_count > 0 ? 2 : 0) + (a.facts?.health?.auto_updates === 'on' ? 1 : 0);
   const COLS = [
-    ['status', '●', (a) => statusText(a), 'dotcol'],
+    ['status', 'â—', (a) => statusText(a), 'dotcol'],
     ['name', 'Name', (a) => a.name, ''],
     ['group', 'Group', (a) => groupName(a.group_id), 'opt'],
     ['ip', 'IP', (a) => (a.facts.ips || [])[0] || '', 'opt'],
@@ -1097,11 +1097,11 @@ function DeviceList() {
       <td class="nowrap"><a href="#/device/${a.id}"><b>${a.name}</b></a></td>
       <td class="opt muted">${groupName(a.group_id)}</td>
       <td class="opt small nowrap">${(f.ips || [])[0] || ''}</td>
-      <td class="opt nowrap" title="${a.below_min || isLocal(a) ? '' : osLabel(f)}">${isLocal(a) ? html`<span class="dim" title="Monitored by the master with a ping; no agent">agentless</span>` : a.below_min ? html`<span class="dim">—</span>` : clipText(osShort(f), 14)}${o?.status === 'expired' ? html` <span class="badge sec xs" title="${osSupportText(o, f.os_id)}">EOL</span>` : o?.status === 'soon' ? html` <span class="badge upd xs" title="${osSupportText(o, f.os_id)}">EOL soon</span>` : ''}</td>
-      <td class="num"><b class="${u?.security ? 'c-red' : u?.total ? 'c-amber' : 'dim'}">${u ? u.total : '—'}</b></td>
-      <td class="num">${!a.vulns ? html`<span class="dim">—</span>` : a.vulns.badge ? html`<b class="c-red" title="${CVE_RED}">${a.vulns.badge}</b>` : html`<span class="dim">0</span>`}</td>
-      <td>${!u ? html`<span class="dim">—</span>` : u.reboot_required ? html`<span class="badge reboot xs">required</span>` : html`<span class="badge ok xs">no</span>`}</td>
-      <td class="opt mono small"><span class="${!a.core_version ? 'dim' : a.core_is_latest ? 'c-green' : 'c-amber'}" title="${a.core_is_latest ? 'latest agent' : a.core_latest ? 'latest is ' + a.core_latest : ''}">${a.core_version || '—'}</span></td>
+      <td class="opt nowrap" title="${a.below_min || isLocal(a) ? '' : osLabel(f)}">${isLocal(a) ? html`<span class="dim" title="Monitored by the master with a ping; no agent">agentless</span>` : a.below_min ? html`<span class="dim">â€”</span>` : clipText(osShort(f), 14)}${o?.status === 'expired' ? html` <span class="badge sec xs" title="${osSupportText(o, f.os_id)}">EOL</span>` : o?.status === 'soon' ? html` <span class="badge upd xs" title="${osSupportText(o, f.os_id)}">EOL soon</span>` : ''}</td>
+      <td class="num"><b class="${u?.security ? 'c-red' : u?.total ? 'c-amber' : 'dim'}">${u ? u.total : 'â€”'}</b></td>
+      <td class="num">${!a.vulns ? html`<span class="dim">â€”</span>` : a.vulns.badge ? html`<b class="c-red" title="${CVE_RED}">${a.vulns.badge}</b>` : html`<span class="dim">0</span>`}</td>
+      <td>${!u ? html`<span class="dim">â€”</span>` : u.reboot_required ? html`<span class="badge reboot xs">required</span>` : html`<span class="badge ok xs">no</span>`}</td>
+      <td class="opt mono small"><span class="${!a.core_version ? 'dim' : a.core_is_latest ? 'c-green' : 'c-amber'}" title="${a.core_is_latest ? 'latest agent' : a.core_latest ? 'latest is ' + a.core_latest : ''}">${a.core_version || 'â€”'}</span></td>
       <td class="opt nowrap">${healthCell(a)}</td>
       <td class="small nowrap">${last(a)}</td></tr>`;
   }
@@ -1117,7 +1117,7 @@ function DeviceList() {
     const known = new Set(groups.map((g) => g.id));
     const secs = [...groups.map((g) => [g.name, shown.filter((a) => a.group_id === g.id)]), ['Ungrouped', shown.filter((a) => !known.has(a.group_id))]]
       .filter(([, list]) => list.length);
-    const head = COLS.map(([k, t, , cls]) => html`<th class="${cls} sortable ${st.sort === k ? 'on' : ''}" data-act="sort" data-k="${k}" title="Sort by ${k === 'status' ? 'status' : t.toLowerCase()}">${t}${st.sort === k ? (st.dir > 0 ? ' ▲' : ' ▼') : ''}</th>`);
+    const head = COLS.map(([k, t, , cls]) => html`<th class="${cls} sortable ${st.sort === k ? 'on' : ''}" data-act="sort" data-k="${k}" title="Sort by ${k === 'status' ? 'status' : t.toLowerCase()}">${t}${st.sort === k ? (st.dir > 0 ? ' â–²' : ' â–¼') : ''}</th>`);
     setHTML($('#l-table'), html`<div class="panel scrollx"><table class="tbl syslist"><thead><tr>${head}</tr></thead>
       ${secs.map(([name, list]) => html`<tbody>${groups.length ? html`<tr class="grow"><td colspan="${COLS.length}">${name} <span class="dim small">${list.length}</span></td></tr>` : ''}
         ${[...list].sort(cmp).map(row)}</tbody>`)}</table></div>`);
@@ -1126,7 +1126,7 @@ function DeviceList() {
     interval: 5000,
     mount(el) {
       el.innerHTML = r(html`${subTabs('dashboard', 'devices')}<div class="page-head"><div><h1>Device List</h1><div class="sub">All devices at a glance</div></div></div>
-        <div class="toolbar"><input type="search" class="search" id="l-q" placeholder="Search name, OS, IP, group…"><div class="chips" id="l-chips"></div></div>
+        <div class="toolbar"><input type="search" class="search" id="l-q" placeholder="Search name, OS, IP, groupâ€¦"><div class="chips" id="l-chips"></div></div>
         <div id="l-table"></div>`);
       $('#l-q').addEventListener('input', (e) => { st.q = e.target.value; render(); });
     },
@@ -1138,20 +1138,20 @@ function DeviceList() {
   };
 }
 
-const COPYRIGHT = '© 2026 Dawnes, the Developer';
+const COPYRIGHT = 'Â© 2026 Dawnes, the Developer';
 function AboutPage() {
   return {
     async mount(el) {
-      el.innerHTML = r(html`${subTabs('about', 'about')}<div class="about"><div class="panel about-card"><div class="about-dim">Loading…</div></div></div>`);
+      el.innerHTML = r(html`${subTabs('about', 'about')}<div class="about"><div class="panel about-card"><div class="about-dim">Loadingâ€¦</div></div></div>`);
       const [ov, set] = await Promise.all([GET('overview').catch(() => null), GET('settings').catch(() => null)]);
       const latest = ov?.repo?.core?.[0]?.version || '';
       const repo = set?.settings?.github_repo || 'Dawnes/coremon';
       setHTML($('.about-card', el), html`
         <img src="favicon.svg" alt="" class="about-logo">
         <div class="about-name">Coremon</div>
-        <div class="about-ver">v${session.version}${session.build_date ? html` <span class="about-dim">· released ${ymd(session.build_date)}</span>` : ''}</div>
+        <div class="about-ver">v${session.version}${session.build_date ? html` <span class="about-dim">Â· released ${ymd(session.build_date)}</span>` : ''}</div>
         <div class="about-rows">
-          <div><span class="about-dim">Latest agent</span><span class="mono">${latest || '—'}</span></div>
+          <div><span class="about-dim">Latest agent</span><span class="mono">${latest || 'â€”'}</span></div>
           <div><span class="about-dim">Project</span><a href="https://github.com/${repo}" target="_blank" rel="noopener noreferrer">github.com/${repo}</a></div>
           <div><span class="about-dim">License</span><a href="#/about/license">PolyForm Noncommercial 1.0.0</a></div>
         </div>
@@ -1167,8 +1167,8 @@ function LicensePage() {
           <div class="notice blue">Coremon is licensed under the <b>PolyForm Noncommercial License 1.0.0</b>: free for personal, hobby,
             educational and non-profit use. Commercial use requires permission from Dawnes, the Developer
             (<a href="https://github.com/Dawnes" target="_blank" rel="noopener noreferrer">github.com/Dawnes</a>).</div>
-          <div class="panel panel-pad"><h2>Coremon</h2><div class="legal" id="lic-main">Loading…</div></div>
-          <div class="panel panel-pad"><h2>Third-party software</h2><pre class="legal" id="lic-third">Loading…</pre></div>
+          <div class="panel panel-pad"><h2>Coremon</h2><div class="legal" id="lic-main">Loadingâ€¦</div></div>
+          <div class="panel panel-pad"><h2>Third-party software</h2><pre class="legal" id="lic-third">Loadingâ€¦</pre></div>
           <div class="dim small">${COPYRIGHT}</div></div>`);
       const text = (p) => fetch(p, { cache: 'no-cache' }).then((x) => (x.ok ? x.text() : Promise.reject(new Error(x.status)))).catch(() => 'Could not load the license text.');
       const [main, third] = await Promise.all([text('legal/LICENSE.txt'), text('legal/THIRD-PARTY-NOTICES.txt')]);
@@ -1187,7 +1187,7 @@ function LicensePage() {
   };
 }
 
-const shortKey = (p) => (p ? p.slice(0, 5) + '…' : '');
+const shortKey = (p) => (p ? p.slice(0, 5) + 'â€¦' : '');
 function clockText(ms) {
   const s = Math.abs(ms) / 1000;
   if (s < 2) return html`<span class="badge ok">${icon('check')} in sync</span>`;
@@ -1197,7 +1197,7 @@ function clockText(ms) {
 }
 async function pingModal(a) {
   let open = true;
-  openModal(html`<h3>Ping ${a.name}</h3><div class="row muted" style="margin-top:12px"><span class="spin"></span>Waiting for the agent (up to 15 s)…</div>
+  openModal(html`<h3>Ping ${a.name}</h3><div class="row muted" style="margin-top:12px"><span class="spin"></span>Waiting for the agent (up to 15 s)â€¦</div>
     <div class="actions"><button class="btn ghost" data-act="close">Close</button></div>`, { acts: { close: () => closeModal() }, onClose: () => { open = false; } });
   let p;
   try {
@@ -1214,7 +1214,7 @@ async function pingModal(a) {
     body = html`<div class="notice green" style="margin:12px 0">${icon('check')} <b>The agent answered in ${p.rtt_ms < 1 ? 'under 1' : p.rtt_ms} ms.</b> Network and keys work.</div>
       <table>${row('Agent', p.version)}
       ${row('Connection key', html`<span class="mono small">${shortKey(p.key_used)}</span> ${p.key_current ? html`<span class="badge ok">current</span>` : html`<span class="badge upd">not the current key</span>`}`)}
-      ${row('Key slots', html`<span class="mono small">${shortKey(p.slots[0]) || 'empty'} · ${shortKey(p.slots[1]) || 'empty'}</span> ${p.slots_ok ? html`<span class="badge ok">as expected</span>` : html`<span class="badge upd">being updated</span>`}`)}
+      ${row('Key slots', html`<span class="mono small">${shortKey(p.slots[0]) || 'empty'} Â· ${shortKey(p.slots[1]) || 'empty'}</span> ${p.slots_ok ? html`<span class="badge ok">as expected</span>` : html`<span class="badge upd">being updated</span>`}`)}
       ${row('Clock', clockText(p.clock_ms))}</table>`;
   } else if (p.answered) {
     body = html`<div class="notice red" style="margin:12px 0">The agent answered with an error: ${p.error}</div>`;
@@ -1240,7 +1240,7 @@ function maintNotice(a) {
   return html`<div class="notice blue"><b>In maintenance</b> since ${hhmm(m.since)} by ${m.by}, ${m.until ? `until ${hhmm(m.until)} (ends by itself)` : 'until ended by hand'}.
     <span class="small">${isLocal(a)
       ? `No checks run${a.local.probe ? ` (also not on ${a.local.probe.name})` : ''} and no failures are shown.`
-      : html`No automatic jobs run and no failures are shown. Actions on the device work only while the agent is connected${a.online ? '' : html` — <b>it is not connected now</b>`}.`}</span></div>`;
+      : html`No automatic jobs run and no failures are shown. Actions on the device work only while the agent is connected${a.online ? '' : html` â€” <b>it is not connected now</b>`}.`}</span></div>`;
 }
 async function maintStart(a, done) {
   openModal(html`<h3>Maintenance for ${a.name}</h3>
@@ -1266,7 +1266,7 @@ async function maintStart(a, done) {
 }
 async function maintEnd(a, done) {
   await POST(`devices/${a.id}/maintenance/end`);
-  toast(`${a.name}: maintenance ended — checks run again`, 'ok');
+  toast(`${a.name}: maintenance ended â€” checks run again`, 'ok');
   done();
 }
 
@@ -1281,7 +1281,7 @@ function AgentPage([id, tab]) {
         <div class="headinfo"><div class="row"><a href="#/dashboard/${lastDashSub}" class="btn ghost sm iconbtn" title="Back">${icon('back')}</a>${agentDot(a)}<h1>${a.name}</h1>
           ${a.status === 'report_only' ? html`<span class="badge info">${icon('pause')} report only</span>` : ''}${a.status === 'pending' ? html`<span class="badge upd">pending approval</span>` : ''}
           <span class="tag">${icon('folder')} ${g ? g.name : 'Ungrouped'}</span>${verPill(a)}</div>
-          <div class="sub" title="${a.below_min ? '' : `${osLabel(f)} · ${f.kernel || ''} · ${f.arch} · ${f.virt}`}">${a.below_min ? html`agent ${a.core_version} · upgrade only · ${a.online ? 'online' : raw('offline, last seen ' + r(when(a.last_seen)))}` : html`${osLabel(f)} · ${f.kernel || ''} · ${f.arch} · ${f.virt} · <span title="${lastReboot(a)}">${a.online ? 'online, up ' + dur(f.uptime_sec) : raw('offline, last seen ' + r(when(a.last_seen)))}</span>`}</div></div>
+          <div class="sub" title="${a.below_min ? '' : `${osLabel(f)} Â· ${f.kernel || ''} Â· ${f.arch} Â· ${f.virt}`}">${a.below_min ? html`agent ${a.core_version} Â· upgrade only Â· ${a.online ? 'online' : raw('offline, last seen ' + r(when(a.last_seen)))}` : html`${osLabel(f)} Â· ${f.kernel || ''} Â· ${f.arch} Â· ${f.virt} Â· <span title="${lastReboot(a)}">${a.online ? 'online, up ' + dur(f.uptime_sec) : raw('offline, last seen ' + r(when(a.last_seen)))}</span>`}</div></div>
         <span class="spacer"></span>
         ${a.busy ? html`<span class="row muted"><span class="spin"></span>${a.busy} job(s) active</span>` : ''}
         ${!a.removing && !a.below_min ? html`<button class="btn sm" data-act="ping" title="Check the connection and keys with the agent now; nothing is done on the device">${icon('pulse')} Ping</button>` : ''}
@@ -1289,7 +1289,7 @@ function AgentPage([id, tab]) {
         ${a.status === 'report_only' && !a.below_min && canChange() ? html`<button class="btn sm" data-act="allow-changes">${icon('play')} Allow changes</button>` : ''}
         ${a.status === 'active' && !a.below_min && canChange() ? html`<button class="btn warn sm" data-act="reboot" ${a.online ? '' : 'disabled'}
           title="${a.online ? 'Reboot this device' : maintBlocked(a) ? MAINT_OFF : 'The device is offline'}">${icon('refresh')} Reboot</button>` : ''}
-        ${a.status !== 'pending' ? maintButton(a) : ''}
+        ${a.status !== 'pending' && (!a.is_master || a.maint) ? maintButton(a) : ''}
       </div>
       ${maintNotice(a)}
       ${a.below_min ? html`<div class="notice row"><span><b>Agent update required.</b> Agent ${a.core_version} is older than the lowest allowed version ${a.min_agent}:
@@ -1297,10 +1297,10 @@ function AgentPage([id, tab]) {
         ${ifChange(html`<button class="btn primary sm" data-act="agent-update" ${a.online ? '' : 'disabled'}>${icon('up')} Update agent to ${a.core_latest}</button>`)}</div>` : ''}
       ${a.status === 'report_only' && !a.below_min ? html`<div class="notice blue"><b>Report only:</b> this device only reports.
         <span class="small">${a.agent_report_only ? html`${icon('check')} Confirmed by the agent.`
-          : html`Waiting for the agent to confirm${a.online ? '…' : ' (the device is offline)'}.`}</span></div>` : ''}
-      ${a.status === 'active' && a.agent_report_only ? html`<div class="notice blue small">Changes allowed — waiting for the agent to confirm${a.online ? '…' : ' (the device is offline)'}.</div>` : ''}
+          : html`Waiting for the agent to confirm${a.online ? 'â€¦' : ' (the device is offline)'}.`}</span></div>` : ''}
+      ${a.status === 'active' && a.agent_report_only ? html`<div class="notice blue small">Changes allowed â€” waiting for the agent to confirm${a.online ? 'â€¦' : ' (the device is offline)'}.</div>` : ''}
       ${a.status === 'pending' ? html`<div class="notice blue row">This device enrolled ${when(a.enrolled_at)} and is waiting for approval. Until approved it receives no commands.<span class="spacer"></span>${ifChange(html`<button class="btn primary sm" data-act="approve">${icon('check')} Approve</button>`)}</div>` : ''}
-      ${a.removing ? html`<div class="notice red">Uninstall requested — the agent will remove itself.</div>` : ''}
+      ${a.removing ? html`<div class="notice red">Uninstall requested â€” the agent will remove itself.</div>` : ''}
       ${conflictNotice(a)}`;
   }
   function updatesTab(a) {
@@ -1308,8 +1308,8 @@ function AgentPage([id, tab]) {
     const canAct = a.status === 'active' && a.online;
     const ed = canChange() && a.status === 'active';
     if (!s) {
-      return html`<div class="panel empty">${a.status === 'report_only' ? html`<div class="big">⏸</div><div>Report only: no update checks are run on this device.</div>`
-        : html`<div class="spin" style="width:26px;height:26px"></div><div style="margin-top:12px">Waiting for the first check…</div>
+      return html`<div class="panel empty">${a.status === 'report_only' ? html`<div class="big">â¸</div><div>Report only: no update checks are run on this device.</div>`
+        : html`<div class="spin" style="width:26px;height:26px"></div><div style="margin-top:12px">Waiting for the first checkâ€¦</div>
         ${ed ? html`<div style="margin-top:14px"><button class="btn" data-act="check" ${canAct ? '' : 'disabled'}>${icon('refresh')} Check now</button></div>` : ''}`}</div>`;
     }
     const pk = s.packages || [];
@@ -1323,14 +1323,14 @@ function AgentPage([id, tab]) {
           ${s.total ? html`<span class="badge upd">${s.total} update${s.total > 1 ? 's' : ''}</span>` : html`<span class="badge ok">${icon('check')} up to date</span>`}
           ${s.security ? html`<span class="badge sec">${s.security} security</span>` : ''}
           ${s.reboot_required ? html`<span class="badge reboot" title="${(s.reboot_pkgs || []).join(', ')}">reboot required${s.reboot_pkgs?.length ? ': ' + s.reboot_pkgs.slice(0, 3).join(', ') : ''}</span>` : ''}
-          <span class="muted small">${when(s.checked_at, 'checked ')} · ${when(s.refreshed_at, 'package lists refreshed ')} · ${s.backend}</span>
+          <span class="muted small">${when(s.checked_at, 'checked ')} Â· ${when(s.refreshed_at, 'package lists refreshed ')} Â· ${s.backend}</span>
           <span class="spacer"></span>
           ${ed ? html`<button class="btn sm" data-act="check" ${canAct ? '' : 'disabled'}>${icon('refresh')} Refresh &amp; check</button>
           <button class="btn primary sm" data-act="install" ${canAct && nsel ? '' : 'disabled'}>${icon('download')} Install selected${nsel ? ` (${nsel})` : ''}</button>
           <button class="btn warn sm" data-act="upgrade-all" ${canAct && s.total ? '' : 'disabled'}>${icon('zap')} Upgrade all</button>` : ''}
         </div>
       </div>
-      ${s.removals?.length ? html`<div class="notice red">“Upgrade all” would remove: <b>${s.removals.join(', ')}</b></div>` : ''}
+      ${s.removals?.length ? html`<div class="notice red">â€œUpgrade allâ€ would remove: <b>${s.removals.join(', ')}</b></div>` : ''}
       ${a.status === 'report_only' ? html`<div class="notice blue">Report only: this list is from the last check before the device was set to report only, ${when(s.checked_at)}.</div>` : ''}
       ${pk.length ? html`
       <div class="panel">
@@ -1346,7 +1346,7 @@ function AgentPage([id, tab]) {
             <tr class="${st.sel.has(p.name) ? 'picked' : ''}">
               ${ed ? html`<td class="w1">${p.new ? '' : html`<input type="checkbox" data-act="sel-pkg" data-name="${p.name}" ${st.sel.has(p.name) ? 'checked' : ''}>`}</td>` : ''}
               <td><b>${p.name}</b> <span class="dim small">${p.arch}</span></td>
-              <td class="mono">${p.current ? html`<span class="ver">${p.current}</span><span class="arrow">→</span>` : ''}<span class="ver new">${p.available}</span></td>
+              <td class="mono">${p.current ? html`<span class="ver">${p.current}</span><span class="arrow">â†’</span>` : ''}<span class="ver new">${p.available}</span></td>
               <td class="muted small">${p.origin}</td>
               <td class="w1"><div class="row" style="flex-wrap:nowrap;gap:6px">${p.security ? html`<span class="badge sec">security</span>` : ''}${p.new ? html`<span class="badge new" title="Pulled in as a dependency; installed together with its parent">new dependency</span>` : ''}${fixes(p.name)}</div></td>
             </tr>`)}</tbody></table></div>
@@ -1362,7 +1362,7 @@ function AgentPage([id, tab]) {
       return html`<div class="notice red"><b>No updates, but ${os} is no longer supported</b> (support ended ${ymd(o.end)}).<br>
         It no longer receives security updates, so an empty list doesn't mean the device is safe. Upgrade to a supported release.</div>`;
     }
-    return html`<div class="panel empty"><div class="big">✨</div>Everything is up to date.${o?.status === 'soon'
+    return html`<div class="panel empty"><div class="big">âœ¨</div>Everything is up to date.${o?.status === 'soon'
       ? html`<div class="c-amber small" style="margin-top:10px">Support for ${os} ends on ${ymd(o.end)}.</div>` : ''}</div>`;
   }
   function agentPanel(a) {
@@ -1371,8 +1371,8 @@ function AgentPage([id, tab]) {
       <div class="panel panel-pad">
         <h2>Agent</h2>
         <div class="row">${verPill(a)}${a.core_latest ? html`<span class="muted small">latest available: <span class="ver">${a.core_latest}</span></span>` : ''}</div>
-        ${a.desired_core ? html`<div class="notice blue" style="margin:14px 0 0">Change to ${a.desired_core} requested${a.online ? ' — the agent downloads the signed binary and restarts.' : ' — applies as soon as the device is online.'}</div>` : ''}
-        <div class="facts" style="margin-top:14px">${kv.map(([k, v]) => html`<div><div class="k">${k}</div><div class="v">${v || '—'}</div></div>`)}</div>
+        ${a.desired_core ? html`<div class="notice blue" style="margin:14px 0 0">Change to ${a.desired_core} requested${a.online ? ' â€” the agent downloads the signed binary and restarts.' : ' â€” applies as soon as the device is online.'}</div>` : ''}
+        <div class="facts" style="margin-top:14px">${kv.map(([k, v]) => html`<div><div class="k">${k}</div><div class="v">${v || 'â€”'}</div></div>`)}</div>
         <div class="row" style="margin-top:14px"><span class="muted small">Functions:</span>${(a.features || []).map((n) => html`<span class="tag mono">${n}</span>`)}</div>
         <div style="margin-top:14px"><a href="#/settings/releases">${canChange() ? 'Change the agent version in Releases' : 'Agent versions in Releases'}</a></div>
       </div>`;
@@ -1381,7 +1381,7 @@ function AgentPage([id, tab]) {
     const jobs = st.data.jobs;
     if (!jobs.length) return html`<div class="panel empty">No jobs yet.</div>`;
     return html`<div class="panel"><table class="tbl"><thead><tr><th>Job</th><th>Status</th><th>By</th><th>Created</th><th>Duration</th></tr></thead>
-      <tbody>${jobs.map((j) => html`<tr class="click" data-act="open-job" data-id="${j.id}"><td><b>${jobTitle(j)}</b><div class="dim small">${jobParams(j)}</div></td><td>${statusBadge(j.status)}</td><td class="muted">${j.actor}</td><td class="muted">${when(j.created)}</td><td class="muted">${j.finished ? dur(j.finished - (j.started || j.created)) : '—'}</td></tr>`)}</tbody></table></div>`;
+      <tbody>${jobs.map((j) => html`<tr class="click" data-act="open-job" data-id="${j.id}"><td><b>${jobTitle(j)}</b><div class="dim small">${jobParams(j)}</div></td><td>${statusBadge(j.status)}</td><td class="muted">${j.actor}</td><td class="muted">${when(j.created)}</td><td class="muted">${j.finished ? dur(j.finished - (j.started || j.created)) : 'â€”'}</td></tr>`)}</tbody></table></div>`;
   }
   function appsTab(a) {
     let s = null;
@@ -1392,38 +1392,38 @@ function AgentPage([id, tab]) {
     const vul = a.vulns;
     const all = s?.apps || [], nInst = all.filter((x) => x.installed).length;
     const sw = all.length ? html`<div class="chips"><button class="chip ${st.appsAll ? '' : 'on'}" data-act="apps-view" data-v="0">Installed<span class="n">${nInst}</span></button><button class="chip ${st.appsAll ? 'on' : ''}" data-act="apps-view" data-v="1">All<span class="n">${all.length}</span></button></div>` : '';
-    const head = html`<div class="row" style="margin-bottom:12px">${sw}<span class="muted small">${s?.scanned_at ? html`Scanned ${when(s.scanned_at)} · from the package manager` : 'Not scanned yet'}${vul?.checked_at ? html` · CVEs looked up ${when(vul.checked_at)}` : ''}</span><span class="spacer"></span>${btn}</div>
+    const head = html`<div class="row" style="margin-bottom:12px">${sw}<span class="muted small">${s?.scanned_at ? html`Scanned ${when(s.scanned_at)} Â· from the package manager` : 'Not scanned yet'}${vul?.checked_at ? html` Â· CVEs looked up ${when(vul.checked_at)}` : ''}</span><span class="spacer"></span>${btn}</div>
       ${vul?.status === 'old_agent' ? html`<div class="notice blue">The CVE check needs agent 0.3.6 or later on this device. <a href="#/settings/releases">Update the agent</a>.</div>` : ''}
       ${vul?.status === 'unsupported' ? html`<div class="notice">${a.os_support?.status === 'expired'
         ? `${osLabel(a.facts)} is no longer supported: no security data and no fixes are published, so it can't be checked. Upgrade to a supported release.`
         : `OSV.dev has no vulnerability data for ${osLabel(a.facts)}, so the applications cannot be checked for CVEs.`}</div>` : ''}`;
     const security = (x) => {
       const v = vul?.apps?.[x.name];
-      if (!v || vul.status === 'unsupported') return html`<span class="dim">—</span>`;
+      if (!v || vul.status === 'unsupported') return html`<span class="dim">â€”</span>`;
       const dist = a.facts.os_id === 'ubuntu' ? 'Ubuntu' : 'Debian';
       switch (v.status) {
-        case 'old_agent': return html`<span class="dim" title="Needs agent 0.3.6 or later">—</span>`;
+        case 'old_agent': return html`<span class="dim" title="Needs agent 0.3.6 or later">â€”</span>`;
         case 'manual': return html`<span class="dim" title="Not installed from a package source, so not checked">not checked</span>`;
         case 'not_distro': return html`<span class="dim" title="From ${v.origin}, not from ${dist}: ${dist}'s security data does not cover it, so not checked">not checked</span>`;
-        case 'pending': return html`<span class="dim" title="Being looked up">…</span>`;
+        case 'pending': return html`<span class="dim" title="Being looked up">â€¦</span>`;
         case 'ok': return html`<span class="badge ok xs" title="No known vulnerabilities for this version${v.minor ? ` (${v.minor} minor)` : ''}">ok</span>`;
       }
       const tip = [v.fixable ? `${v.fixable} fixed by an update` : '', v.open ? `${v.open} without a fix yet` : '', v.minor ? `${v.minor} minor` : '', v.kev ? `${v.kev} actively exploited` : ''].filter(Boolean).join(', ');
-      return html`<button type="button" class="linkbtn" data-act="cves" data-app="${x.name}" title="${tip} — click for the list">
+      return html`<button type="button" class="linkbtn" data-act="cves" data-app="${x.name}" title="${tip} â€” click for the list">
         ${v.fixable ? html`<span class="badge ${v.red ? 'sec' : 'upd'} xs">${v.fixable} fixable</span>` : ''}
         ${v.open ? html`<span class="badge ${v.kev && !v.fixable ? 'sec' : 'mute'} xs">${v.open} without fix</span>` : ''}
         ${!v.fixable && !v.open ? html`<span class="badge sec xs">${v.kev} exploited</span>` : ''}</button>`;
     };
     if (!s?.apps?.length) {
-      return html`${head}<div class="panel empty"><div>No scan yet — it runs with the next update check${a.status === 'report_only' ? ' (not on report-only devices: use Refresh now)' : ''}.</div></div>`;
+      return html`${head}<div class="panel empty"><div>No scan yet â€” it runs with the next update check${a.status === 'report_only' ? ' (not on report-only devices: use Refresh now)' : ''}.</div></div>`;
     }
     const boot = (x) => (x.boot === 'enabled' ? 'starts at boot' : x.running === 'running' ? 'started manually (does not start at boot)' : 'does not start at boot');
-    const running = (x) => (!x.running ? html`<span class="dim">—</span>`
+    const running = (x) => (!x.running ? html`<span class="dim">â€”</span>`
       : x.running === 'running' ? html`<span class="badge ok xs" title="${boot(x)}">running</span>`
         : html`<span class="badge mute xs" title="${boot(x)}">stopped</span>`);
     const ports = (x) => (x.ports?.length
       ? html`<span title="${x.ports.map((p) => `${p.port}/${p.proto} on ${p.addr}`).join('\n')}">${x.ports.map((p, i) => html`${i ? ', ' : ''}${p.port}/${p.proto}${p.local ? html` <span class="dim">(local)</span>` : ''}`)}</span>`
-      : html`<span class="dim">—</span>`);
+      : html`<span class="dim">â€”</span>`);
     const rows = st.appsAll ? all : all.filter((x) => x.installed);
     if (!rows.length) {
       return html`${head}<div class="panel empty"><div>None of the ${all.length} monitored applications were found on this device.</div>
@@ -1431,7 +1431,7 @@ function AgentPage([id, tab]) {
     }
     return html`${head}<div class="panel scrollx"><table class="tbl"><thead><tr><th>Application</th><th>Installed</th><th>Version</th><th title="Known vulnerabilities (CVEs) of the installed version">Security</th><th>Running</th><th>Listening on</th></tr></thead>
       <tbody>${rows.map((x) => x.installed
-        ? html`<tr><td><b>${x.name}</b></td><td><span class="badge ok xs">yes</span></td><td class="mono small" title="${x.full}${x.package ? ' (' + x.package + ')' : ''}${x.origin ? ' from ' + x.origin : ''}">${x.version || '—'}</td>
+        ? html`<tr><td><b>${x.name}</b></td><td><span class="badge ok xs">yes</span></td><td class="mono small" title="${x.full}${x.package ? ' (' + x.package + ')' : ''}${x.origin ? ' from ' + x.origin : ''}">${x.version || 'â€”'}</td>
             <td class="nowrap">${security(x)}</td><td>${running(x)}</td><td class="mono small">${ports(x)}</td></tr>`
         : html`<tr class="dimrow"><td>${x.name}</td><td><span class="dim small">not detected</span></td><td></td><td></td><td></td><td></td></tr>`)}</tbody></table></div>`;
   }
@@ -1441,15 +1441,15 @@ function AgentPage([id, tab]) {
       ['Hostname', f.hostname], ['Operating system', osLabel(f)], ['Kernel', f.kernel], ['Architecture', `${f.os}/${f.arch}`],
       ['Virtualization', f.virt], ['Uptime', a.online ? dur(f.uptime_sec) : 'offline'], ['CPUs', f.cpus], ['Memory (assigned)', bytes(f.mem_total)],
       ['IP addresses', (f.ips || []).join(', ')],
-      ['IPv4 gateway', f.gateway ? f.gateway + (f.gateway_if ? ` (${f.gateway_if})` : '') : '—'],
-      ['DNS servers', f.dns?.length ? f.dns.join(', ') + (f.dns_via ? ` (via ${f.dns_via})` : '') : '—'],
-      ['OS support', a.os_support ? html`${a.os_support.status === 'expired' ? html`<span class="badge sec xs">EOL</span> ` : a.os_support.status === 'soon' ? html`<span class="badge upd xs">EOL soon</span> ` : ''}${osSupportText(a.os_support, f.os_id)}` : '—'],
-      ['Failed services', !h || h.failed_count < 0 ? '—' : h.failed_count === 0 ? 'none'
-        : html`<span class="badge sec xs">${h.failed_count} failed</span> ${(h.failed || []).join(', ')}${h.failed_count > (h.failed || []).length ? ', …' : ''}`],
-      ['Automatic updates', ({ on: html`<span class="badge info xs">on</span> unattended-upgrades`, off: 'off', not_installed: 'not installed' })[h?.auto_updates] || '—'],
-      ['Last upgrade', h?.last_upgrade ? `${fmtDate(h.last_upgrade.time)} (${ago(h.last_upgrade.time)}, ${h.last_upgrade.packages} package${h.last_upgrade.packages === 1 ? '' : 's'}) · by ${upgradedBy(h.last_upgrade.by)}` : h ? 'none recorded' : '—'],
+      ['IPv4 gateway', f.gateway ? f.gateway + (f.gateway_if ? ` (${f.gateway_if})` : '') : 'â€”'],
+      ['DNS servers', f.dns?.length ? f.dns.join(', ') + (f.dns_via ? ` (via ${f.dns_via})` : '') : 'â€”'],
+      ['OS support', a.os_support ? html`${a.os_support.status === 'expired' ? html`<span class="badge sec xs">EOL</span> ` : a.os_support.status === 'soon' ? html`<span class="badge upd xs">EOL soon</span> ` : ''}${osSupportText(a.os_support, f.os_id)}` : 'â€”'],
+      ['Failed services', !h || h.failed_count < 0 ? 'â€”' : h.failed_count === 0 ? 'none'
+        : html`<span class="badge sec xs">${h.failed_count} failed</span> ${(h.failed || []).join(', ')}${h.failed_count > (h.failed || []).length ? ', â€¦' : ''}`],
+      ['Automatic updates', ({ on: html`<span class="badge info xs">on</span> unattended-upgrades`, off: 'off', not_installed: 'not installed' })[h?.auto_updates] || 'â€”'],
+      ['Last upgrade', h?.last_upgrade ? `${fmtDate(h.last_upgrade.time)} (${ago(h.last_upgrade.time)}, ${h.last_upgrade.packages} package${h.last_upgrade.packages === 1 ? '' : 's'}) Â· by ${upgradedBy(h.last_upgrade.by)}` : h ? 'none recorded' : 'â€”'],
     ];
-    return html`<div class="panel panel-pad" style="margin-bottom:16px"><div class="facts">${kv.map(([k, v]) => html`<div><div class="k">${k}</div><div class="v">${v ?? '—'}</div></div>`)}</div></div>${agentPanel(a)}${probePanel(a)}`;
+    return html`<div class="panel panel-pad" style="margin-bottom:16px"><div class="facts">${kv.map(([k, v]) => html`<div><div class="k">${k}</div><div class="v">${v ?? 'â€”'}</div></div>`)}</div></div>${agentPanel(a)}${probePanel(a)}`;
   }
   // Remote probe: the agentless devices this agent checks for the master.
   function probePanel(a) {
@@ -1466,12 +1466,12 @@ function AgentPage([id, tab]) {
         ${ifChange(html`<button class="btn sm" data-act="probe-resend" ${busy ? 'disabled' : ''} title="Send the current check list again, even if the agent has it">${icon('refresh')} Resend check list</button>
         <button class="btn warn sm" data-act="probe-clear" ${busy ? 'disabled' : ''} title="The agent drops its whole check list and waits for a new one">${icon('trash')} Clear probe checks</button>`)}</div>
       <div class="row" style="margin-top:10px">${sw}</div>
-      ${p.on ? html`<div class="muted small" style="margin:8px 0 12px">This agent checks agentless devices for the master, for networks the master cannot reach. Choose it as “Checked by” in a device's Edit window. It can be switched off once no device is checked by it.</div>
-      <div class="row">${state}</div>` : html`<div class="muted small" style="margin-top:8px">Off: this agent is not offered as “Checked by” for agentless devices. Switch it on to let it check devices for networks the master cannot reach.</div>`}
+      ${p.on ? html`<div class="muted small" style="margin:8px 0 12px">This agent checks agentless devices for the master, for networks the master cannot reach. Choose it as â€œChecked byâ€ in a device's Edit window. It can be switched off once no device is checked by it.</div>
+      <div class="row">${state}</div>` : html`<div class="muted small" style="margin-top:8px">Off: this agent is not offered as â€œChecked byâ€ for agentless devices. Switch it on to let it check devices for networks the master cannot reach.</div>`}
       ${p.on ? html`
       <div class="facts" style="margin-top:14px"><div><div class="k">Devices</div><div class="v">${p.devices}</div></div><div><div class="k">Checks</div><div class="v">${p.checks} of at most ${p.max}</div></div>
-        <div><div class="k">List version</div><div class="v mono small">${p.running || '—'}</div></div></div>` : ''}
-      ${busy ? html`<div class="dim small" style="margin-top:10px"><span class="spin" style="width:10px;height:10px"></span> ${busy.type === 'probe.clear' ? 'Clear sent, not yet confirmed' : 'Check list sent, not yet confirmed'}…</div>` : ''}
+        <div><div class="k">List version</div><div class="v mono small">${p.running || 'â€”'}</div></div></div>` : ''}
+      ${busy ? html`<div class="dim small" style="margin-top:10px"><span class="spin" style="width:10px;height:10px"></span> ${busy.type === 'probe.clear' ? 'Clear sent, not yet confirmed' : 'Check list sent, not yet confirmed'}â€¦</div>` : ''}
     </div>`;
   }
   function render() {
@@ -1481,7 +1481,7 @@ function AgentPage([id, tab]) {
     setHTML($('#a-head'), header(a, d.groups));
     const tabs = a.below_min ? [['system', 'System']] : [['system', 'System'], ['updates', 'Updates'], ['jobs', 'Jobs'], ['apps', 'Applications']];
     if (!tabs.some(([k]) => k === st.tab)) st.tab = tabs[0][0];
-    setHTML($('#a-tabs'), tabs.map(([k, l]) => html`<button class="${st.tab === k ? 'on' : ''}" data-act="tab" data-t="${k}">${l}${k === 'updates' && a.updates?.total ? html` <span class="badge upd">${a.updates.total}</span>` : ''}${k === 'system' && !a.core_is_latest && a.core_latest ? html` <span class="badge upd" title="A newer agent version is available">↑</span>` : ''}</button>`));
+    setHTML($('#a-tabs'), tabs.map(([k, l]) => html`<button class="${st.tab === k ? 'on' : ''}" data-act="tab" data-t="${k}">${l}${k === 'updates' && a.updates?.total ? html` <span class="badge upd">${a.updates.total}</span>` : ''}${k === 'system' && !a.core_is_latest && a.core_latest ? html` <span class="badge upd" title="A newer agent version is available">â†‘</span>` : ''}</button>`));
     const body = a.below_min ? agentPanel(a) : { updates: updatesTab, jobs: jobsTab, system: systemTab, apps: appsTab }[st.tab](a);
     setHTML($('#a-body'), body);
   }
@@ -1501,7 +1501,7 @@ function AgentPage([id, tab]) {
       'apps-view': (t) => { st.appsAll = t.dataset.v === '1'; render(); },
       'agent-update': async () => {
         const res = await POST(`agents/${id}/core`, {});
-        if (res.job) openJob(res.job); else toast('Update requested — it runs when the device is online', 'ok');
+        if (res.job) openJob(res.job); else toast('Update requested â€” it runs when the device is online', 'ok');
         refresh();
       },
       check: () => runAction([id], 'updates', 'check', {}),
@@ -1540,7 +1540,7 @@ function AgentPage([id, tab]) {
       'probe-clear': async () => {
         const p = a().probe;
         if (!(await confirmBox(`Clear the probe checks of ${a().name}?`, html`The agent drops its whole check list and any results it has not sent yet, and then waits.
-          ${p.devices ? html`Its ${p.devices} device${p.devices === 1 ? '' : 's'} show “unknown” until ` : 'Nothing is checked until '}you press “Resend check list” or the checks of its devices change.`, { okText: 'Clear probe checks', danger: true }))) return;
+          ${p.devices ? html`Its ${p.devices} device${p.devices === 1 ? '' : 's'} show â€œunknownâ€ until ` : 'Nothing is checked until '}you press â€œResend check listâ€ or the checks of its devices change.`, { okText: 'Clear probe checks', danger: true }))) return;
         await POST(`agents/${id}/probe/clear`); toast('Clear sent to the agent', 'ok'); refresh();
       },
       'maint-start': () => maintStart(a(), refresh),
@@ -1620,7 +1620,7 @@ function uptimeBar(hist, { word = 'ping', compact = false } = {}) {
   for (let i = 95; i >= 0; i--) {
     const t = end - i * slot, h = by.get(t);
     const cls = !h ? 'none' : h.ok === h.n ? 'ok' : h.ok === 0 ? 'bad' : 'part';
-    const range = `${fmtDate(t).split(' ')[1]}–${fmtDate(t + slot).split(' ')[1]}`;
+    const range = `${fmtDate(t).split(' ')[1]}â€“${fmtDate(t + slot).split(' ')[1]}`;
     cells.push(html`<span class="${cls}" title="${range}: ${!h ? `no ${word}s` : `${h.ok} of ${h.n} ${word}${h.n === 1 ? '' : 's'} ${word === 'ping' ? 'answered' : 'up'}`}"></span>`);
   }
   return compact ? html`<div class="upbar mini">${cells}</div>` : html`<div class="upbar">${cells}</div><div class="upaxis"><span>24 hours ago</span><span>now</span></div>`;
@@ -1649,10 +1649,10 @@ function rttGraph(rtt) {
   const hhmm = (t) => fmtDate(t).split(' ')[1];
   let bands = '', hits = '', grid = '';
   for (const s of slots) {
-    const r = s.r, range = `${hhmm(s.t)}–${hhmm(s.t + slot)}`;
+    const r = s.r, range = `${hhmm(s.t)}â€“${hhmm(s.t + slot)}`;
     if (r && !r.n && r.fail) bands += `<rect x="${s.i}" y="0" width="1" height="${H}" class="bad"/>`;
     const tip = !r ? 'no pings' : !r.n ? `no answer (${r.fail} ping${r.fail === 1 ? '' : 's'})`
-      : `average ${rttText(r.avg)}, lowest ${rttText(r.min)}, highest ${rttText(r.max)} · ${r.n} answered${r.fail ? `, ${r.fail} unanswered` : ''}`;
+      : `average ${rttText(r.avg)}, lowest ${rttText(r.min)}, highest ${rttText(r.max)} Â· ${r.n} answered${r.fail ? `, ${r.fail} unanswered` : ''}`;
     hits += `<rect x="${s.i}" y="0" width="1" height="${H}" class="hit"><title>${esc(`${range}: ${tip}`)}</title></rect>`;
   }
   const ticks = [];
@@ -1670,13 +1670,13 @@ function rttGraph(rtt) {
 function svcState(s) {
   if (s.paused) return html`<span class="badge mute xs">paused</span>`;
   if (!s.checked) return s.fails ? html`<span class="badge upd xs" title="${s.last_error || ''}">retry ${s.fails} of ${s.retries}</span>` : html`<span class="badge mute xs">waiting</span>`;
-  if (s.up) return s.fails ? html`<span class="badge upd xs" title="${s.last_error || ''}">up · retry ${s.fails} of ${s.retries}</span>` : html`<span class="badge ok xs">up</span>`;
+  if (s.up) return s.fails ? html`<span class="badge upd xs" title="${s.last_error || ''}">up Â· retry ${s.fails} of ${s.retries}</span>` : html`<span class="badge ok xs">up</span>`;
   return html`<span class="badge sec xs" title="${s.last_error || ''}">down</span>`;
 }
 function pingState(P) {
   if (P.mode === 'paused') return html`<span class="badge mute xs">paused</span>`;
   if (!P.checked) return P.fails ? html`<span class="badge upd xs" title="${P.last_error || ''}">no answer ${P.fails} of ${P.down_after}</span>` : html`<span class="badge mute xs">waiting</span>`;
-  if (P.up) return P.fails ? html`<span class="badge upd xs" title="${P.last_error || ''}">up · no answer ${P.fails} of ${P.down_after}</span>` : html`<span class="badge ok xs">up</span>`;
+  if (P.up) return P.fails ? html`<span class="badge upd xs" title="${P.last_error || ''}">up Â· no answer ${P.fails} of ${P.down_after}</span>` : html`<span class="badge ok xs">up</span>`;
   return html`<span class="badge sec xs" title="${P.last_error || ''}">down</span>`;
 }
 function serviceModal(dev, svc, presets, lim, done) {
@@ -1709,19 +1709,19 @@ function serviceModal(dev, svc, presets, lim, done) {
       <label class="field">Service<select name="preset" data-change="preset">
         ${canPing ? html`<option value="ping" selected>Ping (ICMP)</option>` : ''}
         ${groups.map((g) => presets.filter((p) => p.group === g).map((p) => html`<option value="${p.key}" ${s.preset === p.key ? 'selected' : ''}>${p.name} (${p.port})</option>`))}
-        <option value="" ${!s.preset ? 'selected' : ''}>Custom TCP port…</option></select></label>
-      <div class="notice blue" id="svc-ping" style="margin:0;display:none">The ping uses the same settings for every agentless device: every ${dev.local.interval} s, down after ${dev.local.down_after} unanswered pings (Settings → Agentless).</div>
+        <option value="" ${!s.preset ? 'selected' : ''}>Custom TCP portâ€¦</option></select></label>
+      <div class="notice blue" id="svc-ping" style="margin:0;display:none">The ping uses the same settings for every agentless device: every ${dev.local.interval} s, down after ${dev.local.down_after} unanswered pings (Settings â†’ Agentless).</div>
       <div id="svc-tcp" class="stack" style="gap:12px">
       <div class="row" style="gap:12px;align-items:flex-end">
         <label class="field" style="flex:2">Name<input type="text" name="name" value="${s.name}" maxlength="48" required></label>
         <label class="field" style="flex:1">Port<input type="number" name="port" min="1" max="65535" value="${s.port}" required></label></div>
       <label class="checkrow"><input type="checkbox" name="greeting" ${s.greeting ? 'checked' : ''}> Wait for a greeting</label>
-      <div class="dim small">Only for services that send text first (SSH, SMTP, FTP…): the check then also needs that first line. Otherwise a connection is enough.</div>
+      <div class="dim small">Only for services that send text first (SSH, SMTP, FTPâ€¦): the check then also needs that first line. Otherwise a connection is enough.</div>
       <div class="row" style="gap:12px">
         <label class="field" style="flex:1">Heartbeat interval (s)<input type="number" name="interval" min="${lim.interval_min}" max="${lim.interval_max}" value="${s.interval}" required></label>
         <label class="field" style="flex:1">Retries<input type="number" name="retries" min="0" max="${lim.retries_max}" value="${s.retries}" required></label>
         <label class="field" style="flex:1">Request timeout (s)<input type="number" name="timeout" min="${lim.timeout_min}" max="${lim.timeout_max}" value="${s.timeout}" required></label></div>
-      <div class="dim small">Checked every ${lim.interval_min}–${lim.interval_max} s (default ${lim.interval}). After a failed check up to ${lim.retries_max} retries follow, 30 s apart, before the service is marked down. The timeout limits connecting and waiting for the greeting.</div>
+      <div class="dim small">Checked every ${lim.interval_min}â€“${lim.interval_max} s (default ${lim.interval}). After a failed check up to ${lim.retries_max} retries follow, 30 s apart, before the service is marked down. The timeout limits connecting and waiting for the greeting.</div>
       <label class="checkrow"><input type="checkbox" name="reverse" ${s.reverse ? 'checked' : ''}> Reverse mode</label>
       <div class="dim small">The status is turned upside down: reachable counts as down. For example for a port that must stay closed.</div>
       </div>
@@ -1735,14 +1735,14 @@ function serviceModal(dev, svc, presets, lim, done) {
         if (f.preset.value === 'ping') {
           const res = await POST(`locals/${dev.id}/pingstate`, { state: 'on' });
           closeModal();
-          toast('Ping added — the first ping follows within seconds', 'ok');
+          toast('Ping added â€” the first ping follows within seconds', 'ok');
           return done?.(res);
         }
         const body = { preset: f.preset.value, name: f.name.value, interval: +f.interval.value, retries: +f.retries.value, timeout: +f.timeout.value, reverse: f.reverse.checked };
         if (!f.preset.value) { body.port = +f.port.value; body.greeting = f.greeting.checked; }
         const res = await POST(isNew ? `locals/${dev.id}/services` : `locals/${dev.id}/services/${svc.id}`, body);
         closeModal();
-        toast(isNew ? `${body.name} added — the first check follows within seconds` : 'Saved', 'ok');
+        toast(isNew ? `${body.name} added â€” the first check follows within seconds` : 'Saved', 'ok');
         done?.(res);
       },
     },
@@ -1760,12 +1760,12 @@ function LocalPage([id, tab]) {
       ['Status', html`${status} ${L.checked ? `since ${fmtDate(L.since)}` : ''}`],
       ['IP address', html`<span class="mono">${L.address}</span>`],
       ['Ping', on ? 'on' : html`<span class="badge mute xs">${L.ping_mode === 'paused' ? 'paused' : 'not pinged'}</span>`],
-      ['Round-trip time', on && L.up && L.rtt_us ? rttText(L.rtt_us) : '—'],
-      ['Last ping', P?.last_check ? html`${fmtDate(P.last_check, true)}` : '—'],
-      ['Last answer', !P ? '—' : P.last_up ? html`${fmtDate(P.last_up, true)}` : 'never'],
-      ['Unanswered in a row', !on ? '—' : L.fails ? html`<span class="c-red">${L.fails}</span>` : '0'],
-      ['Last error', on && L.last_error ? html`<span class="c-red">${L.last_error}</span>` : '—'],
-      ['Services', svcs.length ? html`<a href="#" data-act="tab" data-t="services">${svcs.length} service${svcs.length === 1 ? '' : 's'}</a>${L.svc_down ? html` · <span class="c-red">${L.svc_down} down</span>` : ''}${L.svc_paused ? html` · <span class="dim">${L.svc_paused} paused</span>` : ''}` : html`<span class="dim">none</span>`],
+      ['Round-trip time', on && L.up && L.rtt_us ? rttText(L.rtt_us) : 'â€”'],
+      ['Last ping', P?.last_check ? html`${fmtDate(P.last_check, true)}` : 'â€”'],
+      ['Last answer', !P ? 'â€”' : P.last_up ? html`${fmtDate(P.last_up, true)}` : 'never'],
+      ['Unanswered in a row', !on ? 'â€”' : L.fails ? html`<span class="c-red">${L.fails}</span>` : '0'],
+      ['Last error', on && L.last_error ? html`<span class="c-red">${L.last_error}</span>` : 'â€”'],
+      ['Services', svcs.length ? html`<a href="#" data-act="tab" data-t="services">${svcs.length} service${svcs.length === 1 ? '' : 's'}</a>${L.svc_down ? html` Â· <span class="c-red">${L.svc_down} down</span>` : ''}${L.svc_paused ? html` Â· <span class="dim">${L.svc_paused} paused</span>` : ''}` : html`<span class="dim">none</span>`],
       ['Monitoring', 'Agentless'],
       ['Checked by', L.probe ? html`<a href="#/device/${L.probe.id}">${L.probe.name}</a> <span class="dim small">(remote probe)</span>` : 'Master'],
     ];
@@ -1776,7 +1776,7 @@ function LocalPage([id, tab]) {
         ${!P ? html`<span class="dim small">not pinged</span>` : P.uptime >= 0 ? html`<span class="muted small">${pctText(P.uptime)} of the pings answered${on ? '' : ' (paused)'}</span>` : html`<span class="dim small">${on ? 'no pings yet' : 'paused'}</span>`}</div>
         ${uptimeBar(P ? P.hist : [])}
         <div class="row dim small" style="margin-top:10px;gap:14px"><span><i class="lg ok"></i>all answered</span><span><i class="lg part"></i>some answered</span><span><i class="lg bad"></i>none answered</span><span><i class="lg none"></i>no pings</span></div>
-        ${P ? html`<div class="row" style="margin:22px 0 10px"><h3 style="margin:0">Round-trip time</h3><span class="spacer"></span><span class="dim small">average per 5 minutes · point at the graph for lowest and highest</span></div>${rttGraph(P.rtt)}` : ''}</div>
+        ${P ? html`<div class="row" style="margin:22px 0 10px"><h3 style="margin:0">Round-trip time</h3><span class="spacer"></span><span class="dim small">average per 5 minutes Â· point at the graph for lowest and highest</span></div>${rttGraph(P.rtt)}` : ''}</div>
       <div class="panel panel-pad" style="margin-top:16px"><div class="row" style="margin-bottom:12px"><h2 style="margin:0">Services, last 24 hours</h2><span class="spacer"></span>
         <a href="#" class="small" data-act="tab" data-t="services">${canChange() ? 'Details, add or remove' : 'Details'}</a></div>
         ${svcs.length ? html`<div class="svcsum">${svcs.map((s) => html`
@@ -1796,11 +1796,11 @@ function LocalPage([id, tab]) {
     const pingRow = P ? html`<tr class="${P.mode === 'paused' ? 'dimrow' : ''}">
         <td class="nowrap">${pingState(P)}${P.checked && P.mode !== 'paused' ? html`<div class="dim small">${dur(now() - P.since)}</div>` : ''}</td>
         <td class="nowrap"><b>Ping</b><div class="dim small mono">ICMP</div></td>
-        <td class="small"><span class="dim">—</span></td>
-        <td class="small nowrap">${P.up && P.rtt_us && P.mode !== 'paused' ? rttText(P.rtt_us) : html`<span class="dim">—</span>`}</td>
+        <td class="small"><span class="dim">â€”</span></td>
+        <td class="small nowrap">${P.up && P.rtt_us && P.mode !== 'paused' ? rttText(P.rtt_us) : html`<span class="dim">â€”</span>`}</td>
         <td class="small nowrap">${P.last_check ? when(P.last_check) : html`<span class="dim">waiting</span>`}${P.last_error && P.mode !== 'paused' && !(P.up && !P.fails) ? html`<div class="c-red small" style="font-weight:400">${P.last_error}</div>` : ''}</td>
         <td style="min-width:150px">${uptimeBar(P.hist, { compact: true })}<div class="dim small">${P.uptime >= 0 ? `${pctText(P.uptime)} answered` : 'no pings yet'}</div></td>
-        <td class="dim small nowrap" title="The same for all agentless devices: Settings → Agentless">every ${P.interval} s<br>down after ${P.down_after} · ${P.timeout} s</td>
+        <td class="dim small nowrap" title="The same for all agentless devices: Settings â†’ Agentless">every ${P.interval} s<br>down after ${P.down_after} Â· ${P.timeout} s</td>
         <td class="w1"><div class="row" style="flex-wrap:nowrap;gap:6px">
           <button class="btn ghost sm iconbtn" data-act="ping" title="${L.probe ? 'Checked by a remote probe on its own schedule' : 'Ping now'}" ${st.pinging || P.mode === 'paused' || L.probe ? 'disabled' : ''}>${st.pinging ? html`<span class="spin"></span>` : icon('refresh')}</button>
           ${ifChange(html`${pauseBtn(P.mode === 'paused', 'ping-pause', '')}<button class="btn danger sm iconbtn" data-act="ping-remove" title="Delete">${icon('trash')}</button>`)}</div></td>
@@ -1809,11 +1809,11 @@ function LocalPage([id, tab]) {
       <tbody>${pingRow}${svcs.map((s) => html`<tr class="${s.paused ? 'dimrow' : ''}">
         <td class="nowrap">${svcState(s)}${s.checked && !s.paused ? html`<div class="dim small">${dur(now() - s.since)}</div>` : ''}</td>
         <td class="nowrap"><b>${s.name}</b> ${s.reverse ? html`<span class="badge info xs" title="Reverse mode: reachable counts as down">reverse</span>` : ''}<div class="dim small mono">TCP ${s.port}</div></td>
-        <td class="small mono banner">${s.banner ? html`<span title="${s.banner}">${s.banner}</span>` : html`<span class="dim">${s.greeting ? '—' : 'not waited for'}</span>`}</td>
-        <td class="small nowrap">${s.rtt_us && s.up && !s.reverse && !s.paused ? rttText(s.rtt_us) : html`<span class="dim">—</span>`}</td>
+        <td class="small mono banner">${s.banner ? html`<span title="${s.banner}">${s.banner}</span>` : html`<span class="dim">${s.greeting ? 'â€”' : 'not waited for'}</span>`}</td>
+        <td class="small nowrap">${s.rtt_us && s.up && !s.reverse && !s.paused ? rttText(s.rtt_us) : html`<span class="dim">â€”</span>`}</td>
         <td class="small nowrap">${s.last_check ? when(s.last_check) : html`<span class="dim">waiting</span>`}${s.last_error && !s.paused && !(s.up && !s.fails) ? html`<div class="c-red small" style="font-weight:400">${s.last_error}</div>` : ''}</td>
         <td style="min-width:150px">${uptimeBar(s.hist, { word: 'check', compact: true })}<div class="dim small">${s.uptime >= 0 ? `${pctText(s.uptime)} up` : 'no checks yet'}</div></td>
-        <td class="dim small nowrap">every ${s.interval} s<br>${s.retries} retr${s.retries === 1 ? 'y' : 'ies'} · ${s.timeout} s${s.greeting ? html`<br>greeting` : ''}</td>
+        <td class="dim small nowrap">every ${s.interval} s<br>${s.retries} retr${s.retries === 1 ? 'y' : 'ies'} Â· ${s.timeout} s${s.greeting ? html`<br>greeting` : ''}</td>
         <td class="w1"><div class="row" style="flex-wrap:nowrap;gap:6px">
           <button class="btn ghost sm iconbtn" data-act="svc-check" data-sid="${s.id}" title="${L.probe ? 'Checked by a remote probe on its own schedule' : 'Check now'}" ${st.checking.has(s.id) || s.paused || L.probe ? 'disabled' : ''}>${st.checking.has(s.id) ? html`<span class="spin"></span>` : icon('refresh')}</button>
           ${ifChange(html`${pauseBtn(s.paused, 'svc-pause', `data-sid="${esc(s.id)}"`)}<button class="btn ghost sm iconbtn" data-act="svc-edit" data-sid="${s.id}" title="Edit">${icon('edit')}</button><button class="btn danger sm iconbtn" data-act="svc-delete" data-sid="${s.id}" title="Delete">${icon('trash')}</button>`)}</div></td>
@@ -1830,17 +1830,17 @@ function LocalPage([id, tab]) {
     setHTML($('#a-head'), html`
       <div class="page-head syshead">
         <div class="headinfo"><div class="row"><a href="#/dashboard/${lastDashSub}" class="btn ghost sm iconbtn" title="Back">${icon('back')}</a>${agentDot(a)}<h1>${a.name}</h1>
-          <span class="tag">${icon('folder')} ${g ? g.name : 'Ungrouped'}</span><span class="verpill loc" title="${L.probe ? `Checked by the agent ${L.probe.name}` : 'Monitored by the master itself'}; no agent is installed on it">agentless${L.probe ? ` · via ${L.probe.name}` : ''}</span></div>
-          <div class="sub">${L.address} · ${state}${!a.maint && !out && L.up && L.svc_down ? ` · ${L.svc_down} of ${L.svc_total} services down` : ''}</div></div>
+          <span class="tag">${icon('folder')} ${g ? g.name : 'Ungrouped'}</span><span class="verpill loc" title="${L.probe ? `Checked by the agent ${L.probe.name}` : 'Monitored by the master itself'}; no agent is installed on it">agentless${L.probe ? ` Â· via ${L.probe.name}` : ''}</span></div>
+          <div class="sub">${L.address} Â· ${state}${!a.maint && !out && L.up && L.svc_down ? ` Â· ${L.svc_down} of ${L.svc_total} services down` : ''}</div></div>
         <span class="spacer"></span>
         <button class="btn sm" data-act="ping" ${st.pinging || !L.ping || L.probe ? 'disabled' : ''} title="${L.probe ? `Checked by ${L.probe.name} on its own schedule` : L.ping ? 'Ping the device now' : pingNote(L)}">${st.pinging ? html`<span class="spin"></span>` : icon('pulse')} Ping now</button>
         ${ifChange(html`<button class="btn sm" data-act="edit">${icon('edit')} Edit</button><button class="btn danger sm" data-act="delete" title="Delete">${icon('trash')}</button>`)}
         ${maintButton(a)}
       </div>
       ${maintNotice(a)}
-      ${out && !a.maint ? html`<div class="notice grey"><b>Unknown – ${out.note}.</b> ${{
+      ${out && !a.maint ? html`<div class="notice grey"><b>Unknown â€“ ${out.note}.</b> ${{
         offline: html`The agent <a href="#/device/${out.id}">${out.name}</a> that checks this device has no contact with the master. The master does not take over: the shown results are the last ones received.`,
-        cleared: html`An administrator cleared the check list of <a href="#/device/${out.id}">${out.name}</a>. Checks resume after “Resend check list” on that agent's page, or when the checks change.`,
+        cleared: html`An administrator cleared the check list of <a href="#/device/${out.id}">${out.name}</a>. Checks resume after â€œResend check listâ€ on that agent's page, or when the checks change.`,
         waiting: html`<a href="#/device/${out.id}">${out.name}</a> has not confirmed its check list yet.`,
       }[out.state] || html`Choose another agent, or the master, with Edit.`}</div>` : ''}
       ${conflictNotice(a)}`);
@@ -1926,7 +1926,7 @@ function Devices() {
     const pend = d.agents.filter((a) => a.status === 'pending').sort(byName);
     setPending(pend.length);
     setHTML($('#s-pending'), pend.length ? html`<div class="panel panel-pad"><h2>Waiting for approval <span class="badge upd">${pend.length}</span></h2>
-      <table class="tbl"><tbody>${pend.map((a) => html`<tr><td>${agentDot(a)} <b>${a.name}</b></td><td class="muted">${osLabel(a.facts)} · ${a.facts.arch}</td><td class="muted">${(a.facts.ips || []).join(', ')}</td><td class="muted">${when(a.enrolled_at)}</td>
+      <table class="tbl"><tbody>${pend.map((a) => html`<tr><td>${agentDot(a)} <b>${a.name}</b></td><td class="muted">${osLabel(a.facts)} Â· ${a.facts.arch}</td><td class="muted">${(a.facts.ips || []).join(', ')}</td><td class="muted">${when(a.enrolled_at)}</td>
         ${ifChange(html`<td class="w1"><div class="row" style="flex-wrap:nowrap"><button class="btn primary sm" data-act="approve" data-id="${a.id}">${icon('check')} Approve</button><button class="btn danger sm" data-act="reject" data-id="${a.id}">Reject</button></div></td>`)}</tr>`)}</tbody></table></div>` : '');
     renderTokens();
     const count = (gid) => d.agents.filter((a) => (a.group_id || '') === gid).length;
@@ -1945,11 +1945,11 @@ function Devices() {
         <td class="muted nowrap">${isLocal(a) ? html`Agentless${a.local.probe ? html`<div class="dim small">via ${a.local.probe.name}</div>` : ''}` : 'Agent'}</td>
         <td class="mono small">${ipLabel(a.facts)}</td>
         <td>${canChange() ? html`<select class="sm" data-change="set-group" data-id="${a.id}" title="Group">${groupOptions(d.groups, a.group_id)}</select>` : html`<span class="muted">${d.groups.find((g) => g.id === a.group_id)?.name || 'Ungrouped'}</span>`}</td>
-        <td class="muted">${isLocal(a) ? html`<span class="dim">—</span>` : osLabel(a.facts)}</td><td>${isLocal(a) ? html`<span class="dim">—</span>` : verPill(a)}</td>
+        <td class="muted">${isLocal(a) ? html`<span class="dim">â€”</span>` : osLabel(a.facts)}</td><td>${isLocal(a) ? html`<span class="dim">â€”</span>` : verPill(a)}</td>
         <td class="muted nowrap">${seen(a)}</td>
         ${ifChange(html`<td class="w1"><div class="row" style="flex-wrap:nowrap;justify-content:flex-start">${isLocal(a)
-    ? html`<button class="btn ghost sm" data-act="l-edit" data-id="${a.id}">${icon('edit')} Edit</button><button class="btn danger sm" data-act="l-delete" data-id="${a.id}" title="Delete">${icon('trash')}</button>`
-    : html`<button class="btn ghost sm" data-act="rename" data-id="${a.id}">${icon('edit')} Rename</button><button class="btn danger sm" data-act="remove" data-id="${a.id}" title="Remove">${icon('trash')}</button>`}</div></td>`)}</tr>`)}</tbody></table></div>` : html`<div class="panel empty">No devices yet.</div>`);
+    ? html`<button class="btn ghost sm" style="min-width:104px;justify-content:flex-start" data-act="l-edit" data-id="${a.id}">${icon('edit')} Edit</button><button class="btn danger sm" data-act="l-delete" data-id="${a.id}" title="Delete">${icon('trash')}</button>`
+    : html`<button class="btn ghost sm" style="min-width:104px;justify-content:flex-start" data-act="rename" data-id="${a.id}">${icon('edit')} Rename</button><button class="btn danger sm" data-act="remove" data-id="${a.id}" title="Remove">${icon('trash')}</button>`}</div></td>`)}</tr>`)}</tbody></table></div>` : html`<div class="panel empty">No devices yet.</div>`);
     if (!st.addShown) { st.addShown = true; addPanel(); }
   }
   function addPanel() {
@@ -1959,7 +1959,7 @@ function Devices() {
     setHTML(box, html`
       <div class="tabs" style="margin:12px 0 4px"><button type="button" class="${st.type === 'agent' ? 'on' : ''}" data-act="add-type" data-t="agent">Agent</button><button type="button" class="${st.type === 'local' ? 'on' : ''}" data-act="add-type" data-t="local">Agentless</button></div>
       ${st.type === 'agent' ? html`
-        <div class="muted small">An agent on the device does all checks: updates, applications, CVEs and system details. Generates a single-use install command. Run it as <b>root</b> on the device (VM, container, bare metal — including this master container). The agent connects out to the master; no SSH or open ports needed.</div>
+        <div class="muted small">An agent on the device does all checks: updates, applications, CVEs and system details. Generates a single-use install command. Run it as <b>root</b> on the device (VM, container, bare metal â€” including this master container). The agent connects out to the master; no SSH or open ports needed.</div>
         <form class="row" style="margin-top:14px" data-submit="gen">
           <input type="text" name="note" placeholder="Note (optional), e.g. web-01" maxlength="64" style="width:240px">
           <select name="ttl"><option value="1" selected>valid 1 hour</option><option value="3">valid 3 hours</option></select>
@@ -1983,7 +1983,7 @@ function Devices() {
     const box = $('#s-tokens');
     if (!box) return;
     setHTML(box, st.tokens.length ? html`<table class="tbl" style="margin-top:14px"><thead><tr><th>Open token</th><th>Note</th><th>Expires</th><th class="w1"></th></tr></thead>
-      <tbody>${st.tokens.map((t) => html`<tr><td class="mono">${t.prefix}…</td><td class="muted">${t.note || '—'}</td><td class="muted">${fmtDate(t.expires)}</td><td class="w1"><button class="btn ghost sm" data-act="revoke" data-hash="${t.hash}">Revoke</button></td></tr>`)}</tbody></table>` : '');
+      <tbody>${st.tokens.map((t) => html`<tr><td class="mono">${t.prefix}â€¦</td><td class="muted">${t.note || 'â€”'}</td><td class="muted">${fmtDate(t.expires)}</td><td class="w1"><button class="btn ghost sm" data-act="revoke" data-hash="${t.hash}">Revoke</button></td></tr>`)}</tbody></table>` : '');
   }
   const groupName = (gid) => st.data.groups.find((g) => g.id === gid)?.name || '';
   const agentBy = (id) => st.data.agents.find((a) => a.id === id);
@@ -2021,9 +2021,9 @@ function Devices() {
         const res = await POST('tokens', { note: f.note.value, ttl_hours: +f.ttl.value });
         st.lastCmd = res.command;
         setHTML($('#s-cmd'), html`
-          ${res.has_core ? '' : html`<div class="notice red" style="margin-top:14px">No agent version is on the master yet — the install will fail until the master has downloaded one (see Releases).</div>`}
+          ${res.has_core ? '' : html`<div class="notice red" style="margin-top:14px">No agent version is on the master yet â€” the install will fail until the master has downloaded one (see Releases).</div>`}
           <div class="cmdbox"><code id="s-cmdtext">${res.command}</code><button class="btn" data-act="copy">${icon('copy')} Copy</button></div>
-          <div class="dim small" style="margin-top:8px">Valid until ${fmtDate(res.expires)} · single use · requires curl and systemd · installs the latest agent version.</div>`);
+          <div class="dim small" style="margin-top:8px">Valid until ${fmtDate(res.expires)} Â· single use Â· requires curl and systemd Â· installs the latest agent version.</div>`);
         f.note.value = '';
         view.refresh();
       },
@@ -2041,7 +2041,7 @@ function Devices() {
       'add-type': (t) => { st.type = t.dataset.t; addPanel(); },
       'l-add': async (f) => {
         const res = await POST('locals', { name: f.name.value, address: f.address.value.trim(), group_id: f.group.value, probe: f.probe.value });
-        toast(`${res.name} added — the first ping follows within seconds`, 'ok');
+        toast(`${res.name} added â€” the first ping follows within seconds`, 'ok');
         f.name.value = ''; f.address.value = '';
         view.refresh();
       },
@@ -2049,14 +2049,14 @@ function Devices() {
       'l-delete': (t) => localDelete(agentBy(t.dataset.id), () => view.refresh()),
       'set-group': async (t) => {
         await POST((isLocal(agentBy(t.dataset.id)) ? 'locals/' : 'agents/') + t.dataset.id, { group_id: t.value });
-        toast(`${agentBy(t.dataset.id).name} → ${t.value ? groupName(t.value) : 'Ungrouped'}`, 'ok');
+        toast(`${agentBy(t.dataset.id).name} â†’ ${t.value ? groupName(t.value) : 'Ungrouped'}`, 'ok');
         view.refresh();
       },
       rename: (t) => {
         const ag = agentBy(t.dataset.id);
         openModal(html`<h3>Rename ${ag.name}</h3><form class="form" data-submit="save">
           <label class="field">Display name<input type="text" name="name" value="${ag.name}" maxlength="64" autofocus required></label>
-          <div class="dim small">Host name on the device: ${ag.facts.hostname || '—'}. Only the name shown in Coremon changes.</div>
+          <div class="dim small">Host name on the device: ${ag.facts.hostname || 'â€”'}. Only the name shown in Coremon changes.</div>
           <div class="actions"><button type="button" class="btn ghost" data-act="cancel">Cancel</button><button class="btn primary">Save</button></div></form>`, {
           acts: {
             cancel: () => closeModal(),
@@ -2111,13 +2111,13 @@ function Devices() {
 
 function vulnBadges(v, missing) {
   const why = { old_agent: 'Needs agent 0.3.6 or later', unsupported: 'No security data for this OS release', pending: 'Being looked up' };
-  if (!v) return html`<span class="dim" title="${why[missing] || 'Not checked'}">—</span>`;
+  if (!v) return html`<span class="dim" title="${why[missing] || 'Not checked'}">â€”</span>`;
   switch (v.status) {
     case 'ok': return html`<span class="badge ok xs">ok</span>`;
-    case 'pending': return html`<span class="dim">…</span>`;
+    case 'pending': return html`<span class="dim">â€¦</span>`;
     case 'not_distro': return html`<span class="dim" title="From ${v.origin}: not covered by the distribution's security data">not checked</span>`;
     case 'manual': return html`<span class="dim" title="Not installed from a package source">not checked</span>`;
-    case 'old_agent': return html`<span class="dim" title="Needs agent 0.3.6 or later">—</span>`;
+    case 'old_agent': return html`<span class="dim" title="Needs agent 0.3.6 or later">â€”</span>`;
   }
   return html`${v.fixable ? html`<span class="badge ${v.red ? 'sec' : 'upd'} xs">${v.fixable} fixable</span> ` : ''}${v.open ? html`<span class="badge ${v.kev && !v.fixable ? 'sec' : 'mute'} xs">${v.open} without fix</span>` : ''}${!v.fixable && !v.open && v.kev ? html`<span class="badge sec xs">${v.kev} exploited</span>` : ''}`;
 }
@@ -2170,12 +2170,12 @@ function AppList() {
       })}</tbody></table></div>`)}</div>`);
   }
   function openVersion(app, v) {
-    openModal(html`<h3>${app} ${v.version}</h3><div class="muted small mono">${v.full} · ${v.systems.length} device${v.systems.length === 1 ? '' : 's'}</div>
+    openModal(html`<h3>${app} ${v.version}</h3><div class="muted small mono">${v.full} Â· ${v.systems.length} device${v.systems.length === 1 ? '' : 's'}</div>
       <div class="tbl-wrap" style="margin-top:12px;max-height:60vh"><table class="tbl"><thead><tr><th>Device</th><th>OS</th><th>Update</th><th>Security</th></tr></thead>
       <tbody>${v.systems.map((s) => html`<tr class="click" data-act="go" data-id="${s.id}" title="Open ${s.name}">
         <td class="nowrap"><span class="dot ${s.online ? 'on' : 'off'}"></span> <b>${s.name}</b>${s.online ? '' : html` <span class="small c-red">offline</span>`}${s.status === 'report_only' ? html` <span class="badge info xs">report only</span>` : ''}</td>
         <td class="small muted">${s.os}</td>
-        <td class="mono small">${s.update ? html`<span class="badge upd xs">${s.update}</span>` : html`<span class="dim">—</span>`}</td>
+        <td class="mono small">${s.update ? html`<span class="badge upd xs">${s.update}</span>` : html`<span class="dim">â€”</span>`}</td>
         <td class="nowrap">${vulnBadges(s.vulns, s.vuln_status)}</td></tr>`)}</tbody></table></div>
       <div class="actions"><button class="btn" data-act="cancel">Close</button></div>`, {
       wide: true,
@@ -2186,7 +2186,7 @@ function AppList() {
     interval: 15000,
     mount(el) {
       el.innerHTML = r(html`${subTabs('dashboard', 'apps')}<div class="page-head"><div><h1>Application List</h1><div class="sub">Which applications run where, per version</div></div></div>
-        <div class="toolbar"><input type="search" class="search" id="al-q" placeholder="Search applications…"><select id="al-g" class="grpsel" title="Show the applications of one group"><option value="">All devices</option></select><div class="chips" id="al-chips"></div></div>
+        <div class="toolbar"><input type="search" class="search" id="al-q" placeholder="Search applicationsâ€¦"><select id="al-g" class="grpsel" title="Show the applications of one group"><option value="">All devices</option></select><div class="chips" id="al-chips"></div></div>
         <div id="al-list"></div>`);
       $('#al-q').addEventListener('input', (e) => { st.q = e.target.value; render(); });
       $('#al-g').addEventListener('change', (e) => { st.g = e.target.value; render(); });
@@ -2251,9 +2251,9 @@ function endlessList({ load, keyOf, size = 50 }) {
     p.obs.observe(el);
   };
   p.stop = () => p.obs?.disconnect();
-  p.banner = () => (p.pending.length ? html`<div class="newbar"><button class="btn sm primary" data-act="to-top">${icon('up')} ${p.gap ? size + '+' : p.pending.length} new — back to top</button></div>` : '');
-  p.footer = (days) => (p.busy ? html`<div class="endline"><span class="spin"></span> Loading…</div>`
-    : !p.more && p.items.length ? html`<div class="endline"><span>End of history: older entries are removed after ${days} day${days === 1 ? '' : 's'} (<a href="#/settings/general">Settings → General</a>).</span></div>` : '');
+  p.banner = () => (p.pending.length ? html`<div class="newbar"><button class="btn sm primary" data-act="to-top">${icon('up')} ${p.gap ? size + '+' : p.pending.length} new â€” back to top</button></div>` : '');
+  p.footer = (days) => (p.busy ? html`<div class="endline"><span class="spin"></span> Loadingâ€¦</div>`
+    : !p.more && p.items.length ? html`<div class="endline"><span>End of history: older entries are removed after ${days} day${days === 1 ? '' : 's'} (<a href="#/settings/general">Settings â†’ General</a>).</span></div>` : '');
   return p;
 }
 
@@ -2298,14 +2298,14 @@ function Jobs() {
     const jobRow = (j, sub) => html`<tr class="click ${sub ? 'subrow' : ''}" data-act="open-job" data-id="${j.id}"><td><b>${jobTitle(j)}</b><div class="dim small">${jobParams(j)}${j.error ? html` <span style="color:var(--red)">${j.error}</span>` : ''}</div></td>
         <td>${sysCell(j)}</td>
         <td>${statusBadge(j.status)}</td><td class="muted">${j.actor}</td><td class="muted">${when(j.created)}</td>
-        <td class="muted">${j.finished ? dur(j.finished - (j.started || j.created)) : '—'}</td></tr>`;
+        <td class="muted">${j.finished ? dur(j.finished - (j.started || j.created)) : 'â€”'}</td></tr>`;
     const batchRow = (j) => {
       const b = j.batch, shut = !open.has(j.id);
       const end = b.every((x) => x.finished) ? Math.max(...b.map((x) => x.finished)) : 0;
       const start = Math.min(...b.map((x) => x.created));
       return html`<tr class="click batchrow" data-act="batch" data-id="${j.id}"><td><span class="fold ${shut ? 'shut' : ''}">${icon('down')}</span> <b>${j.actor === 'scheduler' ? 'Scheduled ' : ''}${jobTitle(j)}</b></td>
         <td><b>${b.length} devices</b></td><td class="nowrap">${batchStatus(b)}</td><td class="muted">${j.actor}</td><td class="muted">${when(start)}</td>
-        <td class="muted">${end ? dur(end - start) : '—'}</td></tr>
+        <td class="muted">${end ? dur(end - start) : 'â€”'}</td></tr>
         ${shut ? '' : b.filter((x) => !st.active || isActive(x)).map((x) => jobRow(x, true))}`;
     };
     const actors = [...(d.users || []), 'scheduler'];
@@ -2329,7 +2329,7 @@ function Jobs() {
         ${u.checks.length ? html`<table class="tbl"><thead><tr><th>Device</th><th>Check</th><th>Next run</th></tr></thead><tbody>
         ${u.checks.map((c) => html`<tr><td><a href="#/device/${c.device_id}">${c.device}</a></td><td><b>${c.check}</b>${c.detail ? html` <span class="dim small">${c.detail}</span>` : ''}</td>
           <td class="nowrap">${c.running ? html`<span class="row small"><span class="spin" style="width:10px;height:10px"></span>running</span>` : at(c.at)}</td></tr>`)}</tbody></table>`
-          : html`<div class="panel-pad dim small">No agentless checks: add an agentless device in Settings → Devices.</div>`}</div>`);
+          : html`<div class="panel-pad dim small">No agentless checks: add an agentless device in Settings â†’ Devices.</div>`}</div>`);
   }
   function showTab() {
     setHTML($('#j-tabs'), html`<button class="${st.tab === 'jobs' ? 'on' : ''}" data-act="jtab" data-t="jobs">Jobs</button><button class="${st.tab === 'upcoming' ? 'on' : ''}" data-act="jtab" data-t="upcoming">Upcoming tasks</button>`);
@@ -2390,23 +2390,23 @@ function RemoteProbes() {
     received: html`<span class="badge ok">${icon('check')} received</span>${p.failed ? html` <span class="badge sec">${p.failed} failed</span>` : ''}`,
   }[p.state] || p.state);
   const done = (p) => p.state === 'answered' || p.state === 'failed' || p.state === 'received';
-  const itemsTip = (p) => (p.items || []).join('\n') + (p.checks > (p.items || []).length ? `\n… and ${p.checks - p.items.length} more` : '');
+  const itemsTip = (p) => (p.items || []).join('\n') + (p.checks > (p.items || []).length ? `\nâ€¦ and ${p.checks - p.items.length} more` : '');
   function render() {
     const d = st.d;
     if (!d) return;
     const open = d.requests.filter((p) => p.state !== 'gave_up' && !done(p)).length;
     setHTML($('#p-list'), d.requests.length ? html`<div class="panel"><table class="tbl"><thead><tr><th>Request</th><th>Agent</th><th>Waiting for</th><th>Status</th></tr></thead><tbody>
       ${d.requests.map((p) => p.kind === 'results' ? html`<tr class="dimrow" title="${itemsTip(p)}">
-        <td><b>results received</b> · ${p.checks} check${p.checks === 1 ? '' : 's'}<div class="dim small">hover to see the checks and their outcome</div></td>
+        <td><b>results received</b> Â· ${p.checks} check${p.checks === 1 ? '' : 's'}<div class="dim small">hover to see the checks and their outcome</div></td>
         <td><a href="#/device/${p.agent_id}">${p.agent}</a></td>
         <td class="nowrap muted" title="received ${fmtDate(p.since, true)}">received ${secs(Math.max(0, d.now - p.since))} ago</td>
         <td class="nowrap">${stateBadge(p)}</td></tr>` : html`${p.kind === 'check' ? html`<tr>
-        <td><a href="#/device/${p.device_id}"><b>${p.title}</b></a><div class="dim small">check result · <span class="c-red">${p.note}</span></div></td>` : html`<tr class="click ${p.state === 'gave_up' || done(p) ? 'dimrow' : ''}" data-act="open-job" data-id="${p.id}">
+        <td><a href="#/device/${p.device_id}"><b>${p.title}</b></a><div class="dim small">check result Â· <span class="c-red">${p.note}</span></div></td>` : html`<tr class="click ${p.state === 'gave_up' || done(p) ? 'dimrow' : ''}" data-act="open-job" data-id="${p.id}">
         <td><b>${jobTitle(p)}</b><div class="dim small">${jobParams(p)}${p.state === 'overdue' || p.state === 'gave_up' || p.state === 'failed' || ((p.type || '').startsWith('probe.') && p.note) ? html` <span class="${p.state === 'overdue' || p.state === 'failed' ? 'c-red' : ''}">${p.note}</span>` : ''}</div></td>`}
         <td><a href="#/device/${p.agent_id}">${p.agent}</a></td>
         <td class="nowrap ${p.state === 'overdue' ? 'c-red' : 'muted'}" title="requested ${fmtDate(p.since, true)}">${p.state === 'gave_up' ? html`gave up ${ago(p.finished)}` : done(p) ? `answered in ${secs(Math.max(0, p.finished - p.since))}` : secs(Math.max(0, d.now - p.since))}</td>
         <td class="nowrap">${stateBadge(p)}</td></tr>`)}</tbody></table></div>
-      <div class="dim small" style="margin-top:10px">${open} open · answered requests${d.results_shown ? ' and received results' : ''} stay 20 seconds; requests that gave up stay 10 minutes.</div>`
+      <div class="dim small" style="margin-top:10px">${open} open Â· answered requests${d.results_shown ? ' and received results' : ''} stay 20 seconds; requests that gave up stay 10 minutes.</div>`
       : html`<div class="panel empty">Empty queue</div>`);
   }
   return {
@@ -2430,9 +2430,9 @@ function Releases() {
     const minAgent = R.min_agent || '';
     setHTML($('#r-index'), html`<div class="panel panel-pad">
       <div class="row"><h2 style="margin:0">Version index</h2><span class="spacer"></span>
-        ${ix.syncing || st.checking ? html`<span class="row muted small"><span class="spin"></span>checking…</span>` : html`<span class="muted small">${ix.checked_at ? when(ix.checked_at, 'checked ') : 'not checked yet'} · every 6 hours</span>`}
+        ${ix.syncing || st.checking ? html`<span class="row muted small"><span class="spin"></span>checkingâ€¦</span>` : html`<span class="muted small">${ix.checked_at ? when(ix.checked_at, 'checked ') : 'not checked yet'} Â· every 6 hours</span>`}
         ${ifChange(html`<button class="btn sm" data-act="check" ${ix.syncing || st.checking ? 'disabled' : ''}>${icon('refresh')} Check now</button>`)}</div>
-      <div class="dim small mono" style="margin-top:6px;word-break:break-all">${ix.url || 'no GitHub repository configured — see Settings'}</div>
+      <div class="dim small mono" style="margin-top:6px;word-break:break-all">${ix.url || 'no GitHub repository configured â€” see Settings'}</div>
       ${ix.error ? html`<div class="notice red" style="margin:12px 0 0">${ix.error}</div>` : ''}
       ${repo.errors.length ? html`<div class="notice red" style="margin:12px 0 0"><b>Rejected files</b>${repo.errors.map((e) => html`<div class="mono small">${e}</div>`)}</div>` : ''}
       ${!repo.signing_key ? html`<div class="notice red" style="margin:12px 0 0">The master has no release signing key (/etc/coremon-master/signing.pub). Re-run the installer.</div>` : ''}
@@ -2442,7 +2442,7 @@ function Releases() {
       <div class="row"><span class="muted">Installed</span><span class="ver">${m.version}</span>
         ${m.update ? html`<span class="badge upd">${m.latest} available</span>${ifChange(html`<button class="btn primary sm" data-act="master-update">${icon('up')} Update master to ${m.latest}</button>`)}` : html`<span class="badge ok">${icon('check')} latest</span>`}</div></div>`);
     const onVer = (v) => agents.filter((a) => a.core_version === v).length;
-    setHTML($('#r-agents'), html`<div class="panel panel-pad"><h2>Agent versions <span class="muted small">— last ${repo.core.length || 0} kept on the master</span></h2>
+    setHTML($('#r-agents'), html`<div class="panel panel-pad"><h2>Agent versions <span class="muted small">â€” last ${repo.core.length || 0} kept on the master</span></h2>
       ${repo.core.length ? html`<table class="tbl"><thead><tr><th>Version</th><th>Published</th><th>Platforms</th><th>Devices</th></tr></thead>
         <tbody>${repo.core.map((v, i) => html`<tr><td><span class="verpill ${i === 0 ? 'ok' : 'old'}">${v.version}</span> ${i === 0 ? html`<span class="badge ok">latest</span>` : ''}</td>
           <td class="muted">${fmtDate(published.get(v.version))}</td><td>${v.platforms.map((p) => html`<span class="tag mono">${p}</span> `)}</td><td class="muted">${onVer(v.version)}</td></tr>`)}</tbody></table>`
@@ -2486,7 +2486,7 @@ function Releases() {
         <div class="dim small" style="margin-top:4px">CVE lookups at OSV.dev and severity lookups at NVD that run now or are waiting.</div></div>
         ${Q.items.length ? html`<div class="tbl-wrap" data-keep-scroll="vq"><table class="tbl"><thead><tr><th>Lookup</th><th>Where</th><th>Status</th></tr></thead>
           <tbody>${Q.items.map((i) => html`<tr><td class="mono small">${i.what}</td><td><span class="tag">${i.where}</span></td><td class="small ${i.status === 'now' ? '' : 'muted'}">${status(i)}</td></tr>`)}</tbody></table></div>
-          ${Q.more ? html`<div class="dim small panel-pad" style="padding-top:8px">…and ${Q.more} more.</div>` : ''}`
+          ${Q.more ? html`<div class="dim small panel-pad" style="padding-top:8px">â€¦and ${Q.more} more.</div>` : ''}`
         : html`<div class="muted panel-pad" style="padding-top:0">Nothing outstanding: all lookups are done.</div>`}</div>`);
   }
   return {
@@ -2506,14 +2506,14 @@ function Releases() {
         const m = st.rel.master;
         if (!(await confirmBox(`Update the master to ${m.latest}?`, 'The signed binary is verified by a root service, installed, and the master restarts. The page reconnects after a few seconds.', { okText: 'Update master' }))) return;
         await POST('master/update');
-        toast('Master update requested — restarting shortly', 'ok');
+        toast('Master update requested â€” restarting shortly', 'ok');
       },
       set: async (f) => {
         const a = st.data.agents.find((x) => x.id === f.dataset.id);
         const v = f.v.value, cur = a.core_version;
         if (v === cur) return toast(`${a.name} already runs agent ${v}`);
         const down = versionLess(v, cur);
-        if (!(await confirmBox(`${down ? 'Downgrade' : 'Upgrade'} the agent on ${a.name}?`, `${cur} → ${v}. The agent downloads the signed binary, verifies it and restarts.`, { okText: down ? 'Downgrade' : 'Upgrade' }))) return;
+        if (!(await confirmBox(`${down ? 'Downgrade' : 'Upgrade'} the agent on ${a.name}?`, `${cur} â†’ ${v}. The agent downloads the signed binary, verifies it and restarts.`, { okText: down ? 'Downgrade' : 'Upgrade' }))) return;
         await setAgentVersion(a, v);
       },
       'group-latest': async (t) => {
@@ -2536,7 +2536,7 @@ function Releases() {
         }
         const n = (k) => `${k} device${k === 1 ? '' : 's'}`;
         if (!bad.length) toast(`Update to ${l} requested for ${n(ok.length)}`, 'ok');
-        else toast(`Update to ${l} requested for ${ok.length} of ${n(list.length)}${ok.length ? ` (${ok.join(', ')})` : ''}.\nFailed:\n${bad.map((b) => '• ' + b).join('\n')}`, 'err', true);
+        else toast(`Update to ${l} requested for ${ok.length} of ${n(list.length)}${ok.length ? ` (${ok.join(', ')})` : ''}.\nFailed:\n${bad.map((b) => 'â€¢ ' + b).join('\n')}`, 'err', true);
         view.refresh();
       },
     },
@@ -2590,7 +2590,7 @@ function Audit() {
 
 function settingsHead(sub, title, desc) {
   return html`${settingsTabs(sub)}<div class="page-head"><div><h1>${title}</h1><div class="sub">${desc}</div></div></div>
-    ${session.initial_password && sub !== 'account' ? html`<div class="notice">You are still using the generated initial password — <a href="#/settings/account">change it under My Account</a>.</div>` : ''}`;
+    ${session.initial_password && sub !== 'account' ? html`<div class="notice">You are still using the generated initial password â€” <a href="#/settings/account">change it under My Account</a>.</div>` : ''}`;
 }
 
 function SettingsLocal() {
@@ -2606,9 +2606,9 @@ function SettingsLocal() {
           <div class="muted small">The ping shows whether an agentless device is up. These values apply to all ${d.devices} agentless device${d.devices === 1 ? '' : 's'}, unless ping is turned off for a device. Services have their own settings, on each device's Services tab.</div>
           <form class="form" data-submit="save"><fieldset class="plain" ${canChange() ? '' : 'disabled'}>
             <label class="field">Ping every (seconds)<input type="number" name="interval" min="${L.interval_min}" max="${L.interval_max}" value="${s.interval_sec}" required></label>
-            <div class="dim small">${L.interval_min}–${L.interval_max} seconds. Default 60.</div>
+            <div class="dim small">${L.interval_min}â€“${L.interval_max} seconds. Default 60.</div>
             <label class="field">Wait for an answer (seconds)<input type="number" name="timeout" min="${L.timeout_min}" max="${L.timeout_max}" value="${s.timeout_sec}" required></label>
-            <div class="dim small">${L.timeout_min}–${L.timeout_max} seconds. Default 2.</div>
+            <div class="dim small">${L.timeout_min}â€“${L.timeout_max} seconds. Default 2.</div>
             <label class="field">Down after this many unanswered pings in a row<input type="number" name="down" min="${L.down_min}" max="${L.down_max}" value="${s.down_after}" required></label>
             <div class="dim small" id="lc-hint"></div>
             ${ifChange(html`<div><button class="btn primary">Save</button></div>`)}
@@ -2618,7 +2618,7 @@ function SettingsLocal() {
       const f = $('form[data-submit=save]', el);
       const hint = () => {
         const n = +f.down.value || 1, i = +f.interval.value || 0;
-        $('#lc-hint').textContent = `${L.down_min}–${L.down_max}. Default 3. A device is shown down after about ${dur(n * i)} without an answer, and up again at the first answer.`;
+        $('#lc-hint').textContent = `${L.down_min}â€“${L.down_max}. Default 3. A device is shown down after about ${dur(n * i)} without an answer, and up again at the first answer.`;
       };
       f.down.addEventListener('input', hint);
       f.interval.addEventListener('input', hint);
@@ -2653,7 +2653,7 @@ function SettingsGeneral() {
     if (!o) return;
     const host = (o.source || '').replace(/^https?:\/\//, '').split('/')[0];
     setHTML($('#osinfo-box'), html`<div class="dim small">End-of-support dates of Debian and Ubuntu, from Debian's distro-info-data (${host}).
-      ${o.fetched_at ? html`Last fetched ${fmtDate(o.fetched_at)}` : 'Not fetched yet'}${o.next_at ? html` · next check ${fmtDate(o.next_at)}` : ''}.
+      ${o.fetched_at ? html`Last fetched ${fmtDate(o.fetched_at)}` : 'Not fetched yet'}${o.next_at ? html` Â· next check ${fmtDate(o.next_at)}` : ''}.
       ${ifChange(html`<button type="button" class="btn ghost sm" data-act="osinfo-check" ${st.osChecking ? 'disabled' : ''}>${icon('refresh')} Check now</button>`)}</div>
       ${o.error ? html`<div class="notice red small" style="margin:6px 0 0">Last lookup failed (${fmtDate(o.last_try)}): ${o.error}. Retrying every 6 hours; the previous dates stay in use.</div>` : ''}`);
   }
@@ -2661,9 +2661,9 @@ function SettingsGeneral() {
     if (!v) return;
     const mins = Math.ceil((v.nvd_pending * (v.nvd_key_set ? 0.8 : 6.5)) / 60);
     setHTML($('#vuln-box'), html`<div class="dim small">The installed versions of the tracked applications are looked up at OSV.dev, which uses Debian's and Ubuntu's own security data.
-      Sent: the OS release (e.g. Debian:12) and source package names with their versions — no host names or addresses.
+      Sent: the OS release (e.g. Debian:12) and source package names with their versions â€” no host names or addresses.
       Severity comes from the OSV record, otherwise from NVD (only CVE numbers are sent there); CISA lists the actively exploited ones and FIRST (EPSS) the chance of exploitation.</div>
-      <div class="dim small" style="margin-top:6px">${v.last_run ? html`Last check ${fmtDate(v.last_run)}` : 'Not checked yet'}${v.next_at ? html` · next ${fmtDate(v.next_at)}` : ''} · ${v.cves} CVE${v.cves === 1 ? '' : 's'} known for ${v.systems} device${v.systems === 1 ? '' : 's'}${v.kev_count ? html` · CISA list: ${v.kev_count} exploited CVEs` : ''}.
+      <div class="dim small" style="margin-top:6px">${v.last_run ? html`Last check ${fmtDate(v.last_run)}` : 'Not checked yet'}${v.next_at ? html` Â· next ${fmtDate(v.next_at)}` : ''} Â· ${v.cves} CVE${v.cves === 1 ? '' : 's'} known for ${v.systems} device${v.systems === 1 ? '' : 's'}${v.kev_count ? html` Â· CISA list: ${v.kev_count} exploited CVEs` : ''}.
         ${v.nvd_pending ? html`${v.nvd_pending} severity lookup${v.nvd_pending === 1 ? '' : 's'} at NVD waiting (about ${mins} min).` : ''}
         ${ifChange(html`<button type="button" class="btn ghost sm" data-act="vuln-check" ${st.vulnChecking ? 'disabled' : ''}>${st.vulnChecking ? html`<span class="spin"></span>` : icon('refresh')} Check now</button>`)}</div>
       ${v.error ? html`<div class="notice red small" style="margin:6px 0 0">Last check failed (${fmtDate(v.last_try)}): ${v.error}. Retrying in 6 hours; the previous results stay in use.</div>` : ''}
@@ -2672,13 +2672,13 @@ function SettingsGeneral() {
         ? `${u.name} is no longer supported: no security data and no fixes are published, so it can't be checked. Upgrade to a supported release.`
         : `OSV.dev has no data for ${u.name}: devices on that release are not checked.`}</div>`)}
       <label class="field" style="margin-top:12px">NVD API key (optional)<div class="row">
-        <input type="password" name="nvdkey" autocomplete="off" style="flex:1" placeholder="${v.nvd_key_set ? 'set — enter a new key to replace it' : 'none'}">
+        <input type="password" name="nvdkey" autocomplete="off" style="flex:1" placeholder="${v.nvd_key_set ? 'set â€” enter a new key to replace it' : 'none'}">
         ${ifChange(html`<button type="button" class="btn sm" data-act="nvd-save">Save key</button>${v.nvd_key_set ? html`<button type="button" class="btn ghost sm" data-act="nvd-remove">Remove</button>` : ''}`)}</div></label>
       <div class="dim small">${v.nvd_key_set ? html`<span class="badge ok xs">key set</span> ` : ''}Without a key NVD allows about 10 lookups a minute; a free key from nvd.nist.gov makes them about 8 times faster.</div>`);
   }
   function meBox() {
     const m = st.me || {};
-    setHTML($('#tfa-me'), m.ip ? html`Your current address: <span class="mono">${m.ip}</span> – ${m.trusted ? html`<span class="badge ok xs">trusted</span>` : html`<span class="badge mute xs">not trusted</span>`}` : '');
+    setHTML($('#tfa-me'), m.ip ? html`Your current address: <span class="mono">${m.ip}</span> â€“ ${m.trusted ? html`<span class="badge ok xs">trusted</span>` : html`<span class="badge mute xs">not trusted</span>`}` : '');
   }
   function urlBox() {
     const d = st.d, auto = !st.url;
@@ -2733,7 +2733,7 @@ function SettingsGeneral() {
         <div class="panel panel-pad" style="flex:1 1 320px;max-width:520px;min-width:0">
           <form class="form" data-submit="save-more" style="margin-top:0"><fieldset class="plain" ${canChange() ? '' : 'disabled'}>
             <label class="checkrow"><input type="checkbox" name="proberesults" ${s.probe_results_shown ? 'checked' : ''}> Show received probe results on Remote Probes</label>
-            <div class="dim small">Activity › Remote Probes then also lists each batch of check results a remote probe sends, for 20 seconds, with the checks that failed. For all users.</div>
+            <div class="dim small">Activity â€º Remote Probes then also lists each batch of check results a remote probe sends, for 20 seconds, with the checks that failed. For all users.</div>
             <label class="field">Ask for the 2FA code<select name="tfamode">
               <option value="" ${s.tfa_mode !== 'untrusted' ? 'selected' : ''}>Always</option>
               <option value="untrusted" ${s.tfa_mode === 'untrusted' ? 'selected' : ''}>From untrusted networks</option></select></label>
@@ -2808,7 +2808,7 @@ function SettingsGeneral() {
         toast('Saved', 'ok');
       },
       'url-change': () => { st.editing = true; urlBox(); },
-      'url-auto': () => { st.url = ''; st.editing = false; urlBox(); toast('Automatic address — press Save to apply'); },
+      'url-auto': () => { st.url = ''; st.editing = false; urlBox(); toast('Automatic address â€” press Save to apply'); },
       save: async (f) => {
         const url = st.editing ? f.url.value.trim() : st.url;
         const res = await POST('settings', { check_interval_hours: +f.interval.value, heartbeat_sec: +f.hb.value, retention_days: +f.ret.value,
@@ -2842,7 +2842,7 @@ function SettingsUsers() {
           ${u.locked ? html` <span class="badge sec xs" title="Cannot sign in until an administrator unlocks the account">locked</span>` : ''}
           ${u.two_fa ? html` <span class="badge ok xs" title="Signs in with a code from an authenticator app${u.two_fa_since ? ' (since ' + fmtDate(u.two_fa_since) + ')' : ''}">2FA</span>` : ''}</td>
         <td>${u.id === me || u.permanent ? html`<span class="muted">${roleLabel(u.role)}</span>` : html`<select class="sm" data-change="role" data-id="${u.id}">${roleOpts(u.role)}</select>`}</td>
-        <td title="Created ${fmtDate(u.created)}">${u.last_login ? html`<div class="lastin">${fmtDate(u.last_login)}</div><div class="dim small mono">${u.last_ip || '—'}</div>` : html`<span class="dim">never</span>`}</td>
+        <td title="Created ${fmtDate(u.created)}">${u.last_login ? html`<div class="lastin">${fmtDate(u.last_login)}</div><div class="dim small mono">${u.last_ip || 'â€”'}</div>` : html`<span class="dim">never</span>`}</td>
         <td class="w1"><div class="row" style="flex-wrap:nowrap">${u.id === me ? html`<a class="btn ghost sm" href="#/settings/account">My Account</a>`
           : html`${u.locked ? html`<button class="btn primary sm" data-act="unlock" data-id="${u.id}">Unlock</button>` : html`<button class="btn warn sm" data-act="lock" data-id="${u.id}">Lock</button>`}
             ${u.two_fa ? html`<button class="btn warn sm" data-act="tfa-off" data-id="${u.id}">Turn off 2FA</button>` : ''}
@@ -2925,7 +2925,7 @@ function SettingsUsers() {
 function SettingsBackups() {
   const st = { d: null };
   const slotName = (n) => (n ? `Slot ${n}` : 'Before restore');
-  const made = (b) => html`${fmtDate(b.created)} <span class="dim small">· master ${b.version} · ${bytes(b.size)}</span>`;
+  const made = (b) => html`${fmtDate(b.created)} <span class="dim small">Â· master ${b.version} Â· ${bytes(b.size)}</span>`;
   function render() {
     const d = st.d;
     if (!d) return;
@@ -2937,7 +2937,7 @@ function SettingsBackups() {
         <table class="tbl" style="margin-top:12px"><tbody>
           ${rows.map(([n, b]) => html`<tr><td class="w1"><b>${slotName(n)}</b></td><td>${b ? made(b) : html`<span class="dim">empty</span>`}</td>
             <td class="w1">${b ? html`<button class="btn danger sm" data-act="del" data-slot="${n}">${icon('trash')} Delete</button>` : ''}</td></tr>`)}
-          ${d.before ? html`<tr><td class="w1"><b>Before restore</b></td><td>${made(d.before)} <span class="dim small">· made automatically before the last restore</span></td>
+          ${d.before ? html`<tr><td class="w1"><b>Before restore</b></td><td>${made(d.before)} <span class="dim small">Â· made automatically before the last restore</span></td>
             <td class="w1"><button class="btn danger sm" data-act="del" data-slot="0">${icon('trash')} Delete</button></td></tr>` : ''}
         </tbody></table>
         <div class="row" style="margin-top:14px">
@@ -2952,11 +2952,11 @@ function SettingsBackups() {
       <div class="panel panel-pad"><h2>Restore</h2>
         <div class="muted small">Replaces all Coremon data with a backup. The backup is checked first; nothing changes until you confirm. The current data is kept as the before-restore backup.</div>
         ${sources.length ? html`<table class="tbl" style="margin-top:12px"><tbody>${sources.map(([n, b]) => html`<tr><td class="w1"><b>${slotName(n)}</b></td><td>${made(b)}</td>
-          <td class="w1"><button class="btn warn sm" data-act="check" data-slot="${n}">Restore…</button></td></tr>`)}</tbody></table>` : html`<div class="dim small" style="margin-top:10px">No local backups yet.</div>`}
+          <td class="w1"><button class="btn warn sm" data-act="check" data-slot="${n}">Restoreâ€¦</button></td></tr>`)}</tbody></table>` : html`<div class="dim small" style="margin-top:10px">No local backups yet.</div>`}
         <form class="row" data-submit="check-file" style="margin-top:16px;align-items:flex-end">
           <label class="field">Restore from a downloaded file<input type="file" name="file" accept=".cmbak" required></label>
           <label class="field">Encryption password<input type="password" name="pw" autocomplete="off" required style="width:200px"></label>
-          <button class="btn warn">Check file…</button>
+          <button class="btn warn">Check fileâ€¦</button>
         </form>
       </div>`);
   }
@@ -2972,7 +2972,7 @@ function SettingsBackups() {
         (the website is away for a few seconds), and you then sign in with the users and passwords <b>from the backup</b>.</div>`;
     if (!(await confirmBox('Restore this backup?', body, { okText: 'Restore', danger: true }))) return;
     await POST('backups/restore', { token: info.token });
-    openModal(html`<h3>Restoring…</h3><div class="row muted" style="margin-top:12px"><span class="spin"></span>The master is restarting with the restored data. This page signs you out when it is back.</div>`);
+    openModal(html`<h3>Restoringâ€¦</h3><div class="row muted" style="margin-top:12px"><span class="spin"></span>The master is restarting with the restored data. This page signs you out when it is back.</div>`);
     const t0 = Date.now();
     await new Promise((res) => setTimeout(res, 3000));
     while (Date.now() - t0 < 120000) {
@@ -3010,7 +3010,7 @@ function SettingsBackups() {
           <div class="muted small" style="margin-top:6px">The file is encrypted with the encryption password you choose here. It is needed to restore the backup and cannot be recovered. Use a long one.</div>
           <form class="form" data-submit="go">
             <label class="field">Code from your authenticator app<input type="text" name="code" inputmode="numeric" autocomplete="one-time-code" pattern="[0-9 ]{6,7}" maxlength="7" required style="max-width:160px"></label>
-            <label class="field">Encryption password (${min}–${max} characters)<input type="password" name="pw" autocomplete="new-password" minlength="${min}" maxlength="${max}" required></label>
+            <label class="field">Encryption password (${min}â€“${max} characters)<input type="password" name="pw" autocomplete="new-password" minlength="${min}" maxlength="${max}" required></label>
             <label class="field">Repeat the encryption password<input type="password" name="pw2" autocomplete="new-password" minlength="${min}" maxlength="${max}" required></label>
             <div class="actions"><button type="button" class="btn ghost" data-act="cancel">Cancel</button><button class="btn primary">${icon('download')} Create and download</button></div>
           </form>`, {
@@ -3068,7 +3068,7 @@ function SettingsAccount() {
         <form class="form" data-submit="tfa-disable">${codeField}<div style="margin-top:8px"><button class="btn danger">Turn off 2FA</button></div></form>`;
     } else if (st.enroll) {
       const key = st.enroll.secret.replace(/(.{4})/g, '$1 ').trim();
-      body = html`<div class="muted small">1. Scan this QR code with your authenticator app (Google or Microsoft Authenticator, 2FAS Auth, …).</div>
+      body = html`<div class="muted small">1. Scan this QR code with your authenticator app (Google or Microsoft Authenticator, 2FAS Auth, â€¦).</div>
         <div class="qrbox">${qrSVG(st.enroll.qr)}</div>
         <div class="muted small">Can't scan? Enter this key by hand (time-based, 6 digits):</div>
         <code class="tfakey">${key}</code>
@@ -3085,7 +3085,7 @@ function SettingsAccount() {
   return {
     mount(el) {
       el.innerHTML = r(html`${settingsHead('account', 'My Account', `Signed in as ${session.user?.name} (${roleLabel(session.user?.role)})`)}
-        ${session.initial_password ? html`<div class="notice">You are still using the generated initial password — please change it.</div>` : ''}
+        ${session.initial_password ? html`<div class="notice">You are still using the generated initial password â€” please change it.</div>` : ''}
         <div class="stack" style="max-width:480px">
         <div class="panel panel-pad previn"><span class="previn-ic">${icon('clock')}</span>
           <div><div class="previn-lbl">Previous sign-in</div>
@@ -3149,8 +3149,8 @@ function SettingsIdentity() {
   function slot(s) {
     if (s === 'current') return html`<span class="badge ok">${icon('check')} current</span>`;
     if (s === 'new') return html`<span class="badge info">${icon('check')} new</span>`;
-    if (s) return html`<span class="badge sec">✗ unknown</span>`;
-    return html`<span class="dim">—</span>`;
+    if (s) return html`<span class="badge sec">âœ— unknown</span>`;
+    return html`<span class="dim">â€”</span>`;
   }
   function status(a, d) {
     if (!a.reported_at) return html`<span class="dim">not reported yet</span>`;
@@ -3175,12 +3175,12 @@ function SettingsIdentity() {
             : html`<span class="muted small">Generate a new key if the current one may have leaked. Nothing changes until you switch.</span><span class="spacer"></span>
               <button class="btn" data-act="gen-key">${icon('plus')} Generate new key</button>`}
         </div>` : ''}
-        <div class="dim small" style="margin-top:12px">If this key is ever lost (for example a new master without a backup), agents stop connecting. Run a new install command from Settings → Devices on each device; it updates the stored key.</div>
+        <div class="dim small" style="margin-top:12px">If this key is ever lost (for example a new master without a backup), agents stop connecting. Run a new install command from Settings â†’ Devices on each device; it updates the stored key.</div>
       </div>
       <div class="panel panel-pad" style="margin-top:18px"><h2>Website certificate (HTTPS)</h2>
         <div class="muted small">Carries the traffic; self-signed for now. Agents do not rely on it.</div>
         ${d.full ? html`<div class="keyrow"><span class="klbl">Fingerprint</span><code class="mono">sha256//${d.https}</code></div>` : ''}
-        <div class="keyrow"><span class="klbl">Valid</span><span>${fmtDate(d.cert_from)} – ${fmtDate(d.cert_until)}
+        <div class="keyrow"><span class="klbl">Valid</span><span>${fmtDate(d.cert_from)} â€“ ${fmtDate(d.cert_until)}
           ${d.cert_until - now() < d.cert_renew_days * 86400 ? html` <span class="badge upd xs">renewing soon</span>` : ''}</span></div>
         ${canChange() ? html`<div class="row" style="margin-top:14px"><span class="muted small">Renewed automatically ${d.cert_renew_days} days before it expires.</span><span class="spacer"></span>
           <button class="btn" data-act="new-cert">${icon('refresh')} Generate new certificate</button></div>` : ''}
@@ -3192,7 +3192,7 @@ function SettingsIdentity() {
         <td>${slot(a.slots[0])}</td>
         <td>${slot(a.slots[1])}</td>
         <td>${status(a, d)}</td>
-        <td class="muted small">${a.reported_at ? when(a.reported_at) : '—'}</td></tr>`)}</tbody></table></div>`
+        <td class="muted small">${a.reported_at ? when(a.reported_at) : 'â€”'}</td></tr>`)}</tbody></table></div>`
       : html`<div class="panel empty">No devices yet.</div>`);
   }
   async function act(action, body = {}) {
@@ -3205,20 +3205,20 @@ function SettingsIdentity() {
       el.innerHTML = r(html`${settingsHead('identity', 'Identity', 'How agents recognise this master')}
         <div class="stack" style="max-width:1000px"><div id="id-keys"></div>
           <div><h2 style="font-size:15px;margin:6px 0 12px">Keys per device</h2><div id="id-agents"></div></div>
-          <div class="dim small">Coremon v${session.version}${releasedLabel() ? ' · ' + releasedLabel() : ''}</div></div>`);
+          <div class="dim small">Coremon v${session.version}${releasedLabel() ? ' Â· ' + releasedLabel() : ''}</div></div>`);
     },
     async refresh() { st.d = await GET('identity'); render(); },
     acts: {
       'gen-key': async () => {
         if (!(await confirmBox('Generate a new master key?', 'The master keeps using the current key. The new key is sent to every device over its current, verified connection; you switch when they all have it.', { okText: 'Generate' }))) return;
-        await act('generate'); toast('New key generated — distributing to devices', 'ok');
+        await act('generate'); toast('New key generated â€” distributing to devices', 'ok');
       },
       'new-cert': async () => {
         if (!(await confirmBox('Generate a new HTTPS certificate?', html`The current certificate is replaced by a new self-signed one, valid for 1 year, and the old one is deleted. It is used immediately.
           <ul style="margin:10px 0 0 18px"><li>Every browser that accepted the old certificate shows the security warning once more (yours too, on the next page load).</li>
           <li>Agents and install commands are not affected.</li></ul>`, { okText: 'Generate new certificate' }))) return;
         await act('cert');
-        toast('New certificate in use — reload the page and accept it', 'ok');
+        toast('New certificate in use â€” reload the page and accept it', 'ok');
       },
       'cancel-key': async () => {
         if (!(await confirmBox('Cancel the new key?', 'The new key is discarded and devices remove it again. The current key stays in use.', { okText: 'Discard new key', danger: true }))) return;
@@ -3233,7 +3233,7 @@ function SettingsIdentity() {
         await new Promise((resolve) => {
           openModal(html`<h3>Not all devices have the new key</h3>
             <div class="notice red" style="margin:12px 0 0">These ${missing.length} device(s) have not reported the new key and will <b>lose contact</b> after the switch:
-              <ul>${missing.map((a) => html`<li><b>${a.name}</b> — ${a.online ? 'waiting for the new key' : 'offline'}</li>`)}</ul>
+              <ul>${missing.map((a) => html`<li><b>${a.name}</b> â€” ${a.online ? 'waiting for the new key' : 'offline'}</li>`)}</ul>
               They can be reconnected later with a new install command.</div>
             <div class="actions"><button class="btn primary" data-act="no" autofocus>Cancel</button><button class="btn danger" data-act="yes">Switch anyway</button></div>`, {
             acts: {

@@ -77,6 +77,10 @@ func (s *Server) handleMaintStart(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, a.Name+" is waiting for approval", http.StatusConflict)
 			return
 		}
+		if onMaster(a, s.ownIPs()) {
+			http.Error(w, a.Name+" is the master's own system: maintenance does not apply", http.StatusConflict)
+			return
+		}
 		a.Maint = m
 		// Automatic jobs still waiting are cancelled; the user's own stay.
 		for _, j := range s.st.st.Jobs {
