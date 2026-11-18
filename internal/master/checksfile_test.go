@@ -40,9 +40,9 @@ func TestReplanPings(t *testing.T) {
 	pub, _ := keys(t)
 	s := testServer(t, pub, "http://127.0.0.1:1/none", "0.3.0")
 	now := time.Unix(1_800_000_000, 0)
-	d := &LocalDevice{ID: "l_0123456789abcdef", Name: "printer", Address: "10.0.0.7", LastCheck: now.Unix() - 30,
-		Services: []*Service{{ID: "s_0123456789abcdef", Name: "IPP", Port: 631, Interval: 300, Retries: 3, Timeout: 5}}}
-	old := &LocalDevice{ID: "l_1123456789abcdef", Name: "old", Address: "10.0.0.8", LastCheck: now.Unix() - 600}
+	d := &LocalDevice{ID: "l_0123456789abcdef", Name: "printer", Checks: Checks{Address: "10.0.0.7", LastCheck: now.Unix() - 30,
+		Services: []*Service{{ID: "s_0123456789abcdef", Name: "IPP", Port: 631, Interval: 300, Retries: 3, Timeout: 5}}}}
+	old := &LocalDevice{ID: "l_1123456789abcdef", Name: "old", Checks: Checks{Address: "10.0.0.8", LastCheck: now.Unix() - 600}}
 	s.st.mu.Lock()
 	defer s.st.mu.Unlock()
 	s.st.st.Locals[d.ID], s.st.st.Locals[old.ID] = d, old
@@ -69,12 +69,12 @@ func TestReplanPings(t *testing.T) {
 func TestChecksFile(t *testing.T) {
 	pub, _ := keys(t)
 	s := testServer(t, pub, "http://127.0.0.1:1/none", "0.3.0")
-	d := &LocalDevice{ID: "l_0123456789abcdef", Name: "printer", Address: "10.0.0.7",
-		Services: []*Service{{ID: "s_0123456789abcdef", Name: "IPP", Port: 631, Interval: 300, Retries: 3, Timeout: 5}}}
+	d := &LocalDevice{ID: "l_0123456789abcdef", Name: "printer", Checks: Checks{Address: "10.0.0.7",
+		Services: []*Service{{ID: "s_0123456789abcdef", Name: "IPP", Port: 631, Interval: 300, Retries: 3, Timeout: 5}}}}
 	s.st.mu.Lock()
 	s.st.st.Locals[d.ID] = d
 	s.loc.mu.Lock()
-	s.record(d, 3*time.Millisecond, nil, time.Now())
+	s.record(&d.Checks, 3*time.Millisecond, nil, time.Now())
 	s.recordService(d.Services[0], probe.Outcome{RTT: time.Millisecond}, time.Now())
 	s.loc.mu.Unlock()
 	s.st.markDirty()

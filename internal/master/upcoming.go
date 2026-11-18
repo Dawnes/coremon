@@ -128,7 +128,7 @@ func (s *Server) nextChecks(now time.Time) []upcomingCheck {
 	s.loc.mu.Lock()
 	defer s.loc.mu.Unlock()
 	var out []upcomingCheck
-	for _, d := range s.st.st.Locals {
+	for _, d := range s.checkDevs() {
 		if d.Probe != "" || d.Maint != nil {
 			continue // checked by a remote probe on its own schedule, or in maintenance
 		}
@@ -146,7 +146,7 @@ func (s *Server) nextChecks(now time.Time) []upcomingCheck {
 			if !ok {
 				continue
 			}
-			detail := "TCP " + itoa(sv.Port)
+			detail := strings.ToUpper(sv.kind()) + " " + itoa(sv.Port)
 			if sv.Fails > 0 && !(sv.Checked && !sv.Up) {
 				detail += " · retry " + itoa(sv.Fails) + " of " + itoa(sv.Retries)
 			}

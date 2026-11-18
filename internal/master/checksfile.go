@@ -1,6 +1,7 @@
 package master
 
-// checks.dat: the results of the agentless checks (latest result and the
+// checks.dat: the results of the ping and service checks of agentless and
+// agent devices (latest result and the
 // 24-hour history of the ping and every service). They change with every
 // check, so they live apart from state.dat, which then only changes when
 // the configuration or an agent's data does. Written once a minute and at
@@ -45,12 +46,12 @@ type checksData struct {
 	Devices map[string]*devRun `json:"devices"`
 }
 
-func (d *LocalDevice) run() runFields {
+func (d *Checks) run() runFields {
 	return runFields{Checked: d.Checked, Up: d.Up, Since: d.Since, LastCheck: d.LastCheck, LastOK: d.LastUp,
 		RTTUs: d.RTTUs, Fails: d.Fails, LastError: d.LastError, Hist: d.Hist, RTT: d.RTT}
 }
 
-func (d *LocalDevice) setRun(r runFields) {
+func (d *Checks) setRun(r runFields) {
 	d.Checked, d.Up, d.Since, d.LastCheck, d.LastUp, d.RTTUs, d.Fails, d.LastError, d.Hist, d.RTT =
 		r.Checked, r.Up, r.Since, r.LastCheck, r.LastOK, r.RTTUs, r.Fails, r.LastError, r.Hist, r.RTT
 }
@@ -73,12 +74,12 @@ func (s *Server) markChecks() { s.checksDirty = true }
 // checksJSON: the current results. Caller holds s.st.mu.
 func (s *Server) checksJSON() ([]byte, error) {
 	cd := checksData{Saved: time.Now().Unix(), Devices: map[string]*devRun{}}
-	for id, d := range s.st.st.Locals {
+	for _, d := range s.checkDevs() {
 		dr := &devRun{Ping: d.run(), Services: map[string]runFields{}}
 		for _, sv := range d.Services {
 			dr.Services[sv.ID] = sv.run()
 		}
-		cd.Devices[id] = dr
+		cd.Devices[d.ID] = dr
 	}
 	return json.Marshal(&cd)
 }
@@ -104,7 +105,7 @@ func (s *Server) loadChecks() {
 	s.st.mu.Lock()
 	defer s.st.mu.Unlock()
 	for id, dr := range cd.Devices {
-		d := s.st.st.Locals[id]
+		d := s.checkDevByID(id)
 		if d == nil || dr == nil {
 			continue
 		}

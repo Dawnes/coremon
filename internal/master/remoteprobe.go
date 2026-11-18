@@ -19,7 +19,6 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
-	"sort"
 	"time"
 
 	"coremon/internal/proto"
@@ -47,13 +46,12 @@ func (s *Server) probeName(id string) string {
 // holds s.st.mu.
 func (s *Server) probeList(agentID string) proto.ProbeList {
 	ls := s.st.st.Local
-	var devs []*LocalDevice
-	for _, d := range s.st.st.Locals {
+	var devs []*checkDev
+	for _, d := range s.checkDevs() { // sorted by ID
 		if d.Probe == agentID && d.Maint == nil { // in maintenance: not checked
 			devs = append(devs, d)
 		}
 	}
-	sort.Slice(devs, func(i, j int) bool { return devs[i].ID < devs[j].ID })
 	l := proto.ProbeList{Checks: []proto.ProbeCheck{}}
 	for _, d := range devs {
 		if d.pinging() {
@@ -79,7 +77,7 @@ func (s *Server) probeList(agentID string) proto.ProbeList {
 // probeLoad: the checks that run on agentID. Caller holds s.st.mu.
 func (s *Server) probeLoad(agentID string) int {
 	n := 0
-	for _, d := range s.st.st.Locals {
+	for _, d := range s.checkDevs() {
 		if d.Probe == agentID {
 			n += d.activeChecks()
 		}
@@ -112,7 +110,7 @@ func (s *Server) probeAllowed(agentID string, extra int, local map[string]bool) 
 
 // probeRoom: one more check on d (a service added or resumed, the ping
 // added or resumed) fits on its probe. Caller holds s.st.mu.
-func (s *Server) probeRoom(d *LocalDevice) error {
+func (s *Server) probeRoom(d *Checks) error {
 	if d.Probe == "" {
 		return nil
 	}
@@ -135,10 +133,10 @@ func (s *Server) probeIntake(a *Agent, rep *proto.ProbeReport, now time.Time) {
 	if len(rep.Results) == 0 {
 		return
 	}
-	pings := map[string]*LocalDevice{}
+	pings := map[string]*checkDev{}
 	svcs := map[string]*Service{}
 	svcDev := map[string]string{} // service ID -> device name
-	for _, d := range s.st.st.Locals {
+	for _, d := range s.checkDevs() {
 		if d.Probe != a.ID || d.Maint != nil {
 			continue // late results for a device in maintenance are dropped
 		}
@@ -191,7 +189,7 @@ func (s *Server) probeIntake(a *Agent, rep *proto.ProbeReport, now time.Time) {
 				dl.add(d.Name+" · Ping", false, "the probe cannot send pings")
 				continue
 			}
-			s.record(d, rtt, cerr, at)
+			s.record(d.Checks, rtt, cerr, at)
 			dl.add(d.Name+" · Ping", r.OK, outcome(r.OK, "up", rtt, cerr))
 		} else if sv := svcs[r.ID]; sv != nil {
 			if sv.Paused || t <= sv.LastCheck {
@@ -268,7 +266,7 @@ type localProbeView struct {
 	Note  string `json:"note,omitempty"`
 }
 
-func (s *Server) localProbe(d *LocalDevice, now int64) *localProbeView {
+func (s *Server) localProbe(d *Checks, now int64) *localProbeView {
 	if d.Probe == "" {
 		return nil
 	}
@@ -306,7 +304,7 @@ func (s *Server) agentProbe(a *Agent, local map[string]bool) *agentProbeView {
 		return nil
 	}
 	v := &agentProbeView{On: a.ProbeOn, Max: maxProbeChecks, Running: a.ProbeVer, Want: s.probeWanted(a.ID), Cleared: a.ProbeHold != nil, ConfirmedAt: a.ProbeAt}
-	for _, d := range s.st.st.Locals {
+	for _, d := range s.checkDevs() {
 		if d.Probe == a.ID {
 			v.Devices++
 			v.Checks += d.activeChecks()
@@ -373,13 +371,13 @@ func (s *Server) handleProbeEnabled(w http.ResponseWriter, r *http.Request) {
 	}
 	if !req.On {
 		n := 0
-		for _, d := range s.st.st.Locals {
+		for _, d := range s.checkDevs() {
 			if d.Probe == a.ID {
 				n++
 			}
 		}
 		if n > 0 {
-			http.Error(w, fmt.Sprintf("%s still checks %s: remove those checks first", a.Name, plural(n, "agentless device")), http.StatusConflict)
+			http.Error(w, fmt.Sprintf("%s still checks %s: choose another checker for them first", a.Name, plural(n, "device")), http.StatusConflict)
 			return
 		}
 	}

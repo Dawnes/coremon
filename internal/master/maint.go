@@ -4,8 +4,9 @@ package master
 // checked or started automatically and no failures are shown.
 //   - Agent: no automatic jobs (queued ones are cancelled); what it still
 //     reports is stored. Manual actions stay possible, but only while the
-//     agent is connected (they are not queued for later). An agent that is
-//     a remote probe keeps checking its devices.
+//     agent is connected (they are not queued for later). Its own services
+//     (Services tab) are not checked. An agent that is a remote probe keeps
+//     checking the other devices it checks.
 //   - Agentless: the ping and all services stop; a remote probe drops the
 //     device's checks (its list is sent right away). At the end everything
 //     is checked straight away and the probe gets its list back.
@@ -91,6 +92,7 @@ func (s *Server) handleMaintStart(w http.ResponseWriter, r *http.Request) {
 		}
 		s.st.markDirty()
 		s.audit.writeAgent(actor(r), clientIP(r), "device.maintenance_started", a, detail)
+		s.probeSyncAll(now) // a probe drops the device's service checks
 		writeJSON(w, map[string]any{"maint": a.Maint})
 	case s.st.st.Locals[id] != nil:
 		d := s.st.st.Locals[id]
@@ -125,6 +127,7 @@ func (s *Server) endMaint(id, who, ip, detail string, now time.Time) {
 		a.Maint = nil
 		s.st.markDirty()
 		s.audit.writeAgent(who, ip, "device.maintenance_ended", a, detail)
+		s.checksNow(s.checkDevByID(id), now)
 		return
 	}
 	d := s.st.st.Locals[id]
@@ -133,7 +136,14 @@ func (s *Server) endMaint(id, who, ip, detail string, now time.Time) {
 	}
 	d.Maint = nil
 	s.st.markDirty()
-	if d.Probe == "" {
+	s.audit.add(auditEntry{Actor: who, IP: ip, Action: "device.maintenance_ended", Agent: d.ID, Target: d.Name, Detail: detail})
+	s.checksNow(s.checkDevByID(id), now)
+}
+
+// checksNow: after maintenance every check of the device runs straight
+// away, and a probe gets the device's checks back. Caller holds s.st.mu.
+func (s *Server) checksNow(d *checkDev, now time.Time) {
+	if d != nil && d.Probe == "" {
 		s.loc.mu.Lock()
 		if d.pinging() {
 			s.loc.next[d.ID] = now
@@ -143,8 +153,7 @@ func (s *Server) endMaint(id, who, ip, detail string, now time.Time) {
 		}
 		s.loc.mu.Unlock()
 	}
-	s.audit.add(auditEntry{Actor: who, IP: ip, Action: "device.maintenance_ended", Agent: d.ID, Target: d.Name, Detail: detail})
-	s.probeSyncAll(now) // the probe gets the device's checks back
+	s.probeSyncAll(now)
 }
 
 // maintExpire ends maintenance whose time is up. Caller holds s.st.mu.

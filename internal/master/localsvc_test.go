@@ -172,7 +172,7 @@ func TestServices(t *testing.T) {
 	}
 	s.st.mu.Lock()
 	s.loc.mu.Lock()
-	due := s.dueServices(time.Now().Add(time.Hour))
+	due := s.dueServices(s.checkDevs(), time.Now().Add(time.Hour))
 	s.loc.mu.Unlock()
 	s.st.mu.Unlock()
 	if len(due) != 0 {

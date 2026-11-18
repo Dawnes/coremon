@@ -224,7 +224,7 @@ func (s *Server) overdueChecks(now int64, local map[string]bool) []probeRequest 
 	var out []probeRequest
 	hb := int64(s.heartbeat())
 	ls := s.st.st.Local
-	for _, d := range s.st.st.Locals {
+	for _, d := range s.checkDevs() {
 		a := s.st.st.Agents[d.Probe]
 		if d.Probe == "" || d.Maint != nil || a == nil || onMaster(a, local) || !s.online(a, now) || a.ProbeHold != nil ||
 			a.ProbeVer == "" || a.ProbeVer != s.probeWanted(a.ID) {

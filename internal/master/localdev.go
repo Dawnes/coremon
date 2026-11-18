@@ -24,23 +24,9 @@ type LocalDevice struct {
 	Name    string `json:"name"`
 	GroupID string `json:"group_id"`
 	Order   int    `json:"order"`
-	Address string `json:"address"`
 	AddedAt int64  `json:"added_at"`
-	// The ping's results: kept in checks.dat, not in state.dat.
-	Checked   bool       `json:"-"` // up or down has been decided
-	Up        bool       `json:"-"`
-	Since     int64      `json:"-"` // when it went up or down
-	LastCheck int64      `json:"-"`
-	LastUp    int64      `json:"-"` // last answered ping
-	RTTUs     int64      `json:"-"`
-	Fails     int        `json:"-"` // unanswered pings in a row
-	LastError string     `json:"-"`
-	Hist      []histSlot `json:"-"`
-	RTT       []rttSlot  `json:"-"`
-	PingMode  string     `json:"ping_mode,omitempty"` // "" pinged, "paused" or "removed"
-	Services  []*Service `json:"services,omitempty"`
-	// Probe: the agent that checks this device ("Checked by"); "" = the master.
-	Probe string `json:"probe,omitempty"`
+	// The address, ping, services and "Checked by" (same JSON fields as before).
+	Checks
 	// Maint: in maintenance; nothing is checked.
 	Maint *Maintenance `json:"maint,omitempty"`
 }
@@ -49,26 +35,6 @@ const (
 	pingPaused  = "paused"
 	pingRemoved = "removed"
 )
-
-func (d *LocalDevice) pinging() bool { return d.PingMode == "" }
-
-// activeChecks: the checks that run (the ping and the services not paused).
-func (d *LocalDevice) activeChecks() int {
-	n := 0
-	if d.pinging() {
-		n++
-	}
-	for _, sv := range d.Services {
-		if !sv.Paused {
-			n++
-		}
-	}
-	return n
-}
-
-func (d *LocalDevice) resetPing() {
-	d.Checked, d.Up, d.Since, d.LastCheck, d.LastUp, d.RTTUs, d.Fails, d.LastError, d.Hist, d.RTT = false, false, 0, 0, 0, 0, 0, "", nil, nil
-}
 
 // rttSlot: the round-trip times of the pings in five minutes, for the graph.
 // Times in microseconds; F counts the unanswered pings.
@@ -277,6 +243,12 @@ func (s *Server) ipOwner(ip, except, probe string) (id, name string) {
 			return d.ID, d.Name
 		}
 	}
+	// The address an agent device's services are checked on.
+	for _, a := range s.st.st.Agents {
+		if a.ID != except && agentHasChecks(a) && a.Checks.Address == ip && a.Checks.Probe == probe {
+			return a.ID, a.Name
+		}
+	}
 	return "", ""
 }
 
@@ -373,6 +345,19 @@ type pingView struct {
 }
 
 func (s *Server) localDeviceView(d *LocalDevice, full bool) agentView {
+	lv := s.checksView(&d.Checks, full)
+	v := agentView{
+		ID: d.ID, Name: d.Name, GroupID: d.GroupID, Order: d.Order, Status: StatusActive, Monitor: "local",
+		Online: lv.Checked && lv.Up, LastSeen: lv.LastUp, EnrolledAt: d.AddedAt, Features: []string{}, Maint: d.Maint,
+	}
+	v.Facts.IPs = []string{d.Address}
+	v.Local = lv
+	v.Conflicts = s.localConflicts(d)
+	return v
+}
+
+// checksView: the ping and services of a device as the website shows them.
+func (s *Server) checksView(d *Checks, full bool) *localView {
 	now := time.Now().Unix()
 	mode := d.PingMode
 	if mode == "" {
@@ -427,14 +412,7 @@ func (s *Server) localDeviceView(d *LocalDevice, full bool) agentView {
 	if full {
 		lv.Services = svcs
 	}
-	v := agentView{
-		ID: d.ID, Name: d.Name, GroupID: d.GroupID, Order: d.Order, Status: StatusActive, Monitor: "local",
-		Online: lv.Checked && lv.Up, LastSeen: lv.LastUp, EnrolledAt: d.AddedAt, Features: []string{}, Maint: d.Maint,
-	}
-	v.Facts.IPs = []string{d.Address}
-	v.Local = lv
-	v.Conflicts = s.localConflicts(d)
-	return v
+	return lv
 }
 
 // servicesStatus: with ping off, the device is up while at least one
@@ -508,7 +486,7 @@ func (s *Server) sortViews(out []agentView) {
 // ---- results ----
 
 // record stores one ping result. Caller holds s.st.mu.
-func (s *Server) record(d *LocalDevice, rtt time.Duration, err error, now time.Time) {
+func (s *Server) record(d *Checks, rtt time.Duration, err error, now time.Time) {
 	ls := s.st.st.Local
 	t := now.Unix()
 	d.LastCheck = t
@@ -580,7 +558,7 @@ func recentHist(hist []histSlot, now int64) ([]histSlot, float64) {
 // pingOne pings a device and records the result. Without the lock held.
 func (s *Server) pingOne(id string) {
 	s.st.mu.Lock()
-	d := s.st.st.Locals[id]
+	d := s.checkDevByID(id)
 	if d == nil {
 		s.st.mu.Unlock()
 		return
@@ -606,13 +584,13 @@ func (s *Server) pingOne(id string) {
 	}
 	s.loc.mu.Unlock()
 	s.st.mu.Lock()
-	if d := s.st.st.Locals[id]; d != nil && d.Address == addr {
+	if d := s.checkDevByID(id); d != nil && d.Address == addr {
 		if se != nil {
 			// The master's own problem, not the device's: no result.
 			d.LastCheck, d.LastError = time.Now().Unix(), se.Error()
 			s.markChecks()
 		} else {
-			s.record(d, rtt, err, time.Now())
+			s.record(d.Checks, rtt, err, time.Now())
 		}
 	}
 	s.st.mu.Unlock()
@@ -629,11 +607,15 @@ func (s *Server) localLoop(stop <-chan struct{}) {
 		interval := time.Duration(s.st.st.Local.IntervalSec) * time.Second
 		var due []string
 		s.loc.mu.Lock()
-		dueSvc := s.dueServices(now)
-		for id, d := range s.st.st.Locals {
+		devs := s.checkDevs()
+		dueSvc := s.dueServices(devs, now)
+		pinged := map[string]bool{}
+		for _, d := range devs {
 			if !d.pinging() || d.Probe != "" || d.Maint != nil {
 				continue
 			}
+			id := d.ID
+			pinged[id] = true
 			next, seen := s.loc.next[id]
 			if !seen {
 				// First check soon, spread a little so not all start at once.
@@ -647,7 +629,7 @@ func (s *Server) localLoop(stop <-chan struct{}) {
 			}
 		}
 		for id := range s.loc.next {
-			if d := s.st.st.Locals[id]; strings.HasPrefix(id, "l_") && (d == nil || !d.pinging() || d.Probe != "" || d.Maint != nil) {
+			if !strings.HasPrefix(id, "s_") && !pinged[id] {
 				delete(s.loc.next, id)
 			}
 		}
@@ -695,7 +677,12 @@ func (s *Server) localOr404(w http.ResponseWriter, r *http.Request) *LocalDevice
 // change may change a probe agent's check list: it is sent right away.
 // Caller holds s.st.mu.
 func (s *Server) writeLocalAudit(r *http.Request, action string, d *LocalDevice, detail string) {
-	s.audit.add(auditEntry{Actor: actor(r), IP: clientIP(r), Action: action, Agent: d.ID, Target: d.Name, Detail: detail})
+	s.writeDevAudit(r, action, d.ID, d.Name, detail)
+}
+
+// writeDevAudit: the same for any device with checks. Caller holds s.st.mu.
+func (s *Server) writeDevAudit(r *http.Request, action, id, name, detail string) {
+	s.audit.add(auditEntry{Actor: actor(r), IP: clientIP(r), Action: action, Agent: id, Target: name, Detail: detail})
 	s.probeSyncAll(time.Now())
 }
 
@@ -745,7 +732,7 @@ func (s *Server) handleLocalCreate(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "group not found", http.StatusBadRequest)
 		return
 	}
-	d := &LocalDevice{ID: "l_" + randHex(8), Name: name, Address: ip, GroupID: req.GroupID, AddedAt: time.Now().Unix()}
+	d := &LocalDevice{ID: "l_" + randHex(8), Name: name, Checks: Checks{Address: ip}, GroupID: req.GroupID, AddedAt: time.Now().Unix()}
 	if req.Probe != "" {
 		if err := s.probeAllowed(req.Probe, 1, s.ownIPs()); err != nil {
 			http.Error(w, err.Error(), http.StatusConflict)
@@ -872,7 +859,7 @@ func (s *Server) handleLocalDelete(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleLocalPing(w http.ResponseWriter, r *http.Request) {
 	s.st.mu.Lock()
-	d := s.localOr404(w, r)
+	d := s.checkDevOr404(w, r, false)
 	if d == nil {
 		s.st.mu.Unlock()
 		return
@@ -901,12 +888,12 @@ func (s *Server) handleLocalPing(w http.ResponseWriter, r *http.Request) {
 	s.loc.mu.Unlock()
 	s.st.mu.Lock()
 	defer s.st.mu.Unlock()
-	d = s.st.st.Locals[id]
+	d = s.checkDevByID(id)
 	if d == nil {
 		http.Error(w, "device not found", http.StatusNotFound)
 		return
 	}
-	writeJSON(w, s.localDeviceView(d, true))
+	writeJSON(w, s.devView(d, true))
 }
 
 // handlePingState pauses, resumes, removes or adds the ping of a device.
@@ -919,27 +906,31 @@ func (s *Server) handlePingState(w http.ResponseWriter, r *http.Request) {
 	}
 	s.st.mu.Lock()
 	defer s.st.mu.Unlock()
-	d := s.localOr404(w, r)
-	if d == nil {
-		return
-	}
 	want := map[string]string{"on": "", "paused": pingPaused, "removed": pingRemoved}
 	mode, ok := want[req.State]
 	if !ok {
 		http.Error(w, "state must be on, paused or removed", http.StatusBadRequest)
 		return
 	}
-	if mode == d.PingMode {
-		writeJSON(w, s.localDeviceView(d, true))
+	d := s.checkDevOr404(w, r, mode == "")
+	if d == nil {
 		return
 	}
-	if mode != "" && d.pinging() && d.activeChecks() <= 1 {
+	if mode == d.PingMode {
+		writeJSON(w, s.devView(d, true))
+		return
+	}
+	if mode != "" && d.pinging() && d.activeChecks() <= d.minChecks() {
 		http.Error(w, noCheckMsg, http.StatusConflict)
 		return
 	}
 	if mode == "" {
-		if err := s.probeRoom(d); err != nil {
+		if err := s.probeRoom(d.Checks); err != nil {
 			http.Error(w, err.Error(), http.StatusConflict)
+			return
+		}
+		if code, err := s.attach(d); err != nil {
+			http.Error(w, err.Error(), code)
 			return
 		}
 	}
@@ -957,10 +948,11 @@ func (s *Server) handlePingState(w http.ResponseWriter, r *http.Request) {
 	s.loc.mu.Lock()
 	delete(s.loc.next, d.ID)
 	s.loc.mu.Unlock()
+	s.tidy(d)
 	s.st.markDirty()
 	s.markChecks()
-	s.writeLocalAudit(r, action, d, "")
-	writeJSON(w, s.localDeviceView(d, true))
+	s.writeDevAudit(r, action, d.ID, d.Name, "")
+	writeJSON(w, s.devView(d, true))
 }
 
 func (s *Server) localStatus() map[string]any {
@@ -985,7 +977,8 @@ func (s *Server) replanPings(intervalSec int, now time.Time) {
 	iv := time.Duration(intervalSec) * time.Second
 	s.loc.mu.Lock()
 	defer s.loc.mu.Unlock()
-	for id, d := range s.st.st.Locals {
+	for _, d := range s.checkDevs() {
+		id := d.ID
 		next, ok := s.loc.next[id]
 		if !ok || !d.pinging() {
 			continue

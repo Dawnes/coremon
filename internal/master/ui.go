@@ -62,7 +62,9 @@ type agentView struct {
 	Monitor      string                     `json:"monitor"` // "agent" or "local"
 	Local        *localView                 `json:"local,omitempty"`
 	Conflicts    []ipConflict               `json:"ip_conflicts,omitempty"`
-	Probe        *agentProbeView            `json:"probe,omitempty"` // the agent checks agentless devices
+	Probe        *agentProbeView            `json:"probe,omitempty"`       // the agent checks agentless devices
+	Checks       *localView                 `json:"checks,omitempty"`      // agent device: its services, checked from outside
+	CheckAddrs   []string                   `json:"check_addrs,omitempty"` // agent device page: addresses its checks can use
 }
 
 func (s *Server) view(a *Agent, full bool) agentView {
@@ -104,6 +106,10 @@ func (s *Server) view(a *Agent, full bool) agentView {
 	v.Vulns = s.vulnsFor(a, full)
 	if full {
 		v.Probe = s.agentProbe(a, own)
+		v.CheckAddrs = agentAddresses(a)
+	}
+	if agentHasChecks(a) {
+		v.Checks = s.checksView(a.Checks, full)
 	}
 	if s.belowMin(a) {
 		v.BelowMin, v.MinAgent = true, s.minAgent()
@@ -185,10 +191,12 @@ func (s *Server) jobsFiltered(agentID, actor string, limit int, activeOnly bool)
 func (s *Server) handleAgentGet(w http.ResponseWriter, r *http.Request) {
 	s.st.mu.Lock()
 	defer s.st.mu.Unlock()
+	svcLimits := map[string]int{"interval_min": minSvcInterval, "interval_max": maxSvcInterval, "interval": defaultSvcInterval,
+		"retries_max": maxSvcRetries, "retries": defaultSvcRetries, "timeout_min": minSvcTimeout, "timeout_max": maxSvcTimeout, "timeout": defaultSvcTimeout,
+		"ping_interval": s.st.st.Local.IntervalSec, "ping_down_after": s.st.st.Local.DownAfter}
 	if d := s.st.st.Locals[r.PathValue("id")]; d != nil {
 		writeJSON(w, map[string]any{"agent": s.localDeviceView(d, true), "jobs": []*Job{}, "repo": s.repo.summary(), "groups": s.st.st.Groups,
-			"presets": svcPresets, "svc_methods": svcMethods, "svc_limits": map[string]int{"interval_min": minSvcInterval, "interval_max": maxSvcInterval, "interval": defaultSvcInterval,
-				"retries_max": maxSvcRetries, "retries": defaultSvcRetries, "timeout_min": minSvcTimeout, "timeout_max": maxSvcTimeout, "timeout": defaultSvcTimeout}})
+			"presets": svcPresets, "svc_methods": svcMethods, "svc_limits": svcLimits})
 		return
 	}
 	a := s.agentOr404(w, r)
@@ -196,7 +204,8 @@ func (s *Server) handleAgentGet(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, map[string]any{"agent": s.view(a, true), "jobs": s.jobsFor(a.ID, 50, false),
-		"repo": s.repo.summary(), "groups": s.st.st.Groups})
+		"repo": s.repo.summary(), "groups": s.st.st.Groups,
+		"presets": svcPresets, "svc_methods": svcMethods, "svc_limits": svcLimits})
 }
 
 var actionNameRe = regexp.MustCompile(`^[a-z][a-z0-9_]{0,31}$`)
@@ -355,6 +364,8 @@ func (s *Server) handleRemove(w http.ResponseWriter, r *http.Request) {
 	delete(s.st.st.Agents, a.ID)
 	delete(s.wakes, a.ID)
 	s.st.markDirty()
+	s.markChecks()
+	s.probeSyncAll(time.Now()) // a probe drops the device's service checks
 	s.kickVulns()
 	s.audit.writeAgent(actor(r), clientIP(r), "agent.removed", a, "")
 	writeJSON(w, map[string]any{"removed": true})

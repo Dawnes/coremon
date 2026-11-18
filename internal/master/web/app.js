@@ -530,6 +530,33 @@ const rttText = (us) => (us < 1000 ? '<1 ms' : us < 10000 ? (us / 1000).toFixed(
 // (offline, cleared, …): the device is then unknown, not down.
 const probeOut = (a) => (isLocal(a) && a.local.probe && a.local.probe.state !== 'ok' ? a.local.probe : null);
 const unknownText = (p) => `unknown – ${p.note}`;
+// The checks of a device (ping and services): an agentless device's own, or
+// those on an agent device's Services tab (null while it has none).
+const chk = (a) => (isLocal(a) ? a.local : a.checks || null);
+// Ping and services counted for the overview: [total, ok, down].
+function checkCounts(L) {
+  const P = L.ping_info, out = L.probe && L.probe.state !== 'ok';
+  let t = 0, ok = 0, down = 0;
+  if (L.ping && P) {
+    t++;
+    if (!out && P.checked && !P.up) down++;
+    else if (!out && P.checked && !P.fails) ok++;
+  }
+  return [t + L.svc_total, ok + (L.svc_ok || 0), down + L.svc_down];
+}
+// An agent device's own checks that are down (not in maintenance, with
+// results coming in), or null. Its status itself still comes from its agent.
+function agentChecksDown(a) {
+  const L = a.checks;
+  if (isLocal(a) || !L || a.maint || (L.probe && L.probe.state !== 'ok')) return null;
+  const ping = !!(L.ping && L.ping_info?.checked && !L.ping_info.up);
+  const n = L.svc_down + (ping ? 1 : 0);
+  return n ? { n, total: L.svc_total + (L.ping ? 1 : 0), L, ping } : null;
+}
+const checksDownText = (x) => `${x.n} of ${x.total} ${x.L.ping ? 'check' : 'service'}${x.total === 1 ? '' : 's'} down`;
+const checksDownShort = (x) => `${x.n} ${x.L.ping ? 'check' : 'service'}${x.n === 1 ? '' : 's'} down`;
+// What failed: the first service that is down and its step, or the ping.
+const checksFailText = (x) => (x.L.svc_fail ? `${x.L.svc_fail.name}${x.L.svc_fail.step && x.L.svc_fail.step !== 'connect' ? `: ${stepLabel(x.L.svc_fail.step).toLowerCase()}` : ''}` : x.ping ? 'ping: no answer' : '');
 function agentDot(a) {
   if (a.maint) return html`<span class="dot maint" title="${maintText(a.maint)}"></span>`;
   if (isLocal(a)) {
@@ -746,6 +773,8 @@ function Dashboard() {
     else if (!a.online) accent = 'a-off';
     else if (u?.security) accent = 'a-sec';
     else if (u?.total) accent = 'a-upd';
+    const cdown = agentChecksDown(a);
+    if (cdown && accent === 'a-ok') accent = 'a-upd';
     const selectable = a.status === 'active' && !a.below_min && canChange();
     let mid;
     if (a.maint) {
@@ -770,6 +799,7 @@ function Dashboard() {
             : html`<div class="os">${osLabel(f)} · ${f.arch || '?'} · ${f.virt || ''}</div><div class="os">${ipLabel(f)}</div>`}</div>
           ${selectable ? html`<input type="checkbox" class="selbox" data-act="sel" data-id="${a.id}" ${st.sel.has(a.id) ? 'checked' : ''} title="Select">` : ''}</div>
         ${mid}
+        ${cdown ? html`<div class="svcline" title="${cdown.L.svc_fail ? `${cdown.L.svc_fail.name}: ${cdown.L.svc_fail.error || 'down'}` : ''}">${checksDownText(cdown)}${checksFailText(cdown) ? ` · ${checksFailText(cdown)}` : ''}</div>` : ''}
         ${a.status !== 'pending' ? html`<div class="inforow"><span class="uptime" title="${a.below_min ? '' : lastReboot(a)}">${icon('clock')}${!a.online ? (a.maint ? 'not connected' : 'offline') : a.below_min ? 'online' : 'up ' + dur(f.uptime_sec)}</span>${a.maint ? '' : healthBadges(a)}<span class="spacer"></span>${verPill(a)}</div>` : ''}
         <div class="foot">
           ${a.busy ? html`<span class="spin"></span><span>${a.busy} job${a.busy > 1 ? 's' : ''}</span>` : html`<span>${a.online ? (u ? when(u.checked_at, 'checked ') : 'online') : a.status === 'pending' ? '' : when(a.last_seen, 'seen ')}</span>`}
@@ -814,21 +844,17 @@ function Dashboard() {
     let svcTotal = 0, svcOK = 0, svcDown = 0, devClean = 0;
     for (const a of active) {
       let t = 0, ok = 0, down = 0;
+      // An agent counts its connection, plus the checks on its Services tab.
+      const L = chk(a), [ct, cok, cdown] = L ? checkCounts(L) : [0, 0, 0];
       if (a.maint) {
         // In maintenance: counts, but not as OK and not as down.
-        t = isLocal(a) ? (a.local.ping && a.local.ping_info ? 1 : 0) + a.local.svc_total : 1;
-      } else if (!isLocal(a)) {
-        t = 1;
-        if (a.online) ok = 1; else down = 1;
+        t = (isLocal(a) ? 0 : 1) + ct;
       } else {
-        const L = a.local, P = L.ping_info;
-        if (L.ping && P) {
+        t = ct; ok = cok; down = cdown; // unknown (probe out): counts, but not as OK and not as down
+        if (!isLocal(a)) {
           t++;
-          if (probeOut(a)) { /* unknown: counts, but not as OK and not as down */ }
-          else if (P.checked && !P.up) down++;
-          else if (P.checked && !P.fails) ok++;
+          if (a.online) ok++; else down++;
         }
-        t += L.svc_total; ok += L.svc_ok || 0; down += L.svc_down;
       }
       svcTotal += t; svcOK += ok; svcDown += down;
       if (!down) devClean++;
@@ -1054,7 +1080,7 @@ function DeviceList() {
   const st = { filter: 'all', q: '', data: null, sort: 'name', dir: 1 };
   const byText = (x, y) => String(x).localeCompare(String(y), undefined, { numeric: true, sensitivity: 'base' });
   const statusText = (a) => (a.maint ? 'maintenance' : isLocal(a) ? (probeOut(a) ? 'unknown' : !a.local.checked ? 'waiting' : a.local.up ? (a.local.svc_down ? `${a.local.svc_down} service${a.local.svc_down === 1 ? '' : 's'} down` : 'online') : 'down')
-    : a.status === 'pending' ? 'pending' : a.below_min ? 'update required' : !a.online ? 'offline' : a.status === 'report_only' ? 'report only' : 'online');
+    : a.status === 'pending' ? 'pending' : a.below_min ? 'update required' : !a.online ? 'offline' : agentChecksDown(a) ? checksDownShort(agentChecksDown(a)) : a.status === 'report_only' ? 'report only' : 'online');
   const lastTs = (a) => (isLocal(a) ? a.local.last_check || 0 : a.online ? a.updates?.checked_at || 0 : a.last_seen || 0);
   const healthN = (a) => (a.facts?.health?.failed_count > 0 ? 2 : 0) + (a.facts?.health?.auto_updates === 'on' ? 1 : 0);
   const COLS = [
@@ -1093,7 +1119,7 @@ function DeviceList() {
   function row(a) {
     const u = a.updates, o = a.os_support, f = a.facts;
     return html`<tr>
-      <td class="nowrap" title="${statusText(a)}${a.below_min ? ` (agent ${a.core_version}, lowest allowed ${a.min_agent})` : ''}">${agentDot(a)}${statusText(a) === 'online' ? '' : html` <span class="small ${a.maint ? 'c-blue' : statusText(a) === 'unknown' ? 'dim' : a.status === 'pending' || a.status === 'report_only' || a.below_min || statusText(a) === 'waiting' || statusText(a).includes('service') ? 'c-amber' : 'c-red'}">${statusText(a)}</span>`}</td>
+      <td class="nowrap" title="${statusText(a)}${a.below_min ? ` (agent ${a.core_version}, lowest allowed ${a.min_agent})` : ''}">${agentDot(a)}${statusText(a) === 'online' ? '' : html` <span class="small ${a.maint ? 'c-blue' : statusText(a) === 'unknown' ? 'dim' : a.status === 'pending' || a.status === 'report_only' || a.below_min || statusText(a) === 'waiting' || / (service|check)s? down/.test(statusText(a)) ? 'c-amber' : 'c-red'}">${statusText(a)}</span>`}</td>
       <td class="nowrap"><a href="#/device/${a.id}"><b>${a.name}</b></a></td>
       <td class="opt muted">${groupName(a.group_id)}</td>
       <td class="opt small nowrap">${(f.ips || [])[0] || ''}</td>
@@ -1163,6 +1189,8 @@ function MapPage() {
     }
     if (a.status === 'pending') return ['unk', 'pending approval'];
     if (!a.online) return ['bad', `offline since ${fmtDate(a.last_seen)}`];
+    const x = agentChecksDown(a);
+    if (x) return ['bad', `online · ${checksDownText(x)}${checksFailText(x) ? ` · ${checksFailText(x)}` : ''}`];
     return ['ok', a.status === 'report_only' ? 'online (report only)' : 'online'];
   }
   // The tree: root (master), its devices, and each probe's devices.
@@ -1351,14 +1379,14 @@ function maintNotice(a) {
   if (!a.maint) return '';
   const m = a.maint;
   return html`<div class="notice blue"><b>In maintenance</b> since ${hhmm(m.since)} by ${m.by}, ${m.until ? `until ${hhmm(m.until)} (ends by itself)` : 'until ended by hand'}.
-    ${isLocal(a) ? '' : html`<span class="small">No automatic jobs run and no failures are shown. Actions on the device work only while the agent is connected${a.online ? '' : html` — <b>it is not connected now</b>`}.</span>`}</div>`;
+    ${isLocal(a) ? '' : html`<span class="small">No automatic jobs run${a.checks ? ', its services are not checked' : ''} and no failures are shown. Actions on the device work only while the agent is connected${a.online ? '' : html` — <b>it is not connected now</b>`}.</span>`}</div>`;
 }
 async function maintStart(a, done) {
   openModal(html`<h3>Maintenance for ${a.name}</h3>
     <form class="form" data-submit="go">
       <div class="muted small">${isLocal(a)
         ? `The ping and all services stop${a.local.probe ? `, also on ${a.local.probe.name}` : ''}, and no failures are shown.`
-        : 'No automatic jobs run (waiting ones are cancelled) and no failures are shown. Your own actions stay possible while the agent is connected.'}</div>
+        : `No automatic jobs run (waiting ones are cancelled)${a.checks ? `, its services stop${a.checks.probe ? `, also on ${a.checks.probe.name}` : ''},` : ''} and no failures are shown. Your own actions stay possible while the agent is connected.`}</div>
       <label class="field">How long<select name="min">
         <option value="5">5 minutes</option><option value="30">30 minutes</option><option value="60" selected>1 hour</option>
         <option value="240">4 hours</option><option value="0">Manual (until ended)</option></select></label>
@@ -1382,17 +1410,18 @@ async function maintEnd(a, done) {
 }
 
 function AgentPage([id, tab]) {
-  const st = { tab: ['updates', 'jobs', 'system', 'apps'].includes(tab) ? tab : 'system', sel: new Set(), data: null, appsAll: false };
+  const st = { tab: ['updates', 'jobs', 'system', 'apps', 'services'].includes(tab) ? tab : 'system', sel: new Set(), data: null, appsAll: false, pinging: false, checking: new Set() };
   const upd = () => st.data?.agent?.state?.updates || null;
   function header(a, groups) {
-    const f = a.facts;
+    const f = a.facts, cdown = agentChecksDown(a);
     const g = groups.find((x) => x.id === a.group_id);
     return html`
       <div class="page-head syshead">
         <div class="headinfo"><div class="row"><a href="#/dashboard/${lastDashSub}" class="btn ghost sm iconbtn" title="Back">${icon('back')}</a>${agentDot(a)}<h1>${a.name}</h1>
           ${a.status === 'report_only' ? html`<span class="badge info">${icon('pause')} report only</span>` : ''}${a.status === 'pending' ? html`<span class="badge upd">pending approval</span>` : ''}
           <span class="tag">${icon('folder')} ${g ? g.name : 'Ungrouped'}</span>${verPill(a)}</div>
-          <div class="sub" title="${a.below_min ? '' : `${osLabel(f)} · ${f.kernel || ''} · ${f.arch} · ${f.virt}`}">${a.below_min ? html`agent ${a.core_version} · upgrade only · ${a.online ? 'online' : raw('offline, last seen ' + r(when(a.last_seen)))}` : html`${osLabel(f)} · ${f.kernel || ''} · ${f.arch} · ${f.virt} · <span title="${lastReboot(a)}">${a.online ? 'online, up ' + dur(f.uptime_sec) : raw('offline, last seen ' + r(when(a.last_seen)))}</span>`}</div></div>
+          <div class="sub" title="${a.below_min ? '' : `${osLabel(f)} · ${f.kernel || ''} · ${f.arch} · ${f.virt}`}">${a.below_min ? html`agent ${a.core_version} · upgrade only · ${a.online ? 'online' : raw('offline, last seen ' + r(when(a.last_seen)))}` : html`${osLabel(f)} · ${f.kernel || ''} · ${f.arch} · ${f.virt} · <span title="${lastReboot(a)}">${a.online ? 'online, up ' + dur(f.uptime_sec) : raw('offline, last seen ' + r(when(a.last_seen)))}</span>`}</div>
+          ${cdown ? html`<div class="sub"><a href="#" class="c-red" data-act="tab" data-t="services">${checksDownText(cdown)}</a>${cdown.L.svc_fail ? html` · <span class="c-red">${cdown.L.svc_fail.name}: ${cdown.L.svc_fail.error || 'down'}</span>` : cdown.ping ? html` · <span class="c-red">ping: ${cdown.L.ping_info.last_error || 'no answer'}</span>` : ''}</div>` : ''}</div>
         <span class="spacer"></span>
         ${a.busy ? html`<span class="row muted"><span class="spin"></span>${a.busy} job(s) active</span>` : ''}
         ${!a.removing && !a.below_min ? html`<button class="btn sm" data-act="ping" title="Check the connection and keys with the agent now; nothing is done on the device">${icon('pulse')} Ping</button>` : ''}
@@ -1576,7 +1605,7 @@ function AgentPage([id, tab]) {
         ${ifChange(html`<button class="btn sm" data-act="probe-resend" ${busy ? 'disabled' : ''} title="Send the current check list again, even if the agent has it">${icon('refresh')} Resend check list</button>
         <button class="btn warn sm" data-act="probe-clear" ${busy ? 'disabled' : ''} title="The agent drops its whole check list and waits for a new one">${icon('trash')} Clear probe checks</button>`)}</div>
       <div class="row" style="margin-top:10px">${sw}</div>
-      ${p.on ? html`<div class="muted small" style="margin:8px 0 12px">This agent checks agentless devices for the master, for networks the master cannot reach. Choose it as “Checked by” in a device's Edit window. It can be switched off once no device is checked by it.</div>
+      ${p.on ? html`<div class="muted small" style="margin:8px 0 12px">This agent checks devices for the master, for networks the master cannot reach: agentless devices, and the services of other agent devices. Choose it as “Checked by” in a device's Edit window or on a Services tab. It can be switched off once no device is checked by it.</div>
       <div class="row">${state}</div>` : html`<div class="muted small" style="margin-top:8px">Off: this agent is not offered as “Checked by” for agentless devices. Switch it on to let it check devices for networks the master cannot reach.</div>`}
       ${p.on ? html`
       <div class="facts" style="margin-top:14px"><div><div class="k">Devices</div><div class="v">${p.devices}</div></div><div><div class="k">Checks</div><div class="v">${p.checks} of at most ${p.max}</div></div>
@@ -1584,15 +1613,27 @@ function AgentPage([id, tab]) {
       ${busy ? html`<div class="dim small" style="margin-top:10px"><span class="spin" style="width:10px;height:10px"></span> ${busy.type === 'probe.clear' ? 'Clear sent, not yet confirmed' : 'Check list sent, not yet confirmed'}…</div>` : ''}
     </div>`;
   }
+  // Services checked from outside, like those of an agentless device.
+  function servicesTab(a) {
+    const L = a.checks, out = L?.probe && L.probe.state !== 'ok' ? L.probe : null;
+    const head = html`<div class="row" style="margin-bottom:12px"><span class="muted small">${L
+      ? html`Checked on <span class="mono">${L.address}</span> ${L.probe ? html`by the agent <a href="#/device/${L.probe.id}"><b>${L.probe.name}</b></a>, on its own schedule` : 'from the master'}.`
+      : 'Services of this device checked from outside, by the master or another agent, as for an agentless device. The device\'s own status still comes from its agent.'} ${SVC_HOW}</span>
+      <span class="spacer"></span>${ifChange(html`${L ? html`<button class="btn sm" data-act="checks-edit">${icon('edit')} Address and checker</button>` : ''}<button class="btn primary sm" data-act="svc-add">${icon('plus')} Add service</button>`)}</div>
+      ${out && !a.maint ? html`<div class="notice grey"><b>Unknown – ${out.note}.</b> The shown results are the last ones received from <a href="#/device/${out.id}">${out.name}</a>.</div>` : ''}`;
+    return html`${head}${servicesTable(st, L)}`;
+  }
   function render() {
     const d = st.data;
     if (!d) return;
     const a = d.agent;
     setHTML($('#a-head'), header(a, d.groups));
     const tabs = a.below_min ? [['system', 'System']] : [['system', 'System'], ['updates', 'Updates'], ['jobs', 'Jobs'], ['apps', 'Applications']];
+    if (a.status !== 'pending') tabs.push(['services', 'Services']);
     if (!tabs.some(([k]) => k === st.tab)) st.tab = tabs[0][0];
-    setHTML($('#a-tabs'), tabs.map(([k, l]) => html`<button class="${st.tab === k ? 'on' : ''}" data-act="tab" data-t="${k}">${l}${k === 'updates' && a.updates?.total ? html` <span class="badge upd">${a.updates.total}</span>` : ''}${k === 'system' && !a.core_is_latest && a.core_latest ? html` <span class="badge upd" title="A newer agent version is available">↑</span>` : ''}</button>`));
-    const body = a.below_min ? agentPanel(a) : { updates: updatesTab, jobs: jobsTab, system: systemTab, apps: appsTab }[st.tab](a);
+    const C = a.checks, cdown = agentChecksDown(a), ctotal = C ? (C.services || []).length + (C.ping_info ? 1 : 0) : 0;
+    setHTML($('#a-tabs'), tabs.map(([k, l]) => html`<button class="${st.tab === k ? 'on' : ''}" data-act="tab" data-t="${k}">${l}${k === 'updates' && a.updates?.total ? html` <span class="badge upd">${a.updates.total}</span>` : ''}${k === 'system' && !a.core_is_latest && a.core_latest ? html` <span class="badge upd" title="A newer agent version is available">↑</span>` : ''}${k === 'services' ? (cdown ? html` <span class="badge sec">${cdown.n}</span>` : ctotal ? html` <span class="dim small">${ctotal}</span>` : '') : ''}</button>`));
+    const body = st.tab === 'services' ? servicesTab(a) : a.below_min ? agentPanel(a) : { updates: updatesTab, jobs: jobsTab, system: systemTab, apps: appsTab }[st.tab](a);
     setHTML($('#a-body'), body);
   }
   const a = () => st.data.agent;
@@ -1607,6 +1648,8 @@ function AgentPage([id, tab]) {
       render();
     },
     acts: {
+      ...serviceActs(st, id, render),
+      'checks-edit': () => checksModal(a(), (v) => { st.data.agent = v; render(); }),
       tab: (t) => { st.tab = t.dataset.t; render(); },
       'apps-view': (t) => { st.appsAll = t.dataset.v === '1'; render(); },
       'agent-update': async () => {
@@ -1833,9 +1876,11 @@ function methodValues(m, f) {
 }
 function serviceModal(dev, svc, presets, lim, methods, done) {
   const isNew = !svc;
-  const canPing = isNew && dev.local.ping_mode === 'removed';
+  const canPing = isNew && (chk(dev)?.ping_mode ?? 'removed') === 'removed';
+  // Agentless devices start with the ping; on an agent device it is optional.
+  const pingFirst = canPing && isLocal(dev);
   const p0 = presets[0];
-  const s = svc || (canPing ? { preset: 'ping', name: 'Ping', port: '', method: 'tcp', greeting: false, interval: lim.interval, retries: lim.retries, timeout: lim.timeout, reverse: false }
+  const s = svc || (pingFirst ?{ preset: 'ping', name: 'Ping', port: '', method: 'tcp', greeting: false, interval: lim.interval, retries: lim.retries, timeout: lim.timeout, reverse: false }
     : { preset: p0.key, name: p0.name, port: p0.port, method: p0.method || 'tcp', greeting: p0.greeting, interval: lim.interval, retries: lim.retries, timeout: lim.timeout, reverse: false });
   const groups = [...new Set(presets.map((p) => p.group))];
   const method = (k) => methods.find((m) => m.key === (k || 'tcp')) || methods[0];
@@ -1872,10 +1917,10 @@ function serviceModal(dev, svc, presets, lim, methods, done) {
   openModal(html`<h3>${isNew ? `Add a service to ${dev.name}` : `Edit ${s.name}`}</h3>
     <form class="form" data-submit="save">
       <label class="field">Service<select name="preset" data-change="preset">
-        ${canPing ? html`<option value="ping" selected>Ping (ICMP)</option>` : ''}
+        ${canPing ? html`<option value="ping" ${pingFirst ? 'selected' : ''}>Ping (ICMP)</option>` : ''}
         ${groups.map((g) => presets.filter((p) => p.group === g).map((p) => html`<option value="${p.key}" ${s.preset === p.key ? 'selected' : ''}>${p.name} (${p.port})</option>`))}
         <option value="" ${!s.preset ? 'selected' : ''}>Custom port…</option></select></label>
-      <div class="notice blue" id="svc-ping" style="margin:0;display:none">The ping uses the same settings for every agentless device: every ${dev.local.interval} s, down after ${dev.local.down_after} unanswered pings (Settings → Agentless).</div>
+      <div class="notice blue" id="svc-ping" style="margin:0;display:none">The ping uses the same settings for every device: every ${lim.ping_interval} s, down after ${lim.ping_down_after} unanswered pings (Settings → Agentless).${isLocal(dev) ? '' : ' It shows whether the address answers; the device\'s own status still comes from its agent.'}</div>
       <div id="svc-tcp" class="stack" style="gap:12px">
       <div class="row" style="gap:12px;align-items:flex-end">
         <label class="field" style="flex:2">Name<input type="text" name="name" value="${s.name}" maxlength="48" required></label>
@@ -1915,6 +1960,39 @@ function serviceModal(dev, svc, presets, lim, methods, done) {
   });
   fill($('.modal form'));
 }
+// Where an agent device's services are checked: the address and who checks them.
+async function checksModal(a, done) {
+  let pa = { agents: [], max: 200 };
+  try { pa = await GET('probe-agents'); } catch { /* only Master can be chosen */ }
+  const L = a.checks, cur = L.probe?.id || '';
+  const addrs = a.check_addrs || [], other = !addrs.includes(L.address);
+  const agents = pa.agents.filter((p) => p.id !== a.id); // never its own agent
+  const opts = html`<option value="" ${cur ? '' : 'selected'}>Master</option>${agents.map((p) => html`<option value="${p.id}" ${cur === p.id ? 'selected' : ''} ${p.note && cur !== p.id ? 'disabled' : ''}>${p.name}${p.note ? ` (${p.note})` : !p.online ? ' (offline)' : ` (${p.checks} of ${pa.max} checks)`}</option>`)}
+    ${cur && !agents.some((p) => p.id === cur) ? html`<option value="${cur}" selected>${L.probe.name}</option>` : ''}`;
+  openModal(html`<h3>Checks of ${a.name}</h3>
+    <form class="form" data-submit="save">
+      <label class="field">Address<select name="addr" data-change="addr">
+        ${addrs.map((ip) => html`<option value="${ip}" ${ip === L.address ? 'selected' : ''}>${ip}</option>`)}
+        <option value="" ${other ? 'selected' : ''}>Other address…</option></select></label>
+      <label class="field" id="ck-other" style="${other ? '' : 'display:none'}">Other address<input type="text" name="other" value="${other ? L.address : ''}" placeholder="e.g. 192.168.5.20" spellcheck="false" autocomplete="off"></label>
+      <div class="dim small">One of the addresses the agent reports, or another one such as a virtual IP. IPv4 or IPv6, no host names: Coremon does not rely on DNS (an HTTPS check has its own hostname). A new address starts all checks over.</div>
+      <label class="field">Checked by<select name="probe">${opts}</select></label>
+      <div class="dim small">Master: the master checks the services itself. An agent: that agent checks them, for example from another network. Never the device's own agent: a check from outside also notices when the device is unreachable. The history is kept when this changes.</div>
+      <div class="actions"><button type="button" class="btn ghost" data-act="cancel">Cancel</button><button class="btn primary">Save</button></div>
+    </form>`, {
+    acts: {
+      cancel: () => closeModal(),
+      addr: (t) => { $('#ck-other').style.display = t.value ? 'none' : ''; },
+      save: async (f) => {
+        const address = f.addr.value || f.other.value.trim();
+        const res = await POST(`agents/${a.id}/checks`, { address, probe: f.probe.value });
+        closeModal();
+        toast('Saved', 'ok');
+        done?.(res);
+      },
+    },
+  });
+}
 function LocalPage([id, tab]) {
   const st = { data: null, pinging: false, tab: tab === 'services' ? 'services' : 'system', checking: new Set() };
   const pingNote = (L) => (L.ping_mode === 'paused' ? 'Ping is paused for this device.' : 'This device is not pinged.');
@@ -1952,39 +2030,10 @@ function LocalPage([id, tab]) {
             <div class="svcsum-pct dim small">${s.uptime >= 0 ? `${pctText(s.uptime)} up` : 'no checks yet'}</div></div>`)}</div>`
           : html`<div class="dim small">No services</div>`}</div>`;
   }
-  function pauseBtn(paused, act, extra) {
-    return html`<button class="btn ghost sm iconbtn" data-act="${act}" ${raw(extra)} title="${paused ? 'Resume: check it again' : 'Pause: stop checking it for now'}">${icon(paused ? 'play' : 'pause')}</button>`;
-  }
   function servicesTab(a, L) {
-    const svcs = L.services || [], P = L.ping_info;
-    const head = html`<div class="row" style="margin-bottom:12px"><span class="muted small">The ping and the services are checked ${L.probe ? html`by the agent <b>${L.probe.name}</b>, on its own schedule` : 'from the master'}. A TCP check only connects; an HTTPS check also asks the web server for the page (HEAD, or GET when that fails). Nothing is logged in to.</span>
+    const head = html`<div class="row" style="margin-bottom:12px"><span class="muted small">The ping and the services are checked ${L.probe ? html`by the agent <b>${L.probe.name}</b>, on its own schedule` : 'from the master'}. ${SVC_HOW}</span>
       <span class="spacer"></span>${ifChange(html`<button class="btn primary sm" data-act="svc-add">${icon('plus')} Add service</button>`)}</div>`;
-    if (!svcs.length && !P) return html`${head}<div class="panel empty">No services</div>`;
-    const pingRow = P ? html`<tr class="${P.mode === 'paused' ? 'dimrow' : ''}">
-        <td class="nowrap">${pingState(P)}${P.checked && P.mode !== 'paused' ? html`<div class="dim small">${dur(now() - P.since)}</div>` : ''}</td>
-        <td class="nowrap"><b>Ping</b><div class="dim small mono">ICMP</div></td>
-        <td class="small"><span class="dim">—</span></td>
-        <td class="small nowrap">${P.up && P.rtt_us && P.mode !== 'paused' ? rttText(P.rtt_us) : html`<span class="dim">—</span>`}</td>
-        <td class="small nowrap">${P.last_check ? when(P.last_check) : html`<span class="dim">waiting</span>`}${P.last_error && P.mode !== 'paused' && !(P.up && !P.fails) ? html`<div class="c-red small" style="font-weight:400">${P.last_error}</div>` : ''}</td>
-        <td style="min-width:150px">${uptimeBar(P.hist, { compact: true })}<div class="dim small">${P.uptime >= 0 ? `${pctText(P.uptime)} answered` : 'no pings yet'}</div></td>
-        <td class="dim small nowrap" title="The same for all agentless devices: Settings → Agentless">every ${P.interval} s<br>down after ${P.down_after} · ${P.timeout} s</td>
-        <td class="w1"><div class="row" style="flex-wrap:nowrap;gap:6px">
-          <button class="btn ghost sm iconbtn" data-act="ping" title="${L.probe ? 'Checked by a remote probe on its own schedule' : 'Ping now'}" ${st.pinging || P.mode === 'paused' || L.probe ? 'disabled' : ''}>${st.pinging ? html`<span class="spin"></span>` : icon('refresh')}</button>
-          ${ifChange(html`${pauseBtn(P.mode === 'paused', 'ping-pause', '')}<button class="btn danger sm iconbtn" data-act="ping-remove" title="Delete">${icon('trash')}</button>`)}</div></td>
-      </tr>` : '';
-    return html`${head}<div class="panel scrollx"><table class="tbl svctbl"><thead><tr><th>Status</th><th>Service</th><th>Answer</th><th>Response</th><th>Checked</th><th>Last 24 hours</th><th>Check</th><th class="w1"></th></tr></thead>
-      <tbody>${pingRow}${svcs.map((s) => html`<tr class="${s.paused ? 'dimrow' : ''}">
-        <td class="nowrap">${svcState(s)}${s.checked && !s.paused ? html`<div class="dim small">${dur(now() - s.since)}</div>` : ''}</td>
-        <td class="nowrap"><b>${s.name}</b> ${s.reverse ? html`<span class="badge info xs" title="Reverse mode: reachable counts as down">reverse</span>` : ''}<div class="dim small mono">${svcProto(s)}${s.method === 'https' ? html` · ${s.host}${s.path !== '/' ? s.path : ''}` : ''}</div>${svcSteps(s)}</td>
-        <td class="small mono banner">${s.banner ? html`<span title="${s.banner}">${s.banner}</span>` : html`<span class="dim">${s.greeting || s.method === 'https' ? '—' : 'not waited for'}</span>`}</td>
-        <td class="small nowrap">${s.rtt_us && s.up && !s.reverse && !s.paused ? rttText(s.rtt_us) : html`<span class="dim">—</span>`}</td>
-        <td class="small nowrap">${s.last_check ? when(s.last_check) : html`<span class="dim">waiting</span>`}${s.last_error && !s.paused && !(s.up && !s.fails) ? html`<div class="c-red small" style="font-weight:400">${s.last_error}</div>` : ''}</td>
-        <td style="min-width:150px">${uptimeBar(s.hist, { word: 'check', compact: true })}<div class="dim small">${s.uptime >= 0 ? `${pctText(s.uptime)} up` : 'no checks yet'}</div></td>
-        <td class="dim small nowrap">every ${s.interval} s<br>${s.retries} retr${s.retries === 1 ? 'y' : 'ies'} · ${s.timeout} s${s.greeting ? html`<br>greeting` : ''}${s.method === 'https' ? html`<br>status ${s.codes}${s.cert_days ? ` · cert ≥ ${s.cert_days} d` : ''}` : ''}</td>
-        <td class="w1"><div class="row" style="flex-wrap:nowrap;gap:6px">
-          <button class="btn ghost sm iconbtn" data-act="svc-check" data-sid="${s.id}" title="${L.probe ? 'Checked by a remote probe on its own schedule' : 'Check now'}" ${st.checking.has(s.id) || s.paused || L.probe ? 'disabled' : ''}>${st.checking.has(s.id) ? html`<span class="spin"></span>` : icon('refresh')}</button>
-          ${ifChange(html`${pauseBtn(s.paused, 'svc-pause', `data-sid="${esc(s.id)}"`)}<button class="btn ghost sm iconbtn" data-act="svc-edit" data-sid="${s.id}" title="Edit">${icon('edit')}</button><button class="btn danger sm iconbtn" data-act="svc-delete" data-sid="${s.id}" title="Delete">${icon('trash')}</button>`)}</div></td>
-      </tr>`)}</tbody></table></div>`;
+    return html`${head}${servicesTable(st, L)}`;
   }
   function render() {
     const d = st.data;
@@ -2015,8 +2064,7 @@ function LocalPage([id, tab]) {
     setHTML($('#a-body'), st.tab === 'services' ? servicesTab(a, L) : systemTab(a, L));
   }
   const refresh = () => view?.refresh?.();
-  const svc = (sid) => (st.data.agent.local.services || []).find((s) => s.id === sid);
-  const setAgent = (a) => { st.data.agent = a; render(); };
+  const sacts = serviceActs(st, id, render);
   return {
     interval: 5000,
     mount(el) { el.innerHTML = '<div id="a-head"></div><div class="tabs" id="a-tabs"></div><div id="a-body"></div>'; },
@@ -2025,52 +2073,100 @@ function LocalPage([id, tab]) {
       render();
     },
     acts: {
+      ...sacts,
+      ping: sacts['svc-ping'],
       tab: (t) => { st.tab = t.dataset.t; render(); },
-      ping: async () => {
-        st.pinging = true; render();
-        try {
-          const a = await POST(`locals/${id}/ping`);
-          st.data.agent = a;
-          const P = a.local.ping_info;
-          toast(!P.last_error ? `${a.name} answered in ${rttText(P.rtt_us)}` : `${a.name}: ${P.last_error}`, !P.last_error ? 'ok' : 'err');
-        } finally { st.pinging = false; render(); }
-      },
-      'ping-pause': async () => {
-        const paused = st.data.agent.local.ping_mode === 'paused';
-        setAgent(await POST(`locals/${id}/pingstate`, { state: paused ? 'on' : 'paused' }));
-        toast(paused ? 'Ping resumed' : 'Ping paused', 'ok');
-      },
-      'ping-remove': async () => {
-        if (!(await confirmBox('Delete the ping?', 'The device is no longer pinged and its ping history is removed. You can add the ping again with Add service.', { okText: 'Delete ping', danger: true }))) return;
-        setAgent(await POST(`locals/${id}/pingstate`, { state: 'removed' }));
-        toast('Ping deleted', 'ok');
-      },
       'maint-start': () => maintStart(st.data.agent, refresh),
       'maint-end': () => maintEnd(st.data.agent, refresh),
       edit: () => localEditModal(st.data.agent, st.data.groups, refresh),
       delete: () => localDelete(st.data.agent, () => { location.hash = '#/dashboard/' + lastDashSub; }),
-      'svc-add': () => serviceModal(st.data.agent, null, st.data.presets, st.data.svc_limits, st.data.svc_methods, setAgent),
-      'svc-edit': (t) => serviceModal(st.data.agent, svc(t.dataset.sid), st.data.presets, st.data.svc_limits, st.data.svc_methods, setAgent),
-      'svc-pause': async (t) => {
-        const s = svc(t.dataset.sid);
-        setAgent(await POST(`locals/${id}/services/${s.id}/pause`, { paused: !s.paused }));
-        toast(`${s.name} ${s.paused ? 'resumed' : 'paused'}`, 'ok');
-      },
-      'svc-delete': async (t) => {
-        const s = svc(t.dataset.sid);
-        if (!(await confirmBox(`Delete ${s.name} (port ${s.port})?`, 'It is no longer checked, and its history is removed.', { okText: 'Delete service', danger: true }))) return;
-        setAgent(await POST(`locals/${id}/services/${s.id}/delete`));
-        toast(`${s.name} deleted`, 'ok');
-      },
-      'svc-check': async (t) => {
-        const sid = t.dataset.sid;
-        st.checking.add(sid); render();
-        try {
-          st.data.agent = await POST(`locals/${id}/services/${sid}/check`);
-          const s = svc(sid);
-          if (s) toast(s.up && !s.fails ? `${s.name} is up` : `${s.name}: ${s.last_error || 'not up'}`, s.up && !s.fails ? 'ok' : 'err');
-        } finally { st.checking.delete(sid); render(); }
-      },
+    },
+  };
+}
+
+// ---- the Services tab: ping and services, of agentless and agent devices ----
+
+const SVC_HOW = 'A TCP check only connects; an HTTPS check also asks the web server for the page (HEAD, or GET when that fails). Nothing is logged in to.';
+function pauseBtn(paused, act, extra) {
+  return html`<button class="btn ghost sm iconbtn" data-act="${act}" ${raw(extra)} title="${paused ? 'Resume: check it again' : 'Pause: stop checking it for now'}">${icon(paused ? 'play' : 'pause')}</button>`;
+}
+// st: the page state (pinging, checking); L: the device's checks (may be null).
+function servicesTable(st, L) {
+  const svcs = L?.services || [], P = L?.ping_info;
+  if (!svcs.length && !P) return html`<div class="panel empty">No services</div>`;
+  const pingRow = P ? html`<tr class="${P.mode === 'paused' ? 'dimrow' : ''}">
+        <td class="nowrap">${pingState(P)}${P.checked && P.mode !== 'paused' ? html`<div class="dim small">${dur(now() - P.since)}</div>` : ''}</td>
+        <td class="nowrap"><b>Ping</b><div class="dim small mono">ICMP</div></td>
+        <td class="small"><span class="dim">—</span></td>
+        <td class="small nowrap">${P.up && P.rtt_us && P.mode !== 'paused' ? rttText(P.rtt_us) : html`<span class="dim">—</span>`}</td>
+        <td class="small nowrap">${P.last_check ? when(P.last_check) : html`<span class="dim">waiting</span>`}${P.last_error && P.mode !== 'paused' && !(P.up && !P.fails) ? html`<div class="c-red small" style="font-weight:400">${P.last_error}</div>` : ''}</td>
+        <td style="min-width:150px">${uptimeBar(P.hist, { compact: true })}<div class="dim small">${P.uptime >= 0 ? `${pctText(P.uptime)} answered` : 'no pings yet'}</div></td>
+        <td class="dim small nowrap" title="The same for every device: Settings → Agentless">every ${P.interval} s<br>down after ${P.down_after} · ${P.timeout} s</td>
+        <td class="w1"><div class="row" style="flex-wrap:nowrap;gap:6px">
+          <button class="btn ghost sm iconbtn" data-act="svc-ping"title="${L.probe ? 'Checked by a remote probe on its own schedule' : 'Ping now'}" ${st.pinging || P.mode === 'paused' || L.probe ? 'disabled' : ''}>${st.pinging ? html`<span class="spin"></span>` : icon('refresh')}</button>
+          ${ifChange(html`${pauseBtn(P.mode === 'paused', 'ping-pause', '')}<button class="btn danger sm iconbtn" data-act="ping-remove" title="Delete">${icon('trash')}</button>`)}</div></td>
+      </tr>` : '';
+    return html`<div class="panel scrollx"><table class="tbl svctbl"><thead><tr><th>Status</th><th>Service</th><th>Answer</th><th>Response</th><th>Checked</th><th>Last 24 hours</th><th>Check</th><th class="w1"></th></tr></thead>
+      <tbody>${pingRow}${svcs.map((s) => html`<tr class="${s.paused ? 'dimrow' : ''}">
+        <td class="nowrap">${svcState(s)}${s.checked && !s.paused ? html`<div class="dim small">${dur(now() - s.since)}</div>` : ''}</td>
+        <td class="nowrap"><b>${s.name}</b> ${s.reverse ? html`<span class="badge info xs" title="Reverse mode: reachable counts as down">reverse</span>` : ''}<div class="dim small mono">${svcProto(s)}${s.method === 'https' ? html` · ${s.host}${s.path !== '/' ? s.path : ''}` : ''}</div>${svcSteps(s)}</td>
+        <td class="small mono banner">${s.banner ? html`<span title="${s.banner}">${s.banner}</span>` : html`<span class="dim">${s.greeting || s.method === 'https' ? '—' : 'not waited for'}</span>`}</td>
+        <td class="small nowrap">${s.rtt_us && s.up && !s.reverse && !s.paused ? rttText(s.rtt_us) : html`<span class="dim">—</span>`}</td>
+        <td class="small nowrap">${s.last_check ? when(s.last_check) : html`<span class="dim">waiting</span>`}${s.last_error && !s.paused && !(s.up && !s.fails) ? html`<div class="c-red small" style="font-weight:400">${s.last_error}</div>` : ''}</td>
+        <td style="min-width:150px">${uptimeBar(s.hist, { word: 'check', compact: true })}<div class="dim small">${s.uptime >= 0 ? `${pctText(s.uptime)} up` : 'no checks yet'}</div></td>
+        <td class="dim small nowrap">every ${s.interval} s<br>${s.retries} retr${s.retries === 1 ? 'y' : 'ies'} · ${s.timeout} s${s.greeting ? html`<br>greeting` : ''}${s.method === 'https' ? html`<br>status ${s.codes}${s.cert_days ? ` · cert ≥ ${s.cert_days} d` : ''}` : ''}</td>
+        <td class="w1"><div class="row" style="flex-wrap:nowrap;gap:6px">
+          <button class="btn ghost sm iconbtn" data-act="svc-check" data-sid="${s.id}" title="${L.probe ? 'Checked by a remote probe on its own schedule' : 'Check now'}" ${st.checking.has(s.id) || s.paused || L.probe ? 'disabled' : ''}>${st.checking.has(s.id) ? html`<span class="spin"></span>` : icon('refresh')}</button>
+          ${ifChange(html`${pauseBtn(s.paused, 'svc-pause', `data-sid="${esc(s.id)}"`)}<button class="btn ghost sm iconbtn" data-act="svc-edit" data-sid="${s.id}" title="Edit">${icon('edit')}</button><button class="btn danger sm iconbtn" data-act="svc-delete" data-sid="${s.id}" title="Delete">${icon('trash')}</button>`)}</div></td>
+      </tr>`)}</tbody></table></div>`;
+}
+// The actions of the Services tab, on both device pages. The answers are
+// the device's own view; its checks are chk(device).
+function serviceActs(st, id, render) {
+  const L = () => chk(st.data.agent) || {};
+  const svc = (sid) => (L().services || []).find((s) => s.id === sid);
+  const setAgent = (a) => { st.data.agent = a; render(); };
+  return {
+    'svc-ping': async () => {
+      st.pinging = true; render();
+      try {
+        const a = await POST(`locals/${id}/ping`);
+        st.data.agent = a;
+        const P = chk(a).ping_info;
+        toast(!P.last_error ? `${a.name} answered in ${rttText(P.rtt_us)}` : `${a.name}: ${P.last_error}`, !P.last_error ? 'ok' : 'err');
+      } finally { st.pinging = false; render(); }
+    },
+    'ping-pause': async () => {
+      const paused = L().ping_mode === 'paused';
+      setAgent(await POST(`locals/${id}/pingstate`, { state: paused ? 'on' : 'paused' }));
+      toast(paused ? 'Ping resumed' : 'Ping paused', 'ok');
+    },
+    'ping-remove': async () => {
+      if (!(await confirmBox('Delete the ping?', 'The device is no longer pinged and its ping history is removed. You can add the ping again with Add service.', { okText: 'Delete ping', danger: true }))) return;
+      setAgent(await POST(`locals/${id}/pingstate`, { state: 'removed' }));
+      toast('Ping deleted', 'ok');
+    },
+    'svc-add': () => serviceModal(st.data.agent, null, st.data.presets, st.data.svc_limits, st.data.svc_methods, setAgent),
+    'svc-edit': (t) => serviceModal(st.data.agent, svc(t.dataset.sid), st.data.presets, st.data.svc_limits, st.data.svc_methods, setAgent),
+    'svc-pause': async (t) => {
+      const s = svc(t.dataset.sid);
+      setAgent(await POST(`locals/${id}/services/${s.id}/pause`, { paused: !s.paused }));
+      toast(`${s.name} ${s.paused ? 'resumed' : 'paused'}`, 'ok');
+    },
+    'svc-delete': async (t) => {
+      const s = svc(t.dataset.sid);
+      if (!(await confirmBox(`Delete ${s.name} (port ${s.port})?`, 'It is no longer checked, and its history is removed.', { okText: 'Delete service', danger: true }))) return;
+      setAgent(await POST(`locals/${id}/services/${s.id}/delete`));
+      toast(`${s.name} deleted`, 'ok');
+    },
+    'svc-check': async (t) => {
+      const sid = t.dataset.sid;
+      st.checking.add(sid); render();
+      try {
+        st.data.agent = await POST(`locals/${id}/services/${sid}/check`);
+        const s = svc(sid);
+        if (s) toast(s.up && !s.fails ? `${s.name} is up` : `${s.name}: ${s.last_error || 'not up'}`, s.up && !s.fails ? 'ok' : 'err');
+      } finally { st.checking.delete(sid); render(); }
     },
   };
 }

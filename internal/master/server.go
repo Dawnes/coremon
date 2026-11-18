@@ -385,6 +385,7 @@ func (s *Server) routes() http.Handler {
 	view("POST /api/ui/locals/{id}/services/{sid}/check", s.handleServiceCheck)
 	change("POST /api/ui/locals/{id}/services/{sid}/pause", s.handleServicePause)
 	change("POST /api/ui/locals/{id}/pingstate", s.handlePingState)
+	change("POST /api/ui/agents/{id}/checks", s.handleAgentChecks)
 	view("GET /api/ui/local", s.handleLocalSettingsGet)
 	change("POST /api/ui/local", s.handleLocalSettingsSave)
 	view("GET /api/ui/jobs", s.handleJobs)

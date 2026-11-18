@@ -286,11 +286,11 @@ type svcKey struct{ dev, svc string }
 
 // dueServices: services whose next check is due, marked busy. Caller holds
 // s.st.mu and s.loc.mu.
-func (s *Server) dueServices(now time.Time) []svcKey {
+func (s *Server) dueServices(devs []*checkDev, now time.Time) []svcKey {
 	var due []svcKey
 	known := map[string]bool{}
 	i := 0
-	for _, d := range s.st.st.Locals {
+	for _, d := range devs {
 		if d.Probe != "" || d.Maint != nil {
 			continue // checked by a remote probe on its own schedule, or in maintenance
 		}
@@ -321,19 +321,10 @@ func (s *Server) dueServices(now time.Time) []svcKey {
 	return due
 }
 
-func (d *LocalDevice) service(id string) *Service {
-	for _, sv := range d.Services {
-		if sv.ID == id {
-			return sv
-		}
-	}
-	return nil
-}
-
 // checkService checks one service and records the result. Without locks held.
 func (s *Server) checkService(devID, svcID string) {
 	s.st.mu.Lock()
-	d := s.st.st.Locals[devID]
+	d := s.checkDevByID(devID)
 	var sv *Service
 	if d != nil {
 		sv = d.service(svcID)
@@ -350,7 +341,7 @@ func (s *Server) checkService(devID, svcID string) {
 	cancel()
 	s.st.mu.Lock()
 	defer s.st.mu.Unlock()
-	d = s.st.st.Locals[devID]
+	d = s.checkDevByID(devID)
 	if d == nil || d.Address != addr {
 		return
 	}
@@ -524,7 +515,7 @@ func (s *Server) handleServiceCreate(w http.ResponseWriter, r *http.Request) {
 	}
 	s.st.mu.Lock()
 	defer s.st.mu.Unlock()
-	d := s.localOr404(w, r)
+	d := s.checkDevOr404(w, r, true)
 	if d == nil {
 		return
 	}
@@ -532,7 +523,7 @@ func (s *Server) handleServiceCreate(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, fmt.Sprintf("at most %d services per device", maxServices), http.StatusBadRequest)
 		return
 	}
-	if err := s.probeRoom(d); err != nil {
+	if err := s.probeRoom(d.Checks); err != nil {
 		http.Error(w, err.Error(), http.StatusConflict)
 		return
 	}
@@ -541,10 +532,14 @@ func (s *Server) handleServiceCreate(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
+	if code, err := s.attach(d); err != nil {
+		http.Error(w, err.Error(), code)
+		return
+	}
 	d.Services = append(d.Services, sv)
 	s.st.markDirty()
-	s.writeLocalAudit(r, "device.service_added", d, sv.describe())
-	writeJSON(w, s.localDeviceView(d, true))
+	s.writeDevAudit(r, "device.service_added", d.ID, d.Name, sv.describe())
+	writeJSON(w, s.devView(d, true))
 }
 
 func (s *Server) handleServiceUpdate(w http.ResponseWriter, r *http.Request) {
@@ -554,7 +549,7 @@ func (s *Server) handleServiceUpdate(w http.ResponseWriter, r *http.Request) {
 	}
 	s.st.mu.Lock()
 	defer s.st.mu.Unlock()
-	d := s.localOr404(w, r)
+	d := s.checkDevOr404(w, r, false)
 	if d == nil {
 		return
 	}
@@ -583,15 +578,15 @@ func (s *Server) handleServiceUpdate(w http.ResponseWriter, r *http.Request) {
 	s.st.markDirty()
 	s.markChecks()
 	if after := sv.describe(); after != before {
-		s.writeLocalAudit(r, "device.service_changed", d, before+" → "+after)
+		s.writeDevAudit(r, "device.service_changed", d.ID, d.Name, before+" → "+after)
 	}
-	writeJSON(w, s.localDeviceView(d, true))
+	writeJSON(w, s.devView(d, true))
 }
 
 func (s *Server) handleServiceDelete(w http.ResponseWriter, r *http.Request) {
 	s.st.mu.Lock()
 	defer s.st.mu.Unlock()
-	d := s.localOr404(w, r)
+	d := s.checkDevOr404(w, r, false)
 	if d == nil {
 		return
 	}
@@ -609,20 +604,21 @@ func (s *Server) handleServiceDelete(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "service not found", http.StatusNotFound)
 		return
 	}
-	if !gone.Paused && d.activeChecks() <= 1 {
+	if !gone.Paused && d.activeChecks() <= d.minChecks() {
 		http.Error(w, noCheckMsg, http.StatusConflict)
 		return
 	}
 	d.Services = keep
+	s.tidy(d)
 	s.st.markDirty()
 	s.markChecks()
-	s.writeLocalAudit(r, "device.service_removed", d, gone.describe())
-	writeJSON(w, s.localDeviceView(d, true))
+	s.writeDevAudit(r, "device.service_removed", d.ID, d.Name, gone.describe())
+	writeJSON(w, s.devView(d, true))
 }
 
 func (s *Server) handleServiceCheck(w http.ResponseWriter, r *http.Request) {
 	s.st.mu.Lock()
-	d := s.localOr404(w, r)
+	d := s.checkDevOr404(w, r, false)
 	if d == nil {
 		s.st.mu.Unlock()
 		return
@@ -654,11 +650,11 @@ func (s *Server) handleServiceCheck(w http.ResponseWriter, r *http.Request) {
 	s.loc.mu.Unlock()
 	s.st.mu.Lock()
 	defer s.st.mu.Unlock()
-	if d = s.st.st.Locals[devID]; d == nil {
+	if d = s.checkDevByID(devID); d == nil {
 		http.Error(w, "device not found", http.StatusNotFound)
 		return
 	}
-	writeJSON(w, s.localDeviceView(d, true))
+	writeJSON(w, s.devView(d, true))
 }
 
 const remoteCheckMsg = "this device is checked by a remote probe agent, on that agent's own schedule: the master cannot check it now"
@@ -674,7 +670,7 @@ func (s *Server) handleServicePause(w http.ResponseWriter, r *http.Request) {
 	}
 	s.st.mu.Lock()
 	defer s.st.mu.Unlock()
-	d := s.localOr404(w, r)
+	d := s.checkDevOr404(w, r, false)
 	if d == nil {
 		return
 	}
@@ -684,15 +680,15 @@ func (s *Server) handleServicePause(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if req.Paused == sv.Paused {
-		writeJSON(w, s.localDeviceView(d, true))
+		writeJSON(w, s.devView(d, true))
 		return
 	}
-	if req.Paused && d.activeChecks() <= 1 {
+	if req.Paused && d.activeChecks() <= d.minChecks() {
 		http.Error(w, noCheckMsg, http.StatusConflict)
 		return
 	}
 	if !req.Paused {
-		if err := s.probeRoom(d); err != nil {
+		if err := s.probeRoom(d.Checks); err != nil {
 			http.Error(w, err.Error(), http.StatusConflict)
 			return
 		}
@@ -706,6 +702,6 @@ func (s *Server) handleServicePause(w http.ResponseWriter, r *http.Request) {
 	s.loc.mu.Unlock()
 	s.st.markDirty()
 	s.markChecks()
-	s.writeLocalAudit(r, map[bool]string{true: "device.service_paused", false: "device.service_resumed"}[sv.Paused], d, sv.describe())
-	writeJSON(w, s.localDeviceView(d, true))
+	s.writeDevAudit(r, map[bool]string{true: "device.service_paused", false: "device.service_resumed"}[sv.Paused], d.ID, d.Name, sv.describe())
+	writeJSON(w, s.devView(d, true))
 }

@@ -30,6 +30,9 @@ as **agentless** devices: the master itself pings them and checks their services
   check shows which step failed. With a 24-hour history and a graph of the
   ping's round-trip time. For a network
   the master cannot reach, an agent there can do the checks instead ("Checked by").
+* **Services of agent devices**: the same service checks (and optionally a ping)
+  on a device with an agent, on its Services tab: checked from outside by the
+  master or by another agent, on one of its own addresses or another one.
 * **Map**: a live drawing of every device and who monitors it (the master or a
   remote probe), coloured green, red or grey.
 * **Maintenance**: pause all checks of a device for 5 minutes up to 4 hours, or
@@ -80,6 +83,10 @@ an agent (0.3.9 or later) on another system that can reach it. Only agents an ad
 switched on with **Act as remote probe** (Remote probe section of the agent's device
 page; off by default) are offered; it can be switched off again once no device is
 checked by it. A device whose agent is offline shows as unknown, not down.
+
+A device with an agent can have services too (its **Services** tab): they are
+checked from outside like those of an agentless device, by the master or by
+another agent, never by its own agent. Its own status still comes from its agent.
 
 ## Updating
 

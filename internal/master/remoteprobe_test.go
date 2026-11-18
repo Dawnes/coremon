@@ -51,7 +51,7 @@ func TestRemoteProbe(t *testing.T) {
 	if code, b := c.do("POST", "/api/ui/locals/"+id, `{"probe":"a_p"}`); code != 200 || d.Probe != "a_p" {
 		t.Fatalf("probe chosen: %d %s", code, b)
 	}
-	if code, b := c.do("POST", "/api/ui/agents/a_p/probe/enabled", `{"on":false}`); code != 409 || !strings.Contains(b, "1 agentless device") {
+	if code, b := c.do("POST", "/api/ui/agents/a_p/probe/enabled", `{"on":false}`); code != 409 || !strings.Contains(b, "1 device") {
 		t.Errorf("switch off with checks: %d %s", code, b)
 	}
 	_, choices := c.do("GET", "/api/ui/probe-agents", "")

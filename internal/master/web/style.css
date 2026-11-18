@@ -275,6 +275,7 @@ ul.plainlist { margin: 0; padding-left: 18px; line-height: 1.8; }
 .card .big.sec { color: var(--red); text-shadow: 0 0 24px rgba(248, 113, 113, 0.35); }
 .card .biglbl { color: var(--muted); font-size: 12px; line-height: 1.3; }
 .card .badges { display: flex; gap: 6px; flex-wrap: wrap; margin-left: auto; justify-content: flex-end; }
+.card .svcline { margin: -4px 0 10px; font-size: 12px; font-weight: 500; color: var(--red); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .card .inforow { display: flex; align-items: center; gap: 6px; margin-bottom: 10px; font-size: 12px; flex-wrap: wrap; }
 .card .uptime { display: inline-flex; align-items: center; gap: 5px; color: var(--muted); }
 .card .uptime svg { width: 13px; height: 13px; color: var(--dim); }
