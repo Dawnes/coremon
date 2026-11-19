@@ -23,6 +23,8 @@ function setHTML(el, content) {
 const $ = (sel, root = document) => root.querySelector(sel);
 
 const ICONS = {
+  lock: '<rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/>',
+  unlock: '<rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 7.6-1.7"/>',
   dash: '<rect x="3" y="3" width="7" height="9" rx="2"/><rect x="14" y="3" width="7" height="5" rx="2"/><rect x="14" y="12" width="7" height="9" rx="2"/><rect x="3" y="16" width="7" height="5" rx="2"/>',
   server: '<rect x="3" y="4" width="18" height="7" rx="2"/><rect x="3" y="13" width="18" height="7" rx="2"/><path d="M7 7.5h.01M7 16.5h.01"/>',
   jobs: '<path d="M4 6h16M4 12h10M4 18h7"/><circle cx="18" cy="17" r="3"/>',
@@ -737,7 +739,10 @@ let lastDashSub = 'overview';
 
 function Dashboard() {
   lastDashSub = 'overview';
-  const st = { filter: 'all', q: '', sel: new Set(), data: null, folded: new Set(), drag: null };
+  // arrange: the layout is unlocked (admins only). Never stored: every
+  // page load starts locked.
+  const st = { filter: 'all', q: '', sel: new Set(), data: null, folded: new Set(), drag: null, arrange: false };
+  const arranging = () => canChange() && st.arrange;
   const filtering = () => st.filter !== 'all' || st.q !== '';
   const matches = (a) => agentMatches(a, st.filter, st.q, st.data.groups);
   function localCard(a) {
@@ -754,8 +759,8 @@ function Dashboard() {
       down: html`<div class="big sec">Down</div><div class="biglbl">not<br>reachable</div>` }[state];
     const uptime = L.uptime >= 0 ? html`<span class="badge ${L.uptime >= 0.999 ? 'ok' : L.uptime >= 0.9 ? 'upd' : 'sec'} xs" title="Share of successful checks in the last 24 hours">${pctText(L.uptime)} 24 h</span>` : '';
     return html`
-      <div class="card ${accent}" data-act="open-agent" data-id="${a.id}" ${canChange() ? raw('data-drag="agent" draggable="true"') : ''}>
-        <div class="top">${ifChange(html`<span class="grip" title="Drag to reorder or move to another group">${icon('grip')}</span>`)}${agentDot(a)}
+      <div class="card ${accent}" data-act="open-agent" data-id="${a.id}" ${arranging() ? raw('data-drag="agent" draggable="true"') : ''}>
+        <div class="top">${arranging() ? html`<span class="grip" title="Drag to reorder or move to another group">${icon('grip')}</span>` : ''}${agentDot(a)}
           <div style="min-width:0"><div class="name">${a.name}</div><div class="os">Agentless${L.probe ? html` · via ${L.probe.name}` : ''}</div><div class="os"><span class="ip">${L.address}</span></div></div></div>
         <div class="mid">${big}<div class="badges">${uptime}</div></div>
         <div class="inforow"><span class="uptime">${icon('clock')}${state === 'maint' ? 'no checks now' : state === 'unk' ? 'no results now' : state === 'wait' ? (L.fails ? 'not decided yet' : 'not checked yet') : `${L.up ? 'up' : 'down'} ${dur(now() - L.since)}`}</span><span class="spacer"></span>${state === 'up' && L.ping && L.rtt_us ? html`<span class="tag mono">${rttText(L.rtt_us)}</span>` : ''}</div>
@@ -792,8 +797,8 @@ function Dashboard() {
       mid = html`<div class="mid"><div class="big ${cls}">${u.total}</div><div class="biglbl">${u.total === 1 ? 'update' : 'updates'}<br>available</div><div class="badges">${updBadges(a)}</div></div>`;
     }
     return html`
-      <div class="card ${accent} ${st.sel.has(a.id) ? 'sel' : ''}" data-act="open-agent" data-id="${a.id}" ${canChange() ? raw('data-drag="agent" draggable="true"') : ''}>
-        <div class="top">${ifChange(html`<span class="grip" title="Drag to reorder or move to another group">${icon('grip')}</span>`)}${agentDot(a)}
+      <div class="card ${accent} ${st.sel.has(a.id) ? 'sel' : ''}" data-act="open-agent" data-id="${a.id}" ${arranging() ? raw('data-drag="agent" draggable="true"') : ''}>
+        <div class="top">${arranging() ? html`<span class="grip" title="Drag to reorder or move to another group">${icon('grip')}</span>` : ''}${agentDot(a)}
           <div style="min-width:0"><div class="name">${a.name}</div>${a.below_min
             ? html`<div class="os">agent ${a.core_version} · lowest allowed ${a.min_agent}</div><div class="os">upgrade only — no data shown</div>`
             : html`<div class="os">${osLabel(f)} · ${f.arch || '?'} · ${f.virt || ''}</div><div class="os">${ipLabel(f)}</div>`}</div>
@@ -821,9 +826,9 @@ function Dashboard() {
     const selectable = list.filter((a) => a.status === 'active' && !isLocal(a));
     const allSel = selectable.length && selectable.every((a) => st.sel.has(a.id));
     const head = showHead ? html`
-      <div class="ghead" data-gid="${g.id}" ${g.id && canChange() ? raw('data-drag="group" draggable="true"') : ''}>
+      <div class="ghead" data-gid="${g.id}" ${g.id && arranging() ? raw('data-drag="group" draggable="true"') : ''}>
         <button class="btn ghost sm iconbtn fold ${folded ? 'shut' : ''}" data-act="fold" data-gid="${g.id}" title="${folded ? 'Unfold' : 'Fold'}">${icon('chev')}</button>
-        ${g.id && canChange() ? html`<span class="grip" title="Drag to reorder groups">${icon('grip')}</span>` : ''}
+        ${g.id && arranging() ? html`<span class="grip" title="Drag to reorder groups">${icon('grip')}</span>` : ''}
         <span class="gname">${g.name}</span>
         <span class="gsum">${agents.length} device${agents.length === 1 ? '' : 's'}${upd ? html` · <b class="c-amber">${upd} update${upd === 1 ? '' : 's'}</b>` : ''}${sec ? html` · <b class="c-red">${sec} security</b>` : ''}${off ? html` · <b class="c-red">${off} offline</b>` : ''}</span>
         <span class="spacer"></span>
@@ -831,12 +836,18 @@ function Dashboard() {
       </div>` : '';
     const body = folded ? '' : list.length
       ? html`<div class="cards">${list.map(card)}</div>`
-      : html`<div class="gempty">${g.id ? (canChange() ? 'Empty group — drag devices here' : 'Empty group') : 'No ungrouped devices'}</div>`;
+      : html`<div class="gempty">${g.id ? (arranging() ? 'Empty group — drag devices here' : 'Empty group') : 'No ungrouped devices'}</div>`;
     return html`<section class="gsec" data-gid="${g.id}">${head}<div class="gbody" data-gid="${g.id}">${body}</div></section>`;
   }
   function render() {
     const d = st.data;
     if (!d || st.drag) return;
+    // Layout lock: locked by default; unlocked, cards and groups can be dragged.
+    const ab = $('#d-arrange');
+    if (ab) setHTML(ab, st.arrange
+      ? html`<button class="btn primary" data-act="arrange" title="Lock the layout again">${icon('unlock')} Lock layout</button>`
+      : html`<button class="btn" data-act="arrange" title="Unlock the layout to drag devices and groups into another order or group">${icon('lock')} Unlock layout</button>`);
+    setHTML($('#d-arrange-note'), arranging() ? html`<div class="notice blue">Layout unlocked: drag a device card to change its order or group, or a group header to reorder the groups. Lock the layout when done; it is locked again after a page reload.</div>` : '');
     const A = d.agents;
     const active = A.filter((a) => a.status !== 'pending');
     // Services OK: per agent its connection; per agentless device the
@@ -1003,9 +1014,9 @@ function Dashboard() {
     interval: 5000,
     mount(el) {
       el.innerHTML = r(html`
-        ${subTabs('dashboard', 'overview')}<div class="page-head"><div><h1>Overview</h1><div class="sub">Update status across your fleet</div></div><span class="spacer"></span>
-          ${ifChange(html`<button class="btn" data-act="check-all">${icon('refresh')} Check now</button>`)}</div>
-        <div id="d-notice"></div>
+        ${subTabs('dashboard', 'overview')}<div class="page-head"><div><h1>Overview</h1><div class="sub">What needs your attention, at a glance</div></div><span class="spacer"></span>
+          ${ifChange(html`<span id="d-arrange"></span><button class="btn" data-act="check-all">${icon('refresh')} Check now</button>`)}</div>
+        <div id="d-notice"></div><div id="d-arrange-note"></div>
         <div class="stats" id="d-stats"></div>
         <div class="toolbar"><input type="search" class="search" id="d-q" placeholder="Search name, OS, IP, group…"><div class="chips" id="d-chips"></div></div>
         <div id="d-cards"></div>
@@ -1020,6 +1031,7 @@ function Dashboard() {
     },
     async refresh() { const d = await GET('overview'); d.groups ||= []; if (!st.drag) { st.data = d; render(); } },
     acts: {
+      arrange: () => { st.arrange = !st.arrange; render(); },
       filter: (t) => { st.filter = t.dataset.f; render(); },
       fold: (t) => { const g = t.dataset.gid; st.folded.has(g) ? st.folded.delete(g) : st.folded.add(g); render(); },
       'open-agent': (t) => { location.hash = '#/device/' + t.dataset.id; },
@@ -1827,9 +1839,12 @@ function rttGraph(rtt) {
     <div class="rttg-unit">ms</div></div>`;
 }
 // Sub-probes of a service check (the master's probe.Steps), in order.
-const STEP_LABEL = { connect: 'Connect', greeting: 'Greeting', tls: 'TLS handshake', cert: 'Certificate valid', cert_days: 'Certificate days', http: 'HTTP status' };
+const STEP_LABEL = { connect: 'Connect', greeting: 'Greeting', tls: 'TLS handshake', cert: 'Certificate valid', cert_days: 'Certificate days', http: 'HTTP status',
+  query: 'Query', rcode: 'Server status', records: 'Records', expect: 'Expected value', time: 'Response time' };
 const stepLabel = (k) => STEP_LABEL[k] || k;
-const svcProto = (s) => `${s.method === 'https' ? 'HTTPS' : 'TCP'} ${s.port}`;
+const svcProto = (s) => `${(s.method || 'tcp').toUpperCase()} ${s.port}`;
+// What a service checks beyond its port: the HTTPS host and path, or the DNS question.
+const svcTarget = (s) => (s.method === 'https' ? ` · ${s.host}${s.path !== '/' ? s.path : ''}` : s.method === 'dns' ? ` · ${s.rtype} ${s.host}` : '');
 // How the last check went per sub-probe: ✓ passed, ✗ failed, – not reached.
 function svcSteps(s) {
   if (!s.steps || s.steps.length < 2 || !s.last_check || s.paused || s.reverse) return '';
@@ -1861,10 +1876,13 @@ function methodFields(m, vals, fixed = {}) {
   return m.fields.map((fd) => {
     const val = v(fd), dis = fixed[fd.key] !== undefined ? 'disabled' : '';
     if (fd.type === 'bool') return html`<label class="checkrow"><input type="checkbox" name="f_${fd.key}" ${val ? 'checked' : ''} ${dis}> ${fd.label}</label>${hint(fd)}`;
-    if (fd.type === 'days') {
+    if (fd.type === 'limit') {
       const on = vals ? +val > 0 : true, n = +val > 0 ? +val : fd.default;
       return html`<label class="checkrow"><input type="checkbox" name="f_${fd.key}_on" ${on ? 'checked' : ''}> ${fd.label}
-        <input type="number" name="f_${fd.key}" min="1" max="${fd.max}" value="${n}" style="width:76px;margin:0 6px"> days</label>${hint(fd)}`;
+        <input type="number" name="f_${fd.key}" min="1" max="${fd.max}" value="${n}" style="width:${fd.max > 9999 ? 90 : 76}px;margin:0 6px"> ${fd.unit || ''}</label>${hint(fd)}`;
+    }
+    if (fd.type === 'select') {
+      return html`<label class="field">${fd.label}<select name="f_${fd.key}">${fd.options.map((o) => html`<option value="${o}" ${o === val ? 'selected' : ''}>${o}</option>`)}</select></label>${hint(fd)}`;
     }
     return html`<label class="field">${fd.label}<input type="text" name="f_${fd.key}" value="${val}" placeholder="${fd.placeholder || ''}" maxlength="253" ${fd.key === 'host' ? 'required' : ''}></label>${hint(fd)}`;
   });
@@ -1874,7 +1892,7 @@ function methodValues(m, f) {
   for (const fd of m.fields) {
     const el = f[`f_${fd.key}`];
     if (fd.type === 'bool') out[fd.key] = el.checked;
-    else if (fd.type === 'days') out[fd.key] = f[`f_${fd.key}_on`].checked ? +el.value : 0;
+    else if (fd.type === 'limit') out[fd.key] = f[`f_${fd.key}_on`].checked ? +el.value : 0;
     else out[fd.key] = el.value.trim();
   }
   return out;
@@ -1900,6 +1918,7 @@ function serviceModal(dev, svc, presets, lim, methods, done) {
     const fixed = p && m.key === 'tcp' ? { greeting: p.greeting } : {};
     setHTML($('#svc-fields'), html`${methodFields(m, vals, fixed)}`);
   };
+  let lastPreset = s.preset || ''; // the service the Check list was last built for
   const fill = (f) => {
     const ping = f.preset.value === 'ping';
     for (const n of ['name', 'port', 'method', 'interval', 'retries', 'timeout']) f[n].disabled = ping;
@@ -1908,14 +1927,25 @@ function serviceModal(dev, svc, presets, lim, methods, done) {
     if (ping) return setHTML($('#svc-fields'), '');
     const p = presets.find((x) => x.key === f.preset.value);
     f.port.disabled = !!p;
+    // Only the check methods that suit the service (a custom port: all of
+    // them); another service starts with its own method.
+    const allowed = p ? methods.filter((m) => (p.methods || ['tcp']).includes(m.key)) : methods;
+    let cur = f.method.value;
+    if (f.preset.value !== lastPreset) cur = p ? (p.methods || ['tcp'])[0] : 'tcp';
+    if (!allowed.some((m) => m.key === cur)) cur = allowed[0].key;
+    lastPreset = f.preset.value;
+    setHTML(f.method, html`${allowed.map((m) => html`<option value="${m.key}">${m.name}</option>`)}`);
+    f.method.value = cur;
+    f.method.disabled = allowed.length < 2;
+    f.method.title = allowed.length < 2 ? `The only check that suits ${p.name}` : '';
     if (p) {
-      f.port.value = p.port; f.method.value = p.method || 'tcp';
+      f.port.value = p.port;
       if (!f.name.value || f.name.value === lastPresetName || f.name.value === 'Ping') f.name.value = p.name;
       lastPresetName = p.name;
     } else if (lastPresetName || f.name.value === 'Ping') {
       // From a default service to Custom: the admin fills in everything.
       if (f.name.value === lastPresetName || f.name.value === 'Ping') f.name.value = '';
-      f.port.value = ''; f.method.value = 'tcp'; lastPresetName = '';
+      f.port.value = ''; lastPresetName = '';
     }
     drawFields(f, f.preset.value === (s.preset || '') && f.method.value === (s.method || 'tcp'));
   };
@@ -1938,7 +1968,7 @@ function serviceModal(dev, svc, presets, lim, methods, done) {
         <label class="field" style="flex:1">Heartbeat interval (s)<input type="number" name="interval" min="${lim.interval_min}" max="${lim.interval_max}" value="${s.interval}" required></label>
         <label class="field" style="flex:1">Retries<input type="number" name="retries" min="0" max="${lim.retries_max}" value="${s.retries}" required></label>
         <label class="field" style="flex:1">Request timeout (s)<input type="number" name="timeout" min="${lim.timeout_min}" max="${lim.timeout_max}" value="${s.timeout}" required></label></div>
-      <div class="dim small">Checked every ${lim.interval_min}–${lim.interval_max} s (default ${lim.interval}). After a failed check up to ${lim.retries_max} retries follow, 30 s apart, before the service is marked down. The timeout limits each step: connecting, waiting for the greeting, the TLS handshake and the HTTP answer.</div>
+      <div class="dim small">Checked every ${lim.interval_min}–${lim.interval_max} s (default ${lim.interval}). After a failed check up to ${lim.retries_max} retries follow, 30 s apart, before the service is marked down. The timeout limits each step: connecting, waiting for the greeting, the TLS handshake, the HTTP answer and the DNS answer.</div>
       </div>
       <div class="actions"><button type="button" class="btn ghost" data-act="cancel">Cancel</button><button class="btn primary">${isNew ? html`${icon('plus')} Add service` : 'Save'}</button></div>
     </form>`, {
@@ -2117,12 +2147,12 @@ function servicesTable(st, L) {
     return html`<div class="panel scrollx"><table class="tbl svctbl"><thead><tr><th>Status</th><th>Service</th><th>Answer</th><th>Response</th><th>Checked</th><th>Last 24 hours</th><th>Check</th><th class="w1"></th></tr></thead>
       <tbody>${pingRow}${svcs.map((s) => html`<tr class="${s.paused ? 'dimrow' : ''}">
         <td class="nowrap">${svcState(s)}${s.checked && !s.paused ? html`<div class="dim small">${dur(now() - s.since)}</div>` : ''}</td>
-        <td class="nowrap"><b>${s.name}</b> ${s.reverse ? html`<span class="badge info xs" title="Reverse mode: reachable counts as down">reverse</span>` : ''}<div class="dim small mono">${svcProto(s)}${s.method === 'https' ? html` · ${s.host}${s.path !== '/' ? s.path : ''}` : ''}</div>${svcSteps(s)}</td>
-        <td class="small mono banner">${s.banner ? html`<span title="${s.banner}">${s.banner}</span>` : html`<span class="dim">${s.greeting || s.method === 'https' ? '—' : 'not waited for'}</span>`}</td>
+        <td class="nowrap"><b>${s.name}</b> ${s.reverse ? html`<span class="badge info xs" title="Reverse mode: reachable counts as down">reverse</span>` : ''}<div class="dim small mono">${svcProto(s)}${svcTarget(s)}</div>${svcSteps(s)}</td>
+        <td class="small mono banner">${s.banner ? html`<span title="${s.banner}">${s.banner}</span>` : html`<span class="dim">${s.greeting || s.method === 'https' || s.method === 'dns' ? '—' : 'not waited for'}</span>`}</td>
         <td class="small nowrap">${s.rtt_us && s.up && !s.reverse && !s.paused ? rttText(s.rtt_us) : html`<span class="dim">—</span>`}</td>
         <td class="small nowrap">${s.last_check ? when(s.last_check) : html`<span class="dim">waiting</span>`}${s.last_error && !s.paused && !(s.up && !s.fails) ? html`<div class="c-red small" style="font-weight:400">${s.last_error}</div>` : ''}</td>
         <td style="min-width:150px">${uptimeBar(s.hist, { word: 'check', compact: true })}<div class="dim small">${s.uptime >= 0 ? `${pctText(s.uptime)} up` : 'no checks yet'}</div></td>
-        <td class="dim small nowrap">every ${s.interval} s<br>${s.retries} retr${s.retries === 1 ? 'y' : 'ies'} · ${s.timeout} s${s.greeting ? html`<br>greeting` : ''}${s.method === 'https' ? html`<br>status ${s.codes}${s.cert_days ? ` · cert ≥ ${s.cert_days} d` : ''}` : ''}</td>
+        <td class="dim small nowrap">every ${s.interval} s<br>${s.retries} retr${s.retries === 1 ? 'y' : 'ies'} · ${s.timeout} s${s.greeting ? html`<br>greeting` : ''}${s.method === 'https' ? html`<br>status ${s.codes}${s.cert_days ? ` · cert ≥ ${s.cert_days} d` : ''}` : ''}${s.method === 'dns' && s.max_ms ? html`<br>answer ≤ ${s.max_ms} ms` : ''}</td>
         <td class="w1"><div class="row" style="flex-wrap:nowrap;gap:6px">
           <button class="btn ghost sm iconbtn" data-act="svc-check" data-sid="${s.id}" title="${L.probe ? 'Checked by a remote probe on its own schedule' : 'Check now'}" ${st.checking.has(s.id) || s.paused || L.probe ? 'disabled' : ''}>${st.checking.has(s.id) ? html`<span class="spin"></span>` : icon('refresh')}</button>
           ${ifChange(html`${pauseBtn(s.paused, 'svc-pause', `data-sid="${esc(s.id)}"`)}<button class="btn ghost sm iconbtn" data-act="svc-edit" data-sid="${s.id}" title="Edit">${icon('edit')}</button><button class="btn danger sm iconbtn" data-act="svc-delete" data-sid="${s.id}" title="Delete">${icon('trash')}</button>`)}</div></td>

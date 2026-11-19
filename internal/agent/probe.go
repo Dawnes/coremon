@@ -33,10 +33,10 @@ type probeFuncs struct {
 	svc  func(ctx context.Context, addr string, s probe.Service, timeout time.Duration) probe.Outcome
 }
 
-// svcSpec: the service check of a tcp or https check.
+// svcSpec: the service check of a tcp, https or dns check.
 func svcSpec(c proto.ProbeCheck) probe.Service {
 	return probe.Service{Method: c.Kind, Port: c.Port, Greeting: c.Greeting, Host: c.Host, Path: c.Path, Codes: c.Codes,
-		CertValid: c.CertValid, CertDays: c.CertDays}
+		CertValid: c.CertValid, CertDays: c.CertDays, RType: c.RType, Expect: c.Expect, MaxMs: c.MaxMs}
 }
 
 type pcheck struct {
@@ -81,7 +81,7 @@ func validProbeList(l proto.ProbeList) error {
 			return fmt.Errorf("invalid or duplicate check id %q", c.ID)
 		case net.ParseIP(c.Address) == nil:
 			return fmt.Errorf("check %s: %q is not an IP address", c.ID, c.Address)
-		case c.Kind != "ping" && c.Kind != probe.MethodTCP && c.Kind != probe.MethodHTTPS:
+		case c.Kind != "ping" && c.Kind != probe.MethodTCP && c.Kind != probe.MethodHTTPS && c.Kind != probe.MethodDNS:
 			return fmt.Errorf("check %s: unknown kind %q", c.ID, c.Kind)
 		case c.Interval < probeMinInterval || c.Interval > 86400:
 			return fmt.Errorf("check %s: invalid interval", c.ID)

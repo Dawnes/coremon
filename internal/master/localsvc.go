@@ -36,6 +36,13 @@ type Service struct {
 	CertValid bool   `json:"cert_valid,omitempty"`
 	CertDays  int    `json:"cert_days,omitempty"`
 
+	// dns: the name to resolve is Host; record type, expected value (an
+	// answer must contain it, "" = not checked), maximum response time in ms
+	// (0 = not checked). The query goes to the DNS server on the device.
+	RType  string `json:"rtype,omitempty"`
+	Expect string `json:"expect,omitempty"`
+	MaxMs  int    `json:"max_ms,omitempty"`
+
 	// Results: kept in checks.dat, not in state.dat.
 	Checked   bool       `json:"-"`
 	Up        bool       `json:"-"`
@@ -53,15 +60,15 @@ type Service struct {
 // spec: what the check needs.
 func (sv *Service) spec() probe.Service {
 	return probe.Service{Method: sv.Method, Port: sv.Port, Greeting: sv.Greeting, Host: sv.Host, Path: sv.Path, Codes: sv.Codes,
-		CertValid: sv.CertValid, CertDays: sv.CertDays}
+		CertValid: sv.CertValid, CertDays: sv.CertDays, RType: sv.RType, Expect: sv.Expect, MaxMs: sv.MaxMs}
 }
 
 // kind: the check method's name in a remote probe's list.
 func (sv *Service) kind() string {
-	if sv.Method == probe.MethodHTTPS {
-		return probe.MethodHTTPS
+	if sv.Method == "" {
+		return probe.MethodTCP
 	}
-	return probe.MethodTCP
+	return sv.Method
 }
 
 const (
@@ -87,6 +94,39 @@ type svcPreset struct {
 	Group     string `json:"group"`
 	Method    string `json:"method,omitempty"`     // the check method it starts with ("" = tcp)
 	CertValid bool   `json:"cert_valid,omitempty"` // https: the certificate must be valid
+	// Methods: the check methods that suit it, the default first (set by init).
+	Methods []string `json:"methods"`
+}
+
+// svcAlso: further check methods that suit a default service, after its own.
+var svcAlso = map[string][]string{
+	"https":   {probe.MethodTCP},
+	"proxmox": {probe.MethodTCP},
+	"dns":     {probe.MethodTCP},
+}
+
+func init() {
+	for i := range svcPresets {
+		p := &svcPresets[i]
+		own := p.Method
+		if own == "" {
+			own = probe.MethodTCP
+		}
+		p.Methods = append([]string{own}, svcAlso[p.Key]...)
+	}
+}
+
+// allows: the check method suits this default service.
+func (p *svcPreset) allows(method string) bool {
+	if method == "" {
+		method = probe.MethodTCP
+	}
+	for _, m := range p.Methods {
+		if m == method {
+			return true
+		}
+	}
+	return false
 }
 
 // The default services: their port and whether they greet first are known.
@@ -115,22 +155,25 @@ var svcPresets = []svcPreset{
 	{Key: "postgresql", Name: "PostgreSQL", Port: 5432, Group: "Databases"},
 	{Key: "redis", Name: "Redis", Port: 6379, Group: "Databases"},
 	{Key: "mongodb", Name: "MongoDB", Port: 27017, Group: "Databases"},
-	{Key: "dns", Name: "DNS", Port: 53, Group: "Other"},
+	{Key: "dns", Name: "DNS", Port: 53, Group: "Other", Method: probe.MethodDNS},
 	{Key: "mqtt", Name: "MQTT", Port: 1883, Group: "Other"},
 	{Key: "ipp", Name: "Printer IPP", Port: 631, Group: "Other"},
 	{Key: "jetdirect", Name: "Printer raw", Port: 9100, Group: "Other"},
 }
 
 // svcField: one setting of a check method, as the service form shows it.
-// Types: bool (tickbox), text, days (tickbox with a number; 0 = off).
+// Types: bool (tickbox), text, select (one of Options), limit (tickbox
+// with a number in Unit; 0 = off).
 type svcField struct {
-	Key         string `json:"key"`
-	Label       string `json:"label"`
-	Type        string `json:"type"`
-	Hint        string `json:"hint,omitempty"`
-	Placeholder string `json:"placeholder,omitempty"`
-	Default     any    `json:"default,omitempty"`
-	Max         int    `json:"max,omitempty"`
+	Key         string   `json:"key"`
+	Label       string   `json:"label"`
+	Type        string   `json:"type"`
+	Hint        string   `json:"hint,omitempty"`
+	Placeholder string   `json:"placeholder,omitempty"`
+	Default     any      `json:"default,omitempty"`
+	Max         int      `json:"max,omitempty"`
+	Unit        string   `json:"unit,omitempty"`
+	Options     []string `json:"options,omitempty"`
 }
 
 // svcMethod: a check method and its settings. Its sub-probes come from
@@ -160,8 +203,18 @@ var svcMethods = []svcMethod{
 				Hint: "For example 200-399 or 200,204,301-302. Redirects are not followed."},
 			{Key: "cert_valid", Label: "Certificate must be valid", Type: "bool", Default: true,
 				Hint: "Trusted by the standard roots of the system that checks, valid for the hostname and not expired. Untick for a self-signed certificate."},
-			{Key: "cert_days", Label: "Certificate valid for at least", Type: "days", Default: probe.DefaultCertDays, Max: probe.MaxCertDays,
+			{Key: "cert_days", Label: "Certificate valid for at least", Type: "limit", Unit: "days", Default: probe.DefaultCertDays, Max: probe.MaxCertDays,
 				Hint: "Fails when the certificate expires sooner, also when it is not trusted."},
+		}},
+	{Key: probe.MethodDNS, Name: "DNS query",
+		Fields: []svcField{
+			{Key: "host", Label: "Name to resolve", Type: "text", Placeholder: "example.com",
+				Hint: "Asked of the DNS server on this device itself (UDP, and TCP when the answer is too long). For example example.com or _dmarc.example.com."},
+			{Key: "rtype", Label: "Record type", Type: "select", Default: probe.DefaultDNSType, Options: probe.DNSTypes},
+			{Key: "expect", Label: "Expected value (optional)", Type: "text", Placeholder: "e.g. 192.0.2.10 or mail.example.com",
+				Hint: "Fails when no answer contains this text (case does not matter). Empty: any answer is fine."},
+			{Key: "max_ms", Label: "Answer within", Type: "limit", Unit: "ms", Default: probe.DefaultMaxMs, Max: probe.MaxMaxMs,
+				Hint: "Fails when the answer takes longer. The request timeout below still ends a check that gets no answer."},
 		}},
 }
 
@@ -197,6 +250,9 @@ type serviceView struct {
 	Codes     string     `json:"codes,omitempty"`
 	CertValid bool       `json:"cert_valid"`
 	CertDays  int        `json:"cert_days"`
+	RType     string     `json:"rtype,omitempty"`
+	Expect    string     `json:"expect,omitempty"`
+	MaxMs     int        `json:"max_ms"`
 	Steps     []string   `json:"steps"`            // the sub-probes, in order
 	Failed    string     `json:"failed,omitempty"` // the sub-probe of the last failed check
 	Interval  int        `json:"interval"`
@@ -220,7 +276,7 @@ type serviceView struct {
 func (s *Server) serviceView(sv *Service, now int64, full bool) serviceView {
 	h, up := recentHist(sv.Hist, now)
 	v := serviceView{ID: sv.ID, Name: sv.Name, Preset: sv.Preset, Method: sv.kind(), Port: sv.Port, Greeting: sv.Greeting,
-		Host: sv.Host, Path: sv.Path, Codes: sv.Codes, CertValid: sv.CertValid, CertDays: sv.CertDays, Steps: probe.Steps(sv.spec()), Failed: sv.Failed,
+		Host: sv.Host, Path: sv.Path, Codes: sv.Codes, CertValid: sv.CertValid, CertDays: sv.CertDays, RType: sv.RType, Expect: sv.Expect, MaxMs: sv.MaxMs, Steps: probe.Steps(sv.spec()), Failed: sv.Failed,
 		Interval: sv.Interval, Retries: sv.Retries, Timeout: sv.Timeout, Reverse: sv.Reverse, Paused: sv.Paused, Checked: sv.Checked, Up: sv.Up, Since: sv.Since,
 		LastCheck: sv.LastCheck, LastOK: sv.LastOK, RTTUs: sv.RTTUs, Fails: sv.Fails, LastError: sv.LastError, Banner: sv.Banner, Uptime: up}
 	if full {
@@ -267,6 +323,9 @@ func (s *Server) storeService(sv *Service, rtt time.Duration, banner string, rea
 		}
 	} else {
 		sv.Fails++
+		if banner != "" {
+			sv.Banner = banner // what was answered, e.g. the records without the expected value
+		}
 		if reached {
 			sv.RTTUs, sv.LastError = rtt.Microseconds(), "reachable, but reverse mode expects it not to be"
 		} else {
@@ -371,10 +430,13 @@ type serviceReq struct {
 	Codes     *string `json:"codes"`
 	CertValid *bool   `json:"cert_valid"`
 	CertDays  *int    `json:"cert_days"`
+	RType     *string `json:"rtype"`
+	Expect    *string `json:"expect"`
+	MaxMs     *int    `json:"max_ms"`
 }
 
 // setMethod switches sv to a check method; a method it did not have yet
-// starts with its default settings.
+// starts with its default settings (and drops those of the old one).
 func (sv *Service) setMethod(m string, certValid bool) {
 	if m == probe.MethodTCP {
 		m = ""
@@ -383,11 +445,14 @@ func (sv *Service) setMethod(m string, certValid bool) {
 		return
 	}
 	sv.Method = m
-	if m == probe.MethodHTTPS {
+	sv.Host, sv.Path, sv.Codes, sv.CertValid, sv.CertDays, sv.RType, sv.Expect, sv.MaxMs = "", "", "", false, 0, "", "", 0
+	switch m {
+	case probe.MethodHTTPS:
 		sv.Greeting, sv.Reverse = false, false
 		sv.Path, sv.Codes, sv.CertValid, sv.CertDays = "/", probe.DefaultCodes, certValid, probe.DefaultCertDays
-	} else {
-		sv.Host, sv.Path, sv.Codes, sv.CertValid, sv.CertDays = "", "", "", false, 0
+	case probe.MethodDNS:
+		sv.Greeting, sv.Reverse = false, false
+		sv.RType, sv.MaxMs = probe.DefaultDNSType, probe.DefaultMaxMs
 	}
 }
 
@@ -410,10 +475,13 @@ func (req *serviceReq) apply(sv *Service) error {
 		}
 	}
 	if req.Method != nil {
-		if m := *req.Method; m != "" && m != probe.MethodTCP && m != probe.MethodHTTPS {
+		if m := *req.Method; m != "" && m != probe.MethodTCP && m != probe.MethodHTTPS && m != probe.MethodDNS {
 			return errors.New("unknown check method")
 		}
 		sv.setMethod(*req.Method, true)
+	}
+	if p := presetByKey(sv.Preset); p != nil && !p.allows(sv.Method) {
+		return fmt.Errorf("%s cannot be checked with %s", p.Name, strings.ToUpper(sv.kind()))
 	}
 	if req.Name != nil {
 		n, err := checkName("service name", *req.Name, maxServiceName)
@@ -454,6 +522,21 @@ func (req *serviceReq) apply(sv *Service) error {
 			sv.CertDays = *req.CertDays
 		}
 	}
+	if sv.Method == probe.MethodDNS {
+		sv.Greeting = false // a DNS check does not wait for a greeting
+		if req.Host != nil {
+			sv.Host = strings.ToLower(strings.TrimSpace(*req.Host))
+		}
+		if req.RType != nil {
+			sv.RType = strings.ToUpper(strings.TrimSpace(*req.RType))
+		}
+		if req.Expect != nil {
+			sv.Expect = strings.TrimSpace(*req.Expect)
+		}
+		if req.MaxMs != nil {
+			sv.MaxMs = *req.MaxMs
+		}
+	}
 	if err := probe.Validate(sv.spec()); err != nil {
 		return err
 	}
@@ -467,7 +550,7 @@ func (req *serviceReq) apply(sv *Service) error {
 		sv.Timeout = *req.Timeout
 	}
 	if req.Reverse != nil {
-		sv.Reverse = *req.Reverse && sv.Method != probe.MethodHTTPS // reverse mode is for TCP only
+		sv.Reverse = *req.Reverse && sv.Method == "" // reverse mode is for TCP only
 	}
 	switch {
 	case sv.Interval < minSvcInterval || sv.Interval > maxSvcInterval:
@@ -489,6 +572,15 @@ func (sv *Service) describe() string {
 		}
 		if sv.CertDays > 0 {
 			d += fmt.Sprintf(", certificate valid ≥ %d days", sv.CertDays)
+		}
+	}
+	if sv.Method == probe.MethodDNS {
+		d += fmt.Sprintf(", DNS %s %s", sv.RType, sv.Host)
+		if sv.Expect != "" {
+			d += fmt.Sprintf(", expects %q", sv.Expect)
+		}
+		if sv.MaxMs > 0 {
+			d += fmt.Sprintf(", answer within %d ms", sv.MaxMs)
 		}
 	}
 	if sv.Greeting {

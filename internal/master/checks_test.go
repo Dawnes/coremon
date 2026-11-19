@@ -15,6 +15,69 @@ import (
 	"coremon/internal/proto"
 )
 
+// A default service only takes the check methods that suit it; a custom port takes any.
+func TestPresetMethods(t *testing.T) {
+	pub, _ := keys(t)
+	s := testServer(t, pub, "http://127.0.0.1:1/none", "0.3.0")
+	s.svcCheck = func(ctx context.Context, addr string, spec probe.Service, timeout time.Duration) probe.Outcome {
+		return probe.Outcome{RTT: time.Millisecond}
+	}
+	srv := httptest.NewTLSServer(s.routes())
+	defer srv.Close()
+	pw, _ := os.ReadFile(filepath.Join(s.cfg.DataDir, "initial-password.txt"))
+	c := newUIClient(t, srv.URL)
+	c.do("POST", "/api/ui/login", `{"username":"admin","password":"`+strings.TrimSpace(string(pw))+`"}`)
+	_, body := c.do("POST", "/api/ui/locals", `{"name":"fw","address":"10.0.0.1"}`)
+	var dv agentView
+	json.Unmarshal([]byte(body), &dv)
+	base := "/api/ui/locals/" + dv.ID + "/services"
+	for body, want := range map[string]int{
+		`{"preset":"ssh","method":"https","host":"fw.example.com"}`:          400,
+		`{"preset":"smtp","method":"https","host":"fw.example.com"}`:         400,
+		`{"preset":"proxmox","method":"tcp"}`:                                200,
+		`{"preset":"https","host":"fw.example.com"}`:                         200,
+		`{"preset":"","name":"alt","port":8443,"method":"https","host":"x"}`: 200,
+		`{"preset":"dns"}`:                                 400, // no name to resolve
+		`{"preset":"dns","host":"bad name"}`:               400,
+		`{"preset":"dns","host":"x.com","rtype":"SOA"}`:    400,
+		`{"preset":"dns","method":"tcp","name":"DNS tcp"}`: 200,
+		`{"preset":"ssh","method":"dns","host":"x.com"}`:   400,
+	} {
+		if code, b := c.do("POST", base, body); code != want {
+			t.Errorf("%s: %d %s, want %d", body, code, b, want)
+		}
+	}
+	if p := presetByKey("https"); len(p.Methods) != 2 || p.Methods[0] != probe.MethodHTTPS {
+		t.Errorf("https methods: %v", p.Methods)
+	}
+	if p := presetByKey("ssh"); len(p.Methods) != 1 || p.Methods[0] != probe.MethodTCP {
+		t.Errorf("ssh methods: %v", p.Methods)
+	}
+	// DNS: the DNS query by default (type A, answer within 3 s); the fields reach the check and a probe's list.
+	if code, b := c.do("POST", base, `{"preset":"dns","name":"Resolver","host":"Example.COM","expect":" 192.0.2.1 "}`); code != 200 {
+		t.Fatalf("dns: %d %s", code, b)
+	}
+	var sv *Service
+	for _, x := range s.st.st.Locals[dv.ID].Services {
+		if x.Name == "Resolver" {
+			sv = x
+		}
+	}
+	if sv == nil || sv.kind() != probe.MethodDNS || sv.Host != "example.com" || sv.RType != "A" || sv.Expect != "192.0.2.1" || sv.MaxMs != 3000 || sv.Reverse {
+		t.Fatalf("dns service: %+v", sv)
+	}
+	if sp := sv.spec(); sp.RType != "A" || sp.MaxMs != 3000 || strings.Join(probe.Steps(sp), ",") != "query,rcode,records,expect,time" {
+		t.Errorf("dns spec: %+v", sp)
+	}
+	sid := sv.ID
+	if code, b := c.do("POST", base+"/"+sid, `{"rtype":"mx","max_ms":0,"expect":""}`); code != 200 || sv.RType != "MX" || sv.MaxMs != 0 || sv.Expect != "" {
+		t.Errorf("dns edit: %d %s %+v", code, b, sv)
+	}
+	if code, _ := c.do("POST", base+"/"+sid, `{"method":"tcp"}`); code != 200 || sv.RType != "" || sv.Host != "" || sv.kind() != probe.MethodTCP {
+		t.Errorf("dns to tcp: %+v", sv)
+	}
+}
+
 // An agent device can have services too: checked from outside by the
 // master or by another agent, on one of its own addresses or another one.
 func TestAgentDeviceServices(t *testing.T) {

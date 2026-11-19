@@ -103,7 +103,7 @@ const (
 
 type ProbeCheck struct {
 	ID       string `json:"id"`   // the master's id of the check
-	Kind     string `json:"kind"` // "ping", "tcp" or "https" (agent 0.3.10 and later)
+	Kind     string `json:"kind"` // "ping", "tcp", "https" (agent 0.3.10 and later) or "dns" (0.3.11 and later)
 	Address  string `json:"address"`
 	Port     int    `json:"port,omitempty"`
 	Greeting bool   `json:"greeting,omitempty"`
@@ -115,6 +115,11 @@ type ProbeCheck struct {
 	Codes     string `json:"codes,omitempty"`
 	CertValid bool   `json:"cert_valid,omitempty"`
 	CertDays  int    `json:"cert_days,omitempty"`
+	// dns: the name to resolve is Host; record type, expected value (an
+	// answer must contain it) and maximum response time in ms.
+	RType     string `json:"rtype,omitempty"`
+	Expect    string `json:"expect,omitempty"`
+	MaxMs     int    `json:"max_ms,omitempty"`
 	Interval  int    `json:"interval"`             // seconds
 	Timeout   int    `json:"timeout"`              // seconds
 	Retries   int    `json:"retries,omitempty"`    // tcp: failed checks 30 s apart before down

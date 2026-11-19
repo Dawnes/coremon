@@ -62,7 +62,8 @@ func (s *Server) probeList(agentID string) proto.ProbeList {
 			if !sv.Paused {
 				l.Checks = append(l.Checks, proto.ProbeCheck{ID: sv.ID, Kind: sv.kind(), Address: d.Address, Port: sv.Port,
 					Greeting: sv.Greeting, Reverse: sv.Reverse, Interval: sv.Interval, Timeout: sv.Timeout, Retries: sv.Retries,
-					Host: sv.Host, Path: sv.Path, Codes: sv.Codes, CertValid: sv.CertValid, CertDays: sv.CertDays})
+					Host: sv.Host, Path: sv.Path, Codes: sv.Codes, CertValid: sv.CertValid, CertDays: sv.CertDays,
+					RType: sv.RType, Expect: sv.Expect, MaxMs: sv.MaxMs})
 			}
 		}
 	}

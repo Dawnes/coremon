@@ -149,3 +149,19 @@ func TestProbeListHTTPS(t *testing.T) {
 		t.Error("no retry 30 s later")
 	}
 }
+
+func TestProbeListDNS(t *testing.T) {
+	p := newProber()
+	ok := proto.ProbeCheck{ID: "s_1", Kind: "dns", Address: "10.0.0.5", Port: 53, Host: "_dmarc.example.com", RType: "TXT", Expect: "v=DMARC1", MaxMs: 3000, Interval: 60, Timeout: 5}
+	if err := p.setList(proto.ProbeList{Version: "v1", Checks: []proto.ProbeCheck{ok}}, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	if s := svcSpec(ok); s.Method != "dns" || s.RType != "TXT" || s.Expect != "v=DMARC1" || s.MaxMs != 3000 || s.Host != "_dmarc.example.com" {
+		t.Errorf("spec: %+v", s)
+	}
+	bad := ok
+	bad.RType = "SOA"
+	if p.setList(proto.ProbeList{Version: "v2", Checks: []proto.ProbeCheck{bad}}, time.Now()) == nil {
+		t.Error("dns check with an unknown record type accepted")
+	}
+}

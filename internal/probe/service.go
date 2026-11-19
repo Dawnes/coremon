@@ -7,8 +7,12 @@ package probe
 //   - https: connect, TLS handshake (SNI = hostname), (optional) certificate
 //            valid, (optional) certificate valid for at least N days, HTTP
 //            status (HEAD, and GET when HEAD fails)
+//   - dns:   query the DNS server on the device (UDP, TCP when truncated),
+//            server status, records of the asked type, (optional) expected
+//            value, (optional) response time
 // The hostname is used for SNI and the Host header only: the connection
-// always goes to the device's own address, nothing is looked up in DNS.
+// always goes to the device's own address, nothing is looked up in DNS
+// (a DNS check asks the device's own DNS server).
 
 import (
 	"context"
@@ -23,6 +27,7 @@ import (
 const (
 	MethodTCP   = "tcp"
 	MethodHTTPS = "https"
+	MethodDNS   = "dns"
 
 	StepConnect  = "connect"
 	StepGreeting = "greeting"
@@ -30,24 +35,39 @@ const (
 	StepCert     = "cert"
 	StepCertDays = "cert_days"
 	StepHTTP     = "http"
+	StepQuery    = "query"   // dns: an answer came back
+	StepRcode    = "rcode"   // dns: the server answered "no error"
+	StepRecords  = "records" // dns: at least one record of the asked type
+	StepExpect   = "expect"  // dns: an answer contains the expected value
+	StepTime     = "time"    // dns: answered within the maximum time
 
 	DefaultCodes    = "200-399"
 	DefaultCertDays = 14
 	MaxCertDays     = 365
+	DefaultDNSType  = "A"
+	DefaultMaxMs    = 3000
+	MaxMaxMs        = 60000
 	maxCodeRanges   = 20
 	maxPath         = 200
+	maxExpect       = 200
 )
+
+// DNSTypes: the record types a DNS check can ask for.
+var DNSTypes = []string{"A", "AAAA", "MX", "TXT", "CNAME", "NS"}
 
 // Service is what a service check needs.
 type Service struct {
 	Method    string // "" means tcp
 	Port      int
 	Greeting  bool
-	Host      string
+	Host      string // https: the hostname; dns: the name to resolve
 	Path      string
 	Codes     string
 	CertValid bool
-	CertDays  int // 0: not checked
+	CertDays  int    // 0: not checked
+	RType     string // dns: record type
+	Expect    string // dns: an answer must contain this ("" = not checked)
+	MaxMs     int    // dns: maximum response time in ms (0 = not checked)
 }
 
 // Outcome of one check.
@@ -60,6 +80,16 @@ type Outcome struct {
 
 // Steps: the sub-probes a service runs, in order.
 func Steps(s Service) []string {
+	if s.Method == MethodDNS {
+		st := []string{StepQuery, StepRcode, StepRecords}
+		if s.Expect != "" {
+			st = append(st, StepExpect)
+		}
+		if s.MaxMs > 0 {
+			st = append(st, StepTime)
+		}
+		return st
+	}
 	if s.Method == MethodHTTPS {
 		st := []string{StepConnect, StepTLS}
 		if s.CertValid {
@@ -79,7 +109,8 @@ func Steps(s Service) []string {
 // KnownStep: s is a sub-probe name (for results that come from an agent).
 func KnownStep(s string) bool {
 	switch s {
-	case StepConnect, StepGreeting, StepTLS, StepCert, StepCertDays, StepHTTP:
+	case StepConnect, StepGreeting, StepTLS, StepCert, StepCertDays, StepHTTP,
+		StepQuery, StepRcode, StepRecords, StepExpect, StepTime:
 		return true
 	}
 	return false
@@ -93,6 +124,8 @@ func Validate(s Service) error {
 	switch s.Method {
 	case "", MethodTCP:
 		return nil
+	case MethodDNS:
+		return validDNS(s)
 	case MethodHTTPS:
 	default:
 		return fmt.Errorf("unknown check method %q", s.Method)
@@ -208,8 +241,11 @@ func codeOK(rs [][2]int, code int) bool {
 
 // Check runs one service check against addr.
 func Check(ctx context.Context, addr string, s Service, timeout time.Duration) Outcome {
-	if s.Method == MethodHTTPS {
+	switch s.Method {
+	case MethodHTTPS:
 		return checkHTTPS(ctx, addr, s, timeout)
+	case MethodDNS:
+		return checkDNS(ctx, addr, s, timeout)
 	}
 	return checkTCP(ctx, addr, s, timeout)
 }

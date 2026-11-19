@@ -25,9 +25,11 @@ as **agentless** devices: the master itself pings them and checks their services
   and actively exploited ones highlighted.
 * **Agentless devices**: devices without an agent, checked by the master with a
   ping and per-service checks (heartbeat, retries, timeout): TCP (optionally
-  waiting for a greeting, or in reverse mode) or HTTPS (hostname, path, accepted
-  status codes, valid certificate, certificate valid for at least N days). Each
-  check shows which step failed. With a 24-hour history and a graph of the
+  waiting for a greeting, or in reverse mode), HTTPS (hostname, path, accepted
+  status codes, valid certificate, certificate valid for at least N days) or a
+  DNS query to the device's own DNS server (A, AAAA, MX, TXT, CNAME or NS, an
+  optional expected value and a maximum response time). Each check shows which
+  step failed. With a 24-hour history and a graph of the
   ping's round-trip time. For a network
   the master cannot reach, an agent there can do the checks instead ("Checked by").
 * **Services of agent devices**: the same service checks (and optionally a ping)
