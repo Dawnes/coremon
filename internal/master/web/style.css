@@ -373,6 +373,11 @@ ul.plainlist { margin: 0; padding-left: 18px; line-height: 1.8; }
 .mapbox.ok rect { stroke: rgba(74, 222, 128, 0.7); } .mapbox.ok circle { fill: var(--green); }
 .mapbox.bad rect { stroke: rgba(248, 113, 113, 0.85); } .mapbox.bad circle { fill: var(--red); }
 .mapbox.unk rect { stroke: rgba(148, 163, 184, 0.55); } .mapbox.unk circle { fill: #94a3b8; }
+.mapbox text.ip { fill: var(--dim); font-family: var(--mono); font-size: 10.5px; font-weight: 400; }
+/* A device that is down: its dot flashes red and yellow, like on the cards. */
+.mapbox.down circle { animation: flash-map 1s steps(1, end) infinite; }
+@keyframes flash-map { 50% { fill: var(--amber); } }
+@media (prefers-reduced-motion: reduce) { .mapbox.down circle { animation: none; } }
 .c-red { color: var(--red); font-weight: 600; }
 .when { cursor: help; }
 .tag svg { width: 12px; height: 12px; vertical-align: -2px; }

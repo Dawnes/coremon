@@ -1172,10 +1172,11 @@ function DeviceList() {
 // Colours refresh in place; the drawing is only rebuilt when the tree changes.
 function MapPage() {
   lastDashSub = 'map';
-  const W = 176, H = 34, ROW = 46, GAP = 96, PAD = 8;
+  const W = 176, H = 40, ROW = 52, GAP = 96, PAD = 8;
   const st = { key: '', data: null };
   const byText = (x, y) => String(x).localeCompare(String(y), undefined, { numeric: true, sensitivity: 'base' });
-  // Monitoring colour: ok (green), bad (red) or unk (grey), with a short status.
+  // Monitoring colour: ok (green), bad (red) or unk (grey), with a short
+  // status; a third value marks a device that is down itself (its dot flashes).
   function health(a) {
     if (!a) return ['ok', 'the master'];
     if (a.maint) return ['unk', maintText(a.maint)];
@@ -1183,12 +1184,12 @@ function MapPage() {
       const L = a.local, p = probeOut(a);
       if (p) return ['unk', unknownText(p)];
       if (!L.checked) return ['unk', L.fails ? 'no answer yet' : 'waiting for the first check'];
-      if (!L.up) return ['bad', `down for ${dur(now() - L.since)}`];
+      if (!L.up) return ['bad', `down for ${dur(now() - L.since)}`, true];
       if (L.svc_down) return ['bad', `${L.svc_down} of ${L.svc_total} service${L.svc_total === 1 ? '' : 's'} down`];
       return ['ok', `up for ${dur(now() - L.since)}`];
     }
     if (a.status === 'pending') return ['unk', 'pending approval'];
-    if (!a.online) return ['bad', `offline since ${fmtDate(a.last_seen)}`];
+    if (!a.online) return ['bad', `offline since ${fmtDate(a.last_seen)}`, true];
     const x = agentChecksDown(a);
     if (x) return ['bad', `online · ${checksDownText(x)}${checksFailText(x) ? ` · ${checksFailText(x)}` : ''}`];
     return ['ok', a.status === 'report_only' ? 'online (report only)' : 'online'];
@@ -1224,40 +1225,44 @@ function MapPage() {
     const depth = Math.max(...all.map((n) => n.depth));
     return { all, w: PAD * 2 + (depth + 1) * W + depth * GAP, h: PAD * 2 + Math.max(1, row) * ROW - (ROW - H) };
   }
-  // Right-angled connectors: one trunk per parent, a branch to each child.
+  // Curved connectors: an S-curve from the parent's right edge to each child.
   function lines(all) {
     const out = [];
     for (const n of all) {
-      if (!n.kids.length) continue;
-      const tx = n.x + W + GAP / 2, py = n.y + H / 2;
-      const ys = n.kids.map((k) => k.y + H / 2);
-      const remote = n.kids.some((k) => k.remote);
-      out.push(html`<path class="mapline ${remote ? 'remote' : ''}" d="M${n.x + W} ${py} H${tx} M${tx} ${Math.min(py, ...ys)} V${Math.max(py, ...ys)}"/>`);
-      for (const k of n.kids) out.push(html`<path class="mapline ${k.remote ? 'remote' : ''}" d="M${tx} ${k.y + H / 2} H${k.x}"/>`);
+      const x1 = n.x + W, y1 = n.y + H / 2;
+      for (const k of n.kids) {
+        const x2 = k.x, y2 = k.y + H / 2, mx = (x1 + x2) / 2;
+        out.push(html`<path class="mapline ${k.remote ? 'remote' : ''}" d="M${x1} ${y1} C${mx} ${y1} ${mx} ${y2} ${x2} ${y2}"/>`);
+      }
     }
     return out;
   }
+  // The address shown under an agent device's name: its first IPv4 (not loopback).
+  const mapIP = (a) => { const ips = a?.facts?.ips || []; return ips.find((ip) => ip.includes('.') && !ip.startsWith('127.')) || ips.find((ip) => ip !== '::1') || ''; };
   function box(n) {
-    const a = n.a, [cls, why] = health(a), name = a ? a.name : 'Master';
+    const a = n.a, [cls, why, down] = health(a), name = a ? a.name : 'Master';
     const tip = `${name}: ${why}${n.remote ? ` · checked by ${a.local.probe.name}` : ''}`;
-    return html`<g class="mapbox ${cls} ${a ? 'click' : ''}" id="map-${n.id}" ${a ? raw(`data-act="open" data-id="${esc(a.id)}"`) : ''} transform="translate(${n.x} ${n.y})">
+    const ip = a && !isLocal(a) ? mapIP(a) : '';
+    return html`<g class="mapbox ${cls} ${down ? 'down' : ''} ${a ? 'click' : ''}" id="map-${n.id}" ${a ? raw(`data-act="open" data-id="${esc(a.id)}"`) : ''} transform="translate(${n.x} ${n.y})">
       <title>${tip}</title><rect width="${W}" height="${H}" rx="8"/><circle cx="16" cy="${H / 2}" r="5"/>
-      <text x="30" y="${H / 2 + 4.5}">${clipText(name, 20)}</text></g>`;
+      ${ip ? html`<text x="30" y="${H / 2 - 2}">${clipText(name, 20)}</text><text class="ip" x="30" y="${H / 2 + 11}">${ip}</text>`
+        : html`<text x="30" y="${H / 2 + 4.5}">${clipText(name, 20)}</text>`}</g>`;
   }
   function render() {
     const d = st.data;
     if (!d) return;
     const root = tree(d);
     const { all, w, h } = place(root);
-    const key = all.map((n) => `${n.id}@${n.x},${n.y}${n.remote ? 'r' : ''}`).join('|') + '|' + all.map((n) => (n.a ? n.a.name : '')).join(',');
+    const key = all.map((n) => `${n.id}@${n.x},${n.y}${n.remote ? 'r' : ''}`).join('|') + '|' + all.map((n) => (n.a ? n.a.name + (isLocal(n.a) ? '' : '/' + mapIP(n.a)) : '')).join(',');
     if (key === st.key) {
       // Same tree: only colours and status texts change.
       for (const n of all) {
         const g = document.getElementById('map-' + n.id);
         if (!g) continue;
-        const [cls, why] = health(n.a);
-        g.classList.remove('ok', 'bad', 'unk');
+        const [cls, why, down] = health(n.a);
+        g.classList.remove('ok', 'bad', 'unk', 'down');
         g.classList.add(cls);
+        if (down) g.classList.add('down');
         const t = g.querySelector('title');
         if (t) t.textContent = `${n.a ? n.a.name : 'Master'}: ${why}${n.remote ? ` · checked by ${n.a.local.probe.name}` : ''}`;
       }
@@ -1272,7 +1277,7 @@ function MapPage() {
   return {
     interval: 5000,
     mount(el) {
-      el.innerHTML = r(html`${subTabs('dashboard', 'map')}<div class="page-head"><div><h1>Map</h1><div class="sub">Every device and who monitors it</div></div></div><div id="map"></div>`);
+      el.innerHTML = r(html`${subTabs('dashboard', 'map')}<div class="page-head"><div><h1>Map</h1></div></div><div id="map"></div>`);
     },
     async refresh() { const d = await GET('overview'); d.groups ||= []; st.data = d; render(); },
     acts: { open: (t) => { location.hash = '#/device/' + t.dataset.id; } },
