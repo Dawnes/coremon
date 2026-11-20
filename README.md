@@ -35,6 +35,11 @@ as **agentless** devices: the master itself pings them and checks their services
 * **Services of agent devices**: the same service checks (and optionally a ping)
   on a device with an agent, on its Services tab: checked from outside by the
   master or by another agent, on one of its own addresses or another one.
+* **Disk, memory and load**: optional services of an agent device, measured by
+  its own agent every minute: disk space per mount point (% used or GB free),
+  memory in use and the 1-minute load per core, each down after a set number of
+  readings in a row past its limit. Each one has a 24-hour graph on the
+  device's System tab.
 * **Network dependencies**: each device can be **connected via** another device,
   such as a switch or the host of a VM. When that device is down or in
   maintenance, the devices behind it show as unreachable instead of down: the
@@ -84,7 +89,7 @@ and OSV.dev, NVD, CISA and FIRST (vulnerability data).
 3. **Approve** the new device in the website and pick its group.
 
 For a device without an agent choose **Agentless** instead and enter its name and IP
-address. Settings → Agentless sets how often it is pinged; its services are added
+address. Settings → General → Ping sets how often it is pinged; its services are added
 on the device's Services tab. **Checked by** chooses who checks it: the master, or
 an agent (0.3.9 or later) on another system that can reach it. Only agents an admin
 switched on with **Act as remote probe** (Remote probe section of the agent's device
@@ -94,6 +99,11 @@ checked by it. A device whose agent is offline shows as unknown, not down.
 A device with an agent can have services too (its **Services** tab): they are
 checked from outside like those of an agentless device, by the master or by
 another agent, never by its own agent. Its own status still comes from its agent.
+The exceptions are **Disk space**, **Memory** and **System load** (at the top of
+Add service): its own agent measures them every minute and sends the readings
+with its regular contact. The defaults follow common monitoring practice: disk
+more than 90% used for 3 readings, memory more than 90% for 5, and load more than
+1.5 per core for 5. While the agent is offline they show as unknown.
 
 ## Updating
 

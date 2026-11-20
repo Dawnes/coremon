@@ -241,6 +241,7 @@ func (s *Server) pollCore(ctx context.Context, agentID string, req proto.PollReq
 			s.probeIntake(a, req.Probe, time.Now())
 			s.probeSync(a, time.Now())
 		}
+		s.metricIntake(a, req.Metrics, time.Now())
 	}
 	s.syncPins(a, "scheduler")
 

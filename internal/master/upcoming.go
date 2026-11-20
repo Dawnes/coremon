@@ -138,7 +138,7 @@ func (s *Server) nextChecks(now time.Time) []upcomingCheck {
 					At: soonest(next, now).Unix(), Running: s.loc.busy[d.ID]})
 			}
 		}
-		for _, sv := range d.Services {
+		for _, sv := range d.outside() {
 			if sv.Paused {
 				continue
 			}

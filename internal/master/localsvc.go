@@ -43,6 +43,15 @@ type Service struct {
 	Expect string `json:"expect,omitempty"`
 	MaxMs  int    `json:"max_ms,omitempty"`
 
+	// Measured by the device's own agent (Method disk, memory or load):
+	// the filesystem (disk), the limit (disk: percent used, or GB free with
+	// LimitKind "free"; memory: percent used; load: per core) and the
+	// readings in a row past it before down.
+	Mount     string  `json:"mount,omitempty"`
+	Limit     float64 `json:"limit,omitempty"`
+	LimitKind string  `json:"limit_kind,omitempty"`
+	Readings  int     `json:"readings,omitempty"`
+
 	// Results: kept in checks.dat, not in state.dat.
 	Checked   bool       `json:"-"`
 	Up        bool       `json:"-"`
@@ -55,6 +64,8 @@ type Service struct {
 	Banner    string     `json:"-"`
 	Failed    string     `json:"-"` // the sub-probe of the last failed check
 	Hist      []histSlot `json:"-"`
+	Value     float64    `json:"-"` // measured: the last reading (in metricUnit)
+	Vals      []valSlot  `json:"-"` // measured: the readings in five-minute slots, for the graph
 }
 
 // spec: what the check needs.
@@ -96,6 +107,8 @@ type svcPreset struct {
 	CertValid bool   `json:"cert_valid,omitempty"` // https: the certificate must be valid
 	// Methods: the check methods that suit it, the default first (set by init).
 	Methods []string `json:"methods"`
+	// Agent: measured by the device's own agent; only for devices with an agent.
+	Agent bool `json:"agent,omitempty"`
 }
 
 // svcAlso: further check methods that suit a default service, after its own.
@@ -131,6 +144,9 @@ func (p *svcPreset) allows(method string) bool {
 
 // The default services: their port and whether they greet first are known.
 var svcPresets = []svcPreset{
+	{Key: metricDisk, Name: "Disk space", Group: "Measured by the agent", Method: metricDisk, Agent: true},
+	{Key: metricMem, Name: "Memory", Group: "Measured by the agent", Method: metricMem, Agent: true},
+	{Key: metricLoad, Name: "System load", Group: "Measured by the agent", Method: metricLoad, Agent: true},
 	{Key: "ssh", Name: "SSH", Port: 22, Greeting: true, Group: "Remote access"},
 	{Key: "telnet", Name: "Telnet", Port: 23, Group: "Remote access"},
 	{Key: "rdp", Name: "RDP", Port: 3389, Group: "Remote access"},
@@ -271,14 +287,33 @@ type serviceView struct {
 	Banner    string     `json:"banner,omitempty"`
 	Uptime    float64    `json:"uptime"`
 	Hist      []histSlot `json:"hist,omitempty"`
+
+	// Measured by the agent: the settings, the last reading and the graph.
+	Metric    bool       `json:"metric,omitempty"`
+	Mount     string     `json:"mount,omitempty"`
+	Limit     float64    `json:"limit,omitempty"`
+	LimitKind string     `json:"limit_kind,omitempty"`
+	Readings  int        `json:"readings,omitempty"`
+	Unit      string     `json:"unit,omitempty"`
+	Value     float64    `json:"value,omitempty"`
+	Stale     bool       `json:"stale,omitempty"` // no readings now: the agent is offline (unknown, not down)
+	Vals      []valPoint `json:"vals,omitempty"`
 }
 
 func (s *Server) serviceView(sv *Service, now int64, full bool) serviceView {
 	h, up := recentHist(sv.Hist, now)
 	v := serviceView{ID: sv.ID, Name: sv.Name, Preset: sv.Preset, Method: sv.kind(), Port: sv.Port, Greeting: sv.Greeting,
-		Host: sv.Host, Path: sv.Path, Codes: sv.Codes, CertValid: sv.CertValid, CertDays: sv.CertDays, RType: sv.RType, Expect: sv.Expect, MaxMs: sv.MaxMs, Steps: probe.Steps(sv.spec()), Failed: sv.Failed,
+		Host: sv.Host, Path: sv.Path, Codes: sv.Codes, CertValid: sv.CertValid, CertDays: sv.CertDays, RType: sv.RType, Expect: sv.Expect, MaxMs: sv.MaxMs, Steps: []string{}, Failed: sv.Failed,
 		Interval: sv.Interval, Retries: sv.Retries, Timeout: sv.Timeout, Reverse: sv.Reverse, Paused: sv.Paused, Checked: sv.Checked, Up: sv.Up, Since: sv.Since,
 		LastCheck: sv.LastCheck, LastOK: sv.LastOK, RTTUs: sv.RTTUs, Fails: sv.Fails, LastError: sv.LastError, Banner: sv.Banner, Uptime: up}
+	if sv.isMetric() {
+		v.Metric, v.Mount, v.Limit, v.LimitKind, v.Readings, v.Unit, v.Value = true, sv.Mount, sv.Limit, sv.LimitKind, sv.Readings, sv.metricUnit(), sv.Value
+		if full {
+			v.Vals = recentVals(sv.Vals, now)
+		}
+	} else {
+		v.Steps = probe.Steps(sv.spec())
+	}
 	if full {
 		v.Hist = h
 	}
@@ -353,7 +388,7 @@ func (s *Server) dueServices(devs []*checkDev, now time.Time) []svcKey {
 		if d.Probe != "" || d.Maint != nil {
 			continue // checked by a remote probe on its own schedule, or in maintenance
 		}
-		for _, sv := range d.Services {
+		for _, sv := range d.outside() {
 			if sv.Paused {
 				continue
 			}
@@ -435,6 +470,8 @@ type serviceReq struct {
 	RType     *string `json:"rtype"`
 	Expect    *string `json:"expect"`
 	MaxMs     *int    `json:"max_ms"`
+
+	metricReq
 }
 
 // setMethod switches sv to a check method; a method it did not have yet
@@ -445,6 +482,11 @@ func (sv *Service) setMethod(m string, certValid bool) {
 	}
 	if m == sv.Method {
 		return
+	}
+	if sv.isMetric() {
+		// From a measured service to a check from outside: its own defaults.
+		sv.Mount, sv.Limit, sv.LimitKind, sv.Readings = "", 0, "", 0
+		sv.Interval, sv.Retries, sv.Timeout = defaultSvcInterval, defaultSvcRetries, defaultSvcTimeout
 	}
 	sv.Method = m
 	sv.Host, sv.Path, sv.Codes, sv.CertValid, sv.CertDays, sv.RType, sv.Expect, sv.MaxMs = "", "", "", false, 0, "", "", 0
@@ -464,9 +506,16 @@ func (req *serviceReq) apply(sv *Service) error {
 	if req.Preset != nil {
 		if *req.Preset == "" {
 			sv.Preset = ""
+			if sv.isMetric() {
+				sv.setMethod("", false) // a custom port is checked from outside
+			}
 		} else if p := presetByKey(*req.Preset); p != nil {
 			if p.Key != sv.Preset {
-				sv.setMethod(p.Method, p.CertValid) // a new default service starts with its own method
+				if p.Agent {
+					sv.setMetric(p.Method)
+				} else {
+					sv.setMethod(p.Method, p.CertValid) // a new default service starts with its own method
+				}
 			}
 			sv.Preset, sv.Port, sv.Greeting = p.Key, p.Port, p.Greeting
 			if sv.Name == "" && req.Name == nil {
@@ -475,6 +524,20 @@ func (req *serviceReq) apply(sv *Service) error {
 		} else {
 			return errors.New("unknown default service")
 		}
+	}
+	if sv.isMetric() {
+		// Measured by the agent: only the name and the limits apply.
+		if req.Name != nil {
+			n, err := checkName("service name", *req.Name, maxServiceName)
+			if err != nil {
+				return err
+			}
+			sv.Name = n
+		}
+		if sv.Name == "" {
+			return errors.New("a service name is required")
+		}
+		return req.applyMetric(sv)
 	}
 	if req.Method != nil {
 		if m := *req.Method; m != "" && m != probe.MethodTCP && m != probe.MethodHTTPS && m != probe.MethodDNS {
@@ -566,6 +629,9 @@ func (req *serviceReq) apply(sv *Service) error {
 }
 
 func (sv *Service) describe() string {
+	if sv.isMetric() {
+		return sv.describeMetric()
+	}
 	d := fmt.Sprintf("%s port %d, every %ds, %d retries, timeout %ds", sv.Name, sv.Port, sv.Interval, sv.Retries, sv.Timeout)
 	if sv.Method == probe.MethodHTTPS {
 		d += fmt.Sprintf(", HTTPS %s%s status %s", sv.Host, sv.Path, sv.Codes)
@@ -597,6 +663,7 @@ func (sv *Service) describe() string {
 // resetService: a changed check starts over.
 func (s *Server) resetService(sv *Service) {
 	sv.Checked, sv.Up, sv.Since, sv.LastCheck, sv.LastOK, sv.RTTUs, sv.Fails, sv.LastError, sv.Banner, sv.Failed, sv.Hist = false, false, 0, 0, 0, 0, 0, "", "", "", nil
+	sv.Value, sv.Vals = 0, nil
 	s.loc.mu.Lock()
 	delete(s.loc.next, sv.ID)
 	s.loc.mu.Unlock()
@@ -626,7 +693,20 @@ func (s *Server) handleServiceCreate(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	if code, err := s.attach(d); err != nil {
+	if sv.isMetric() {
+		// Measured by the device's own agent: no address needed.
+		if d.Agent == nil {
+			http.Error(w, "disk, memory and load are measured by an agent: only for devices with an agent", http.StatusBadRequest)
+			return
+		}
+		if msg := d.metricTaken(sv); msg != "" {
+			http.Error(w, msg, http.StatusConflict)
+			return
+		}
+		if d.Agent.Checks == nil {
+			d.Agent.Checks = d.Checks
+		}
+	} else if code, err := s.attach(d); err != nil {
 		http.Error(w, err.Error(), code)
 		return
 	}
@@ -657,8 +737,21 @@ func (s *Server) handleServiceUpdate(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
+	if n.isMetric() {
+		if d.Agent == nil {
+			http.Error(w, "disk, memory and load are measured by an agent: only for devices with an agent", http.StatusBadRequest)
+			return
+		}
+		if msg := d.metricTaken(&n); msg != "" {
+			http.Error(w, msg, http.StatusConflict)
+			return
+		}
+	} else if code, err := s.attach(d); err != nil {
+		http.Error(w, err.Error(), code)
+		return
+	}
 	before := sv.describe()
-	restart := n.spec() != sv.spec() || n.Reverse != sv.Reverse
+	restart := n.spec() != sv.spec() || n.Reverse != sv.Reverse || n.Mount != sv.Mount || n.LimitKind != sv.LimitKind
 	*sv = n
 	if restart {
 		s.resetService(sv)
@@ -720,6 +813,11 @@ func (s *Server) handleServiceCheck(w http.ResponseWriter, r *http.Request) {
 	if d.service(sid) == nil {
 		s.st.mu.Unlock()
 		http.Error(w, "service not found", http.StatusNotFound)
+		return
+	}
+	if d.service(sid).isMetric() {
+		s.st.mu.Unlock()
+		http.Error(w, "measured by the device's own agent every minute: it cannot be checked now", http.StatusConflict)
 		return
 	}
 	if d.Probe != "" {

@@ -142,6 +142,9 @@ type Agent struct {
 	Checks *Checks `json:"checks,omitempty"`
 	// Via: the device it is connected via ("Connected via"); "" = none.
 	Via string `json:"via,omitempty"`
+	// Disks: the filesystems its agent last reported (agent 0.3.12 and
+	// later), for choosing what a Disk space service watches.
+	Disks []proto.DiskInfo `json:"-"`
 
 	ProbeCap    bool                       `json:"-"` // the agent can probe agentless devices
 	ProbeVer    string                     `json:"-"` // the check list the agent runs

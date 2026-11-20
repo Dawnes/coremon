@@ -58,7 +58,7 @@ func (s *Server) probeList(agentID string) proto.ProbeList {
 			l.Checks = append(l.Checks, proto.ProbeCheck{ID: d.ID, Kind: "ping", Address: d.Address,
 				Interval: ls.IntervalSec, Timeout: ls.TimeoutSec, DownAfter: ls.DownAfter})
 		}
-		for _, sv := range d.Services {
+		for _, sv := range d.outside() {
 			if !sv.Paused {
 				l.Checks = append(l.Checks, proto.ProbeCheck{ID: sv.ID, Kind: sv.kind(), Address: d.Address, Port: sv.Port,
 					Greeting: sv.Greeting, Reverse: sv.Reverse, Interval: sv.Interval, Timeout: sv.Timeout, Retries: sv.Retries,

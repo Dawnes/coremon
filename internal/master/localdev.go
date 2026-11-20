@@ -348,7 +348,7 @@ type pingView struct {
 }
 
 func (s *Server) localDeviceView(d *LocalDevice, full bool) agentView {
-	lv := s.checksView(&d.Checks, full)
+	lv := s.checksView(&d.Checks, full, false)
 	v := agentView{
 		ID: d.ID, Name: d.Name, GroupID: d.GroupID, Order: d.Order, Status: StatusActive, Monitor: "local",
 		Online: lv.Checked && lv.Up, LastSeen: lv.LastUp, EnrolledAt: d.AddedAt, Features: []string{}, Maint: d.Maint,
@@ -361,7 +361,9 @@ func (s *Server) localDeviceView(d *LocalDevice, full bool) agentView {
 }
 
 // checksView: the ping and services of a device as the website shows them.
-func (s *Server) checksView(d *Checks, full bool) *localView {
+// noReadings: the device's agent is offline: disk, memory and load are
+// unknown (not down), as no readings come in.
+func (s *Server) checksView(d *Checks, full, noReadings bool) *localView {
 	now := time.Now().Unix()
 	mode := d.PingMode
 	if mode == "" {
@@ -389,6 +391,9 @@ func (s *Server) checksView(d *Checks, full bool) *localView {
 	running := []serviceView{}
 	for _, sv := range d.Services {
 		v := s.serviceView(sv, now, full)
+		if noReadings && sv.isMetric() {
+			v.Checked, v.Stale = false, true
+		}
 		svcs = append(svcs, v)
 		if sv.Paused {
 			lv.SvcPaused++

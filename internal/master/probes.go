@@ -244,7 +244,7 @@ func (s *Server) overdueChecks(now int64, local map[string]bool) []probeRequest 
 		if d.pinging() {
 			add(d.Name+" · Ping", d.LastCheck, ls.IntervalSec, ls.TimeoutSec)
 		}
-		for _, sv := range d.Services {
+		for _, sv := range d.outside() {
 			if sv.Paused {
 				continue
 			}

@@ -48,6 +48,7 @@ type Agent struct {
 	agentKey  ed25519.PrivateKey
 	mode      Mode
 	pr        *prober
+	met       *meter
 }
 
 type Mode struct {
@@ -84,7 +85,7 @@ func (a *Agent) setMode(reportOnly bool) error {
 
 func Run(ctx context.Context, opt Options) (int, error) {
 	a := &Agent{opt: opt, running: map[string]bool{}, exitReq: make(chan int, 1),
-		feats: map[string]feature.Feature{}, locks: map[string]*sync.Mutex{}, heartbeat: 60, pr: newProber()}
+		feats: map[string]feature.Feature{}, locks: map[string]*sync.Mutex{}, heartbeat: 60, pr: newProber(), met: newMeter()}
 	for _, f := range features() {
 		info := f.Info()
 		a.feats[info.Name] = f
@@ -124,6 +125,7 @@ func Run(ctx context.Context, opt Options) (int, error) {
 	defer cancel()
 	go a.out.loop(ctx)
 	go a.pr.loop(ctx)
+	go a.met.loop(ctx)
 	go a.probeSendLoop(ctx)
 	go a.pollLoop(ctx)
 
@@ -191,6 +193,7 @@ func (a *Agent) pollLoop(ctx context.Context) {
 
 		timeout := time.Duration(a.heartbeat+30) * time.Second
 		rep, taken := a.pr.take(probeBatch, time.Now())
+		met, metTaken := a.met.take(time.Now())
 		err := a.cl.postJSON(ctx, "/api/agent/poll", proto.PollRequest{
 			Protocol:    proto.ProtocolVersion,
 			CoreVersion: a.opt.Version,
@@ -200,9 +203,11 @@ func (a *Agent) pollLoop(ctx context.Context) {
 			ReportOnly:  a.reportOnly(),
 			Pins:        pinsNow(a.cl),
 			Probe:       &rep,
+			Metrics:     met,
 		}, &resp, timeout)
 		if err != nil {
 			a.pr.putBack(taken)
+			a.met.putBack(metTaken)
 			if ctx.Err() != nil {
 				return
 			}

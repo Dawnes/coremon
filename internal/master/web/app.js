@@ -466,7 +466,7 @@ const SUBNAV = {
   dashboard: () => [['overview', 'Overview'], ['devices', 'Device List'], ['apps', 'Application List'], ['map', 'Map']],
   about: () => [['about', 'About'], ['license', 'License']],
   activity: () => [['jobs', 'Jobs'], ['probes', 'Remote Probes'], ['audit', 'Audit log']],
-  settings: () => [['general', 'General'], ['devices', 'Devices'], ['agentless', 'Agentless'], ['releases', 'Releases'], ...(canChange() ? [['users', 'Users']] : []), ['account', 'My Account'], ['identity', 'Identity'], ...(canChange() ? [['backups', 'Backups']] : [])],
+  settings: () => [['general', 'General'], ['devices', 'Devices'], ['releases', 'Releases'], ...(canChange() ? [['users', 'Users']] : []), ['account', 'My Account'], ['identity', 'Identity'], ...(canChange() ? [['backups', 'Backups']] : [])],
 };
 function currentRoute() {
   const p = location.hash.replace(/^#\/?/, '').split('/');
@@ -526,7 +526,7 @@ function route() {
   const parts = location.hash.replace(/^#\/?/, '').split('/');
   const [section, sub] = currentRoute();
   const subViews = {
-    settings: { general: SettingsGeneral, devices: Devices, agentless: SettingsLocal, releases: Releases, users: SettingsUsers, backups: SettingsBackups, account: SettingsAccount, identity: SettingsIdentity },
+    settings: { general: SettingsGeneral, devices: Devices, releases: Releases, users: SettingsUsers, backups: SettingsBackups, account: SettingsAccount, identity: SettingsIdentity },
     activity: { jobs: Jobs, probes: RemoteProbes, audit: Audit },
     dashboard: { overview: Dashboard, devices: DeviceList, apps: AppList, map: MapPage },
     about: { about: AboutPage, license: LicensePage },
@@ -1833,7 +1833,7 @@ function AgentPage([id, tab]) {
       ['Automatic updates', ({ on: html`<span class="badge info xs">on</span> unattended-upgrades`, off: 'off', not_installed: 'not installed' })[h?.auto_updates] || '—'],
       ['Last upgrade', h?.last_upgrade ? `${fmtDate(h.last_upgrade.time)} (${ago(h.last_upgrade.time)}, ${h.last_upgrade.packages} package${h.last_upgrade.packages === 1 ? '' : 's'}) · by ${upgradedBy(h.last_upgrade.by)}` : h ? 'none recorded' : '—'],
     ];
-    return html`<div class="panel panel-pad" style="margin-bottom:16px"><div class="facts">${kv.map(([k, v]) => html`<div><div class="k">${k}</div><div class="v">${v ?? '—'}</div></div>`)}</div></div>${agentPanel(a)}${probePanel(a)}`;
+    return html`<div class="panel panel-pad" style="margin-bottom:16px"><div class="facts">${kv.map(([k, v]) => html`<div><div class="k">${k}</div><div class="v">${v ?? '—'}</div></div>`)}</div></div>${metricGraphs(a)}${agentPanel(a)}${probePanel(a)}`;
   }
   // Remote probe: the agentless devices this agent checks for the master.
   function probePanel(a) {
@@ -1861,8 +1861,9 @@ function AgentPage([id, tab]) {
   // Services checked from outside, like those of an agentless device.
   function servicesTab(a) {
     const L = a.checks, out = L?.probe && L.probe.state !== 'ok' ? L.probe : null;
-    const head = html`<div class="row" style="margin-bottom:12px"><span class="muted small">${L
-      ? html`Checked on <span class="mono">${L.address}</span> ${L.probe ? html`by the agent <a href="#/device/${L.probe.id}"><b>${L.probe.name}</b></a>, on its own schedule` : 'from the master'}.`
+    const head = html`<div class="row" style="margin-bottom:12px"><span class="muted small">${L && L.address
+      ? html`Checked on <span class="mono">${L.address}</span> ${L.probe ? html`by the agent <a href="#/device/${L.probe.id}"><b>${L.probe.name}</b></a>, on its own schedule` : 'from the master'}.${(L.services || []).some((s) => s.metric) ? ' Disk, memory and load are measured by the agent itself.' : ''}`
+      : L ? 'Disk, memory and load are measured by the agent itself, every minute. Other services are checked from outside, by the master or another agent.'
       : 'Services of this device checked from outside, by the master or another agent, as for an agentless device. The device\'s own status still comes from its agent.'}</span>
       <span class="spacer"></span>${ifChange(html`<button class="btn sm" data-act="checks-edit">${icon('edit')} Address and checker</button><button class="btn primary sm" data-act="svc-add">${icon('plus')} Add service</button>`)}</div>
       ${out && !a.maint ? html`<div class="notice grey"><b>Unknown – ${out.note}.</b> The shown results are the last ones received from <a href="#/device/${out.id}">${out.name}</a>.</div>` : ''}`;
@@ -2024,7 +2025,7 @@ function uptimeBar(hist, { word = 'ping', compact = false } = {}) {
     const cls = !h ? 'none' : h.ok === h.n ? 'ok' : unr ? 'unr' : h.ok === 0 ? 'bad' : 'part';
     const range = `${fmtDate(t).split(' ')[1]}–${fmtDate(t + slot).split(' ')[1]}`;
     const why = (h && h.f && h.ok < h.n ? `, failed: ${stepLabel(h.f)}` : '') + (h?.u ? `, ${h.u} while unreachable behind a device that was down or in maintenance` : '');
-    cells.push(html`<span class="${cls}" title="${range}: ${!h ? `no ${word}s` : `${h.ok} of ${h.n} ${word}${h.n === 1 ? '' : 's'} ${word === 'ping' ? 'answered' : 'up'}${why}`}"></span>`);
+    cells.push(html`<span class="${cls}" title="${range}: ${!h ? `no ${word}s` : `${h.ok} of ${h.n} ${word}${h.n === 1 ? '' : 's'} ${word === 'ping' ? 'answered' : word === 'reading' ? 'within the limit' : 'up'}${why}`}"></span>`);
   }
   return compact ? html`<div class="upbar mini">${cells}</div>` : html`<div class="upbar">${cells}</div><div class="upaxis"><span>24 hours ago</span><span>now</span></div>`;
 }
@@ -2074,7 +2075,10 @@ function rttGraph(rtt) {
 const STEP_LABEL = { connect: 'Connect', greeting: 'Greeting', tls: 'TLS handshake', cert: 'Certificate valid', cert_days: 'Certificate days', http: 'HTTP status',
   query: 'Query', rcode: 'Server status', records: 'Records', expect: 'Expected value', time: 'Response time' };
 const stepLabel = (k) => STEP_LABEL[k] || k;
-const svcProto = (s) => `${(s.method || 'tcp').toUpperCase()} ${s.port}`;
+const svcProto = (s) => (s.metric ? { disk: `DISK ${s.mount}`, memory: 'MEMORY', load: 'LOAD' }[s.method] || '' : `${(s.method || 'tcp').toUpperCase()} ${s.port}`);
+// Disk, memory and load: the limit as text ("> 90% used", "< 10 GB free", "> 1.5 per core").
+const metricLimit = (s) => (s.method === 'disk' && s.limit_kind === 'free' ? `< ${s.limit} GB free` : s.method === 'load' ? `> ${s.limit} per core` : `> ${s.limit}% used`);
+const metricVal = (s, v) => (s.method === 'load' ? v.toFixed(2) : s.limit_kind === 'free' ? `${v.toFixed(1)} GB` : `${Math.round(v)}%`);
 // What a service checks beyond its port: the HTTPS host and path, or the DNS question.
 const svcTarget = (s) => (s.method === 'https' ? ` · ${s.host}${s.path !== '/' ? s.path : ''}` : s.method === 'dns' ? ` · ${s.rtype} ${s.host}` : '');
 // How the last check went per sub-probe: ✓ passed, ✗ failed, – not reached.
@@ -2089,8 +2093,11 @@ function svcSteps(s) {
 }
 function svcState(s) {
   if (s.paused) return html`<span class="badge mute xs">paused</span>`;
-  if (!s.checked) return s.fails ? html`<span class="badge upd xs" title="${s.last_error || ''}">retry ${s.fails} of ${s.retries}</span>` : html`<span class="badge mute xs">waiting</span>`;
-  if (s.up) return s.fails ? html`<span class="badge upd xs" title="${s.last_error || ''}">up · retry ${s.fails} of ${s.retries}</span>` : html`<span class="badge ok xs">up</span>`;
+  if (s.stale) return html`<span class="badge mute xs" title="The agent is offline: no readings come in">unknown</span>`;
+  // Measured: readings in a row past the limit, instead of retries.
+  const tries = s.metric ? (n) => `${n} of ${s.readings} past the limit` : (n) => `retry ${n} of ${s.retries}`;
+  if (!s.checked) return s.fails ? html`<span class="badge upd xs" title="${s.last_error || ''}">${tries(s.fails)}</span>` : html`<span class="badge mute xs">waiting</span>`;
+  if (s.up) return s.fails ? html`<span class="badge upd xs" title="${s.last_error || ''}">up · ${tries(s.fails)}</span>` : html`<span class="badge ok xs">up</span>`;
   return html`<span class="badge sec xs" title="${s.last_error || ''}">down</span>`;
 }
 function pingState(P) {
@@ -2129,14 +2136,16 @@ function methodValues(m, f) {
   }
   return out;
 }
-function serviceModal(dev, svc, presets, lim, methods, done) {
+function serviceModal(dev, svc, presets0, lim, methods, done) {
   const isNew = !svc;
+  // Disk, memory and load need an agent on the device.
+  const presets = presets0.filter((p) => !p.agent || !isLocal(dev));
   const canPing = isNew && (chk(dev)?.ping_mode ?? 'removed') === 'removed';
   // Agentless devices start with the ping; on an agent device it is optional.
   const pingFirst = canPing && isLocal(dev);
   const p0 = presets[0];
   const s = svc || (pingFirst ?{ preset: 'ping', name: 'Ping', port: '', method: 'tcp', greeting: false, interval: lim.interval, retries: lim.retries, timeout: lim.timeout, reverse: false }
-    : { preset: p0.key, name: p0.name, port: p0.port, method: p0.method || 'tcp', greeting: p0.greeting, interval: lim.interval, retries: lim.retries, timeout: lim.timeout, reverse: false });
+    : { preset: p0.key, name: p0.name, port: p0.port || '', method: p0.agent ? 'tcp' : p0.method || 'tcp', greeting: p0.greeting, interval: lim.interval, retries: lim.retries, timeout: lim.timeout, reverse: false });
   const groups = [...new Set(presets.map((p) => p.group))];
   const method = (k) => methods.find((m) => m.key === (k || 'tcp')) || methods[0];
   let lastPresetName = s.preset === 'ping' ? '' : (presets.find((p) => p.key === s.preset) || {}).name || '';
@@ -2150,14 +2159,49 @@ function serviceModal(dev, svc, presets, lim, methods, done) {
     const fixed = p && m.key === 'tcp' ? { greeting: p.greeting } : {};
     setHTML($('#svc-fields'), html`${methodFields(m, vals, fixed)}`);
   };
+  // Disk, memory and load: only the name, the filesystem (disk), the limit and the readings in a row.
+  const metricDef = { disk: [90, 3], memory: [90, 5], load: [1.5, 5] };
+  const drawMetric = (f, p) => {
+    const keep = svc && svc.preset === p.key, m = p.method;
+    const kind = keep ? svc.limit_kind || 'used' : 'used';
+    const disks = dev.disks || [];
+    const mount = keep ? svc.mount : '/';
+    const mounts = disks.some((d) => d.mount === mount) ? disks : [{ mount, fs: '', size: 0 }, ...disks];
+    setHTML($('#svc-metric'), html`
+      <label class="field">Name<input type="text" name="mname" value="${keep ? svc.name : p.name}" maxlength="48" required></label>
+      ${m === 'disk' ? html`<label class="field">Filesystem<select name="mount">${mounts.map((d) => html`<option value="${d.mount}" ${d.mount === mount ? 'selected' : ''}>${d.mount}${d.fs ? ` — ${d.fs}, ${bytes(d.size)}` : ''}</option>`)}</select></label>
+        ${disks.length ? '' : html`<div class="dim small">The agent has not reported its filesystems yet (agent 0.3.12 or later). / is watched until then.</div>`}` : ''}
+      <div class="row" style="gap:12px;align-items:flex-end">
+        ${m === 'disk' ? html`<label class="field" style="flex:1">Limit on<select name="kind" data-change="mkind"><option value="used" ${kind === 'used' ? 'selected' : ''}>Percent used</option><option value="free" ${kind === 'free' ? 'selected' : ''}>GB free</option></select></label>` : ''}
+        <label class="field" style="flex:1"><span id="m-lim-lbl"></span><input type="number" name="limit" step="any" min="0" value="${keep ? svc.limit : metricDef[m][0]}" required></label>
+        <label class="field" style="flex:1">Readings in a row<input type="number" name="readings" min="1" max="30" value="${keep ? svc.readings : metricDef[m][1]}" required></label></div>
+      <div class="dim small">${m === 'load'
+        ? 'The 1-minute load average divided by the number of CPU cores, as Zabbix does: above 1.5 for 5 minutes is the usual alarm.'
+        : m === 'memory' ? 'Used memory is the total minus what the system can still give out without swapping; swap is not looked at. As Zabbix: above 90% for 5 minutes.'
+          : 'As df: the space reserved for root counts as used. Percent used suits most disks; GB free suits large ones.'}
+        Measured by the agent on the device every minute and sent with its regular contact: the service is down after this many readings in a row past the limit, and up again at the first reading within it.</div>`);
+    metricLabel(f);
+  };
+  const metricLabel = (f) => {
+    const m = presets.find((x) => x.key === f.preset.value)?.method, free = f.kind?.value === 'free';
+    $('#m-lim-lbl').textContent = m === 'load' ? 'Down above (load per core)' : free ? 'Down below (GB free)' : 'Down above (% used)';
+  };
   let lastPreset = s.preset || ''; // the service the Check list was last built for
   const fill = (f) => {
     const ping = f.preset.value === 'ping';
-    for (const n of ['name', 'port', 'method', 'interval', 'retries', 'timeout']) f[n].disabled = ping;
-    $('#svc-tcp').style.display = ping ? 'none' : '';
+    const p = presets.find((x) => x.key === f.preset.value), met = !!p?.agent;
+    for (const n of ['name', 'port', 'method', 'interval', 'retries', 'timeout']) f[n].disabled = ping || met;
+    $('#svc-tcp').style.display = ping || met ? 'none' : '';
     $('#svc-ping').style.display = ping ? '' : 'none';
+    $('#svc-metric').style.display = met ? '' : 'none';
+    $('#svc-title').textContent = isNew ? `Add a service to ${dev.name}${addr && !met && !ping ? ` on ${addr}` : ''}` : `Edit ${s.name}`;
+    if (!met) setHTML($('#svc-metric'), '');
     if (ping) return setHTML($('#svc-fields'), '');
-    const p = presets.find((x) => x.key === f.preset.value);
+    if (met) {
+      lastPreset = f.preset.value;
+      setHTML($('#svc-fields'), '');
+      return drawMetric(f, p);
+    }
     f.port.disabled = !!p;
     // Only the check methods that suit the service (a custom port: all of
     // them); another service starts with its own method.
@@ -2183,13 +2227,15 @@ function serviceModal(dev, svc, presets, lim, methods, done) {
   };
   // The address the service is checked on (an agent device without checks yet: its first one).
   const addr = chk(dev)?.address || (dev.check_addrs || [])[0] || '';
-  openModal(html`<h3>${isNew ? `Add a service to ${dev.name}${addr ? ` on ${addr}` : ''}` : `Edit ${s.name}`}</h3>
+  openModal(html`<h3 id="svc-title">${isNew ? `Add a service to ${dev.name}` : `Edit ${s.name}`}</h3>
     <form class="form" data-submit="save">
       <label class="field">Service<select name="preset" data-change="preset">
+        ${presets.filter((p) => p.agent).map((p) => html`<option value="${p.key}" ${s.preset === p.key ? 'selected' : ''}>${p.name}</option>`)}
         ${canPing ? html`<option value="ping" ${pingFirst ? 'selected' : ''}>Ping (ICMP)</option>` : ''}
-        ${groups.map((g) => presets.filter((p) => p.group === g).map((p) => html`<option value="${p.key}" ${s.preset === p.key ? 'selected' : ''}>${p.name} (${p.port})</option>`))}
+        ${groups.map((g) => presets.filter((p) => p.group === g && !p.agent).map((p) => html`<option value="${p.key}" ${s.preset === p.key ? 'selected' : ''}>${p.name} (${p.port})</option>`))}
         <option value="" ${!s.preset ? 'selected' : ''}>Custom port…</option></select></label>
-      <div class="notice blue" id="svc-ping" style="margin:0;display:none">The ping uses the same settings for every device: every ${lim.ping_interval} s, down after ${lim.ping_down_after} unanswered pings (Settings → Agentless).${isLocal(dev) ? '' : ' It shows whether the address answers; the device\'s own status still comes from its agent.'}</div>
+      <div class="notice blue" id="svc-ping" style="margin:0;display:none">The ping uses the same settings for every device: every ${lim.ping_interval} s, down after ${lim.ping_down_after} unanswered pings (Settings → General → Ping).${isLocal(dev) ? '' : ' It shows whether the address answers; the device\'s own status still comes from its agent.'}</div>
+      <div id="svc-metric" class="stack" style="gap:12px;display:none"></div>
       <div id="svc-tcp" class="stack" style="gap:12px">
       <div class="row" style="gap:12px;align-items:flex-end">
         <label class="field" style="flex:2">Name<input type="text" name="name" value="${s.name}" maxlength="48" required></label>
@@ -2209,11 +2255,21 @@ function serviceModal(dev, svc, presets, lim, methods, done) {
       cancel: () => closeModal(),
       preset: (t) => fill(t.form),
       method: (t) => drawFields(t.form, t.form.preset.value === (s.preset || '') && t.form.method.value === (s.method || 'tcp')),
+      mkind: (t) => { t.form.limit.value = t.value === 'free' ? 10 : 90; metricLabel(t.form); },
       save: async (f) => {
         if (f.preset.value === 'ping') {
           const res = await POST(`locals/${dev.id}/pingstate`, { state: 'on' });
           closeModal();
           toast('Ping added — the first ping follows within seconds', 'ok');
+          return done?.(res);
+        }
+        const p = presets.find((x) => x.key === f.preset.value);
+        if (p?.agent) {
+          const body = { preset: p.key, name: f.mname.value, limit: +f.limit.value, readings: +f.readings.value };
+          if (p.method === 'disk') Object.assign(body, { mount: f.mount.value, limit_kind: f.kind.value });
+          const res = await POST(isNew ? `locals/${dev.id}/services` : `locals/${dev.id}/services/${svc.id}`, body);
+          closeModal();
+          toast(isNew ? `${body.name} added — the agent sends its first reading within a minute` : 'Saved', 'ok');
           return done?.(res);
         }
         const m = method(f.method.value);
@@ -2370,13 +2426,13 @@ function servicesTable(st, L) {
         <td class="small nowrap">${P.up && P.rtt_us && P.mode !== 'paused' ? rttText(P.rtt_us) : html`<span class="dim">—</span>`}</td>
         <td class="small nowrap">${P.last_check ? when(P.last_check) : html`<span class="dim">waiting</span>`}${P.last_error && P.mode !== 'paused' && !(P.up && !P.fails) ? html`<div class="c-red small" style="font-weight:400">${P.last_error}</div>` : ''}</td>
         <td style="min-width:150px">${uptimeBar(P.hist, { compact: true })}<div class="dim small">${P.uptime >= 0 ? `${pctText(P.uptime)} answered` : 'no pings yet'}</div></td>
-        <td class="dim small nowrap" title="The same for every device: Settings → Agentless">every ${P.interval} s<br>down after ${P.down_after} · ${P.timeout} s</td>
+        <td class="dim small nowrap" title="The same for every device: Settings → General → Ping">every ${P.interval} s<br>down after ${P.down_after} · ${P.timeout} s</td>
         <td class="w1"><div class="row" style="flex-wrap:nowrap;gap:6px">
           <button class="btn ghost sm iconbtn" data-act="svc-ping"title="${L.probe ? 'Checked by a remote probe on its own schedule' : 'Ping now'}" ${st.pinging || P.mode === 'paused' || L.probe ? 'disabled' : ''}>${st.pinging ? html`<span class="spin"></span>` : icon('refresh')}</button>
           ${ifChange(html`${pauseBtn(P.mode === 'paused', 'ping-pause', '')}<button class="btn danger sm iconbtn" data-act="ping-remove" title="Delete">${icon('trash')}</button>`)}</div></td>
       </tr>` : '';
     return html`<div class="panel scrollx"><table class="tbl svctbl"><thead><tr><th>Status</th><th>Service</th><th>Answer</th><th>Response</th><th>Checked</th><th>Last 24 hours</th><th>Check</th><th class="w1"></th></tr></thead>
-      <tbody>${pingRow}${svcs.map((s) => html`<tr class="${s.paused ? 'dimrow' : ''}">
+      <tbody>${pingRow}${svcs.map((s) => (s.metric ? metricRow(st, s) : html`<tr class="${s.paused ? 'dimrow' : ''}">
         <td class="nowrap">${svcState(s)}${s.checked && !s.paused ? html`<div class="dim small">${dur(now() - s.since)}</div>` : ''}</td>
         <td class="nowrap"><b>${s.name}</b> ${s.reverse ? html`<span class="badge info xs" title="Reverse mode: reachable counts as down">reverse</span>` : ''}<div class="dim small mono">${svcProto(s)}${svcTarget(s)}</div>${svcSteps(s)}</td>
         <td class="small mono banner">${s.banner ? html`<span title="${s.banner}">${s.banner}</span>` : html`<span class="dim">${s.greeting || s.method === 'https' || s.method === 'dns' ? '—' : 'not waited for'}</span>`}</td>
@@ -2387,7 +2443,77 @@ function servicesTable(st, L) {
         <td class="w1"><div class="row" style="flex-wrap:nowrap;gap:6px">
           <button class="btn ghost sm iconbtn" data-act="svc-check" data-sid="${s.id}" title="${L.probe ? 'Checked by a remote probe on its own schedule' : 'Check now'}" ${st.checking.has(s.id) || s.paused || L.probe ? 'disabled' : ''}>${st.checking.has(s.id) ? html`<span class="spin"></span>` : icon('refresh')}</button>
           ${ifChange(html`${pauseBtn(s.paused, 'svc-pause', `data-sid="${esc(s.id)}"`)}<button class="btn ghost sm iconbtn" data-act="svc-edit" data-sid="${s.id}" title="Edit">${icon('edit')}</button><button class="btn danger sm iconbtn" data-act="svc-delete" data-sid="${s.id}" title="Delete">${icon('trash')}</button>`)}</div></td>
-      </tr>`)}</tbody></table></div>`;
+      </tr>`))}</tbody></table></div>`;
+}
+// Disk, memory or load: measured by the device's own agent every minute (no Check now).
+function metricRow(st, s) {
+  return html`<tr class="${s.paused ? 'dimrow' : ''}">
+    <td class="nowrap">${svcState(s)}${s.checked && !s.paused ? html`<div class="dim small">${dur(now() - s.since)}</div>` : ''}</td>
+    <td class="nowrap"><b>${s.name}</b><div class="dim small mono">${svcProto(s)}</div></td>
+    <td class="small banner">${s.banner && !s.stale ? html`<span title="${s.banner}">${s.banner}</span>` : html`<span class="dim">${s.stale ? 'no readings now' : '—'}</span>`}</td>
+    <td class="small nowrap"><span class="dim">—</span></td>
+    <td class="small nowrap">${s.last_check ? when(s.last_check) : html`<span class="dim">waiting for the agent</span>`}${s.last_error && !s.paused && !s.stale && !(s.up && !s.fails) ? html`<div class="c-red small" style="font-weight:400">${s.last_error}</div>` : ''}</td>
+    <td style="min-width:150px">${uptimeBar(s.hist, { word: 'reading', compact: true })}<div class="dim small">${s.uptime >= 0 ? `${pctText(s.uptime)} within the limit` : 'no readings yet'}</div></td>
+    <td class="dim small nowrap" title="Measured by the agent on the device">every 60 s<br>down: ${metricLimit(s)}<br>${s.readings} reading${s.readings === 1 ? '' : 's'} in a row</td>
+    <td class="w1"><div class="row" style="flex-wrap:nowrap;gap:6px">
+      <button class="btn ghost sm iconbtn" disabled title="Measured by the agent every minute, sent with its regular contact">${icon('refresh')}</button>
+      ${ifChange(html`${pauseBtn(s.paused, 'svc-pause', `data-sid="${esc(s.id)}"`)}<button class="btn ghost sm iconbtn" data-act="svc-edit" data-sid="${s.id}" title="Edit">${icon('edit')}</button><button class="btn danger sm iconbtn" data-act="svc-delete" data-sid="${s.id}" title="Delete">${icon('trash')}</button>`)}</div></td>
+  </tr>`;
+}
+// The 24-hour graph of a disk, memory or load service: five-minute
+// averages (lowest and highest on hover), with the limit as a dashed line.
+function valGraph(s) {
+  const slot = 300, n = 288, end = Math.floor(now() / slot) * slot, by = new Map((s.vals || []).map((r) => [r.t, r]));
+  const slots = [];
+  for (let i = 0; i < n; i++) { const t = end - (n - 1 - i) * slot; slots.push({ i, t, r: by.get(t) }); }
+  if (!slots.some((x) => x.r)) return html`<div class="dim small">No readings yet: the graph fills as the agent sends them (every minute).</div>`;
+  const pct = s.method !== 'load' && s.limit_kind !== 'free';
+  const nice = (v) => { const p = 10 ** Math.floor(Math.log10(v)); for (const m of [1, 2, 2.5, 5, 10]) if (m * p >= v) return m * p; return 10 * p; };
+  const top0 = Math.max(s.limit, ...slots.map((x) => (x.r ? x.r.max : 0)));
+  const step = pct ? 20 : nice(Math.max(top0, 0.1) / 5), top = pct ? 100 : Math.max(step, Math.ceil((top0 * 1.05) / step) * step);
+  const H = 100, y = (v) => (H - (Math.min(v, top) / top) * H).toFixed(2);
+  let line = '', area = '', run = [];
+  const flush = () => {
+    if (!run.length) return;
+    const pts = run.map((x) => `${x.i + 0.5},${y(x.r.avg)}`);
+    line += `M${pts.join('L')}${run.length === 1 ? 'h0.01' : ''}`;
+    area += `M${run[0].i + 0.5},${H}L${pts.join('L')}L${run[run.length - 1].i + 0.5},${H}Z`;
+    run = [];
+  };
+  for (const x of slots) { if (x.r) run.push(x); else flush(); }
+  flush();
+  const hh = (t) => fmtDate(t).split(' ')[1];
+  // Past the limit: above it, or for free space below it.
+  const past = (v) => (s.limit_kind === 'free' ? v < s.limit : v > s.limit);
+  let bands = '', hits = '', grid = '';
+  for (const x of slots) {
+    const r = x.r, range = `${hh(x.t)}–${hh(x.t + slot)}`;
+    if (r && past(r.avg)) bands += `<rect x="${x.i}" y="0" width="1" height="${H}" class="bad"/>`;
+    const tip = !r ? 'no readings' : `average ${metricVal(s, r.avg)}, lowest ${metricVal(s, r.min)}, highest ${metricVal(s, r.max)} · ${r.n} reading${r.n === 1 ? '' : 's'}`;
+    hits += `<rect x="${x.i}" y="0" width="1" height="${H}" class="hit"><title>${esc(`${range}: ${tip}`)}</title></rect>`;
+  }
+  const ticks = [];
+  for (let v = 0; v <= top + 1e-9; v += step) ticks.push(v);
+  for (const v of ticks) grid += `<line x1="0" x2="${n}" y1="${y(v)}" y2="${y(v)}"/>`;
+  const xl = slots.filter((x) => { const d = new Date(x.t * 1000); return d.getMinutes() === 0 && d.getHours() % 2 === 0; });
+  for (const x of xl) grid += `<line x1="${x.i}" x2="${x.i}" y1="0" y2="${H}"/>`;
+  const lim = `<line class="limit" x1="0" x2="${n}" y1="${y(s.limit)}" y2="${y(s.limit)}"/>`;
+  const fmtV = (v) => (step < 1 ? v.toFixed(step < 0.5 ? 2 : 1).replace(/\.?0+$/, '') || '0' : String(+v.toFixed(1)));
+  return html`<div class="rttg">
+    <div class="rttg-y">${ticks.map((v) => html`<span style="top:${100 - (v / top) * 100}%">${fmtV(v)}</span>`)}</div>
+    <div class="rttg-plot">${raw(`<svg viewBox="0 0 ${n} ${H}" preserveAspectRatio="none"><g class="grid">${grid}</g><g class="bands">${bands}</g><path class="area" d="${area}"/><path class="line" d="${line}"/>${lim}<g>${hits}</g></svg>`)}
+      <div class="rttg-x">${xl.map((x) => html`<span style="left:${(x.i / n) * 100}%">${hh(x.t)}</span>`)}</div></div>
+    <div class="rttg-unit">${s.method === 'load' ? 'per core' : pct ? '%' : 'GB'}</div></div>`;
+}
+// The graphs of an agent device's active disk, memory and load services (System tab).
+function metricGraphs(a) {
+  const list = (a.checks?.services || []).filter((s) => s.metric && !s.paused);
+  if (!list.length) return '';
+  return html`<div class="setgrid" style="margin-bottom:16px">${list.map((s) => html`<div class="panel panel-pad">
+    <div class="row" style="margin-bottom:14px"><h2 style="margin:0">${s.name}</h2><span class="dim small mono">${svcProto(s)}</span><span class="spacer"></span>
+      ${svcState(s)}${s.last_check && !s.stale ? html` <span class="small"><b>${metricVal(s, s.value)}</b>${s.method === 'load' ? ' per core' : s.limit_kind === 'free' ? ' free' : ' used'}</span>` : ''}</div>
+    ${valGraph(s)}
+    <div class="dim small" style="margin-top:4px">Last 24 hours, five-minute averages; the dashed line is the limit (down ${metricLimit(s)} for ${s.readings} reading${s.readings === 1 ? '' : 's'} in a row).</div></div>`)}</div>`;
 }
 // The actions of the Services tab, on both device pages. The answers are
 // the device's own view; its checks are chk(device).
@@ -2424,7 +2550,7 @@ function serviceActs(st, id, render) {
     },
     'svc-delete': async (t) => {
       const s = svc(t.dataset.sid);
-      if (!(await confirmBox(`Delete ${s.name} (port ${s.port})?`, 'It is no longer checked, and its history is removed.', { okText: 'Delete service', danger: true }))) return;
+      if (!(await confirmBox(`Delete ${s.name}${s.metric ? '' : ` (port ${s.port})`}?`, 'It is no longer checked, and its history is removed.', { okText: 'Delete service', danger: true }))) return;
       setAgent(await POST(`locals/${id}/services/${s.id}/delete`));
       toast(`${s.name} deleted`, 'ok');
     },
@@ -3129,46 +3255,6 @@ function settingsHead(sub, title, desc) {
     ${session.initial_password && sub !== 'account' ? html`<div class="notice">You are still using the generated initial password — <a href="#/settings/account">change it under My Account</a>.</div>` : ''}`;
 }
 
-function SettingsLocal() {
-  return {
-    async mount(el) {
-      const d = await GET('local');
-      const s = d.settings, L = d.limits, p = d.ping || {};
-      el.innerHTML = r(html`${settingsHead('agentless', 'Agentless', 'How the master checks devices without an agent')}
-        ${canChange() ? '' : html`<div class="notice blue">Your account is read-only: you can see these settings but not change them.</div>`}
-        ${p.error ? html`<div class="notice red" style="max-width:720px"><b>The master cannot send pings.</b> ${p.error}</div>` : ''}
-        <div class="panel panel-pad" style="max-width:720px">
-          <h2>Ping</h2>
-          <div class="muted small">The ping shows whether an agentless device is up. These values apply to all ${d.devices} agentless device${d.devices === 1 ? '' : 's'}, unless ping is turned off for a device. Services have their own settings, on each device's Services tab.</div>
-          <form class="form" data-submit="save"><fieldset class="plain" ${canChange() ? '' : 'disabled'}>
-            <label class="field">Ping every (seconds)<input type="number" name="interval" min="${L.interval_min}" max="${L.interval_max}" value="${s.interval_sec}" required></label>
-            <div class="dim small">${L.interval_min}–${L.interval_max} seconds. Default 60.</div>
-            <label class="field">Wait for an answer (seconds)<input type="number" name="timeout" min="${L.timeout_min}" max="${L.timeout_max}" value="${s.timeout_sec}" required></label>
-            <div class="dim small">${L.timeout_min}–${L.timeout_max} seconds. Default 2.</div>
-            <label class="field">Down after this many unanswered pings in a row<input type="number" name="down" min="${L.down_min}" max="${L.down_max}" value="${s.down_after}" required></label>
-            <div class="dim small" id="lc-hint"></div>
-            ${ifChange(html`<div><button class="btn primary">Save</button></div>`)}
-          </fieldset></form>
-          <div class="dim small" style="margin-top:14px">${p.method ? `Pings are sent through a ${p.method}.` : 'No ping sent yet.'} Only the IP address is used: no DNS lookups.</div>
-        </div>`);
-      const f = $('form[data-submit=save]', el);
-      const hint = () => {
-        const n = +f.down.value || 1, i = +f.interval.value || 0;
-        $('#lc-hint').textContent = `${L.down_min}–${L.down_max}. Default 3. A device is shown down after about ${dur(n * i)} without an answer, and up again at the first answer.`;
-      };
-      f.down.addEventListener('input', hint);
-      f.interval.addEventListener('input', hint);
-      hint();
-    },
-    acts: {
-      save: async (f) => {
-        await POST('local', { interval_sec: +f.interval.value, timeout_sec: +f.timeout.value, down_after: +f.down.value });
-        toast('Saved', 'ok');
-      },
-    },
-  };
-}
-
 function SettingsGeneral() {
   const st = { saved: null, next: 0, timer: null };
   // One block: heading, description and a form with its own Save.
@@ -3241,8 +3327,10 @@ function SettingsGeneral() {
   }
   return {
     async mount(el) {
-      const d = await GET('settings');
+      const [d, lp] = await Promise.all([GET('settings'), GET('local')]);
       const s = d.settings, L = d.limits;
+      // The ping of every pinged device (agentless, and agent devices with a ping on their Services tab).
+      const ps = lp.settings, PL = lp.limits, pg = lp.ping || {};
       st.saved = s.retention_days;
       el.innerHTML = r(html`${settingsHead('general', 'General', 'How the master checks, cleans up and is reached')}
         ${canChange() ? '' : html`<div class="notice blue">Your account is read-only: you can see these settings but not change them.</div>`}
@@ -3255,6 +3343,16 @@ function SettingsGeneral() {
             <label class="field">Lowest allowed agent version<select name="minagent">
               ${[...(d.agent_versions || [])].reverse().map((v, i) => html`<option value="${v}" ${v === (s.min_agent_version || d.min_agent) ? 'selected' : ''}>${v}${i === 0 ? ' (oldest stored)' : ''}</option>`)}</select></label>
             <div class="dim small">Older agents can still connect, but only to be updated: the master stores and shows none of their data and runs nothing else on them.</div>`)}
+        ${block('ping', 'Ping', 'How devices are pinged, by the master and by remote probes', html`
+            ${pg.error ? html`<div class="notice red" style="margin:0"><b>The master cannot send pings.</b> ${pg.error}</div>` : ''}
+            <div class="dim small">The same for every device with a ping: agentless devices, and agent devices with a ping on their Services tab. Services have their own settings, on each device's Services tab.</div>
+            <label class="field">Ping every (seconds)<input type="number" name="interval" min="${PL.interval_min}" max="${PL.interval_max}" value="${ps.interval_sec}" required></label>
+            <div class="dim small">${PL.interval_min}–${PL.interval_max} seconds. Default 60.</div>
+            <label class="field">Wait for an answer (seconds)<input type="number" name="timeout" min="${PL.timeout_min}" max="${PL.timeout_max}" value="${ps.timeout_sec}" required></label>
+            <div class="dim small">${PL.timeout_min}–${PL.timeout_max} seconds. Default 2.</div>
+            <label class="field">Down after this many unanswered pings in a row<input type="number" name="down" min="${PL.down_min}" max="${PL.down_max}" value="${ps.down_after}" required></label>
+            <div class="dim small" id="lc-hint"></div>
+            <div class="dim small">${pg.method ? `The master sends pings through a ${pg.method}.` : 'The master has sent no ping yet.'} Only the IP address is used: no DNS lookups.</div>`)}
         ${block('access', 'Website & sign-in', 'How people and agents reach the master, and how users sign in', html`
             <label class="field">Website port<select name="port">
               <option value="8443" ${s.ui_port !== 443 ? 'selected' : ''}>8443 (default)</option>
@@ -3308,7 +3406,14 @@ function SettingsGeneral() {
       const retVal = () => { const days = +fh.ret.value; $('#ret-val').textContent = `${days} day${days === 1 ? '' : 's'}`; };
       fh.ret.addEventListener('input', () => { retVal(); clearTimeout(st.timer); st.timer = setTimeout(() => preview(fh), 250); });
       fg.hb.addEventListener('input', hbHint);
-      hbHint(); retVal();
+      const fp = form('ping');
+      const pingHint = () => {
+        const n = +fp.down.value || 1, i = +fp.interval.value || 0;
+        $('#lc-hint').textContent = `${PL.down_min}–${PL.down_max}. Default 3. A device is shown down after about ${dur(n * i)} without an answer, and up again at the first answer.`;
+      };
+      fp.down.addEventListener('input', pingHint);
+      fp.interval.addEventListener('input', pingHint);
+      hbHint(); retVal(); pingHint();
       preview(fh);
     },
     unmount() { clearTimeout(st.timer); },
@@ -3345,6 +3450,10 @@ function SettingsGeneral() {
       'save-agents': async (f) => {
         await POST('settings/agents', { heartbeat_sec: +f.hb.value, check_interval_hours: +f.interval.value, min_agent_version: f.minagent?.value || '' });
         toast('Agents settings saved', 'ok');
+      },
+      'save-ping': async (f) => {
+        await POST('local', { interval_sec: +f.interval.value, timeout_sec: +f.timeout.value, down_after: +f.down.value });
+        toast('Ping settings saved', 'ok');
       },
       'save-access': async (f) => {
         if (!f.tfanets.value.trim()) f.tfamode.value = '';

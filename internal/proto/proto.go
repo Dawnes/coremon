@@ -90,6 +90,40 @@ type PollRequest struct {
 	// Probe: set by agents that can check agentless devices for the master
 	// (remote probe); older agents leave it out.
 	Probe *ProbeReport `json:"probe,omitempty"`
+	// Metrics: the agent's own disk, memory and load readings (agent 0.3.12
+	// and later); older agents leave it out.
+	Metrics *Metrics `json:"metrics,omitempty"`
+}
+
+// Metrics: every 60 s the agent reads its filesystems, memory and load;
+// the readings not yet delivered go with the next poll.
+type Metrics struct {
+	Disks   []DiskInfo     `json:"disks"`             // the filesystems now (local ones; no tmpfs, overlay, squashfs)
+	Samples []MetricSample `json:"samples,omitempty"` // oldest first
+}
+
+type DiskInfo struct {
+	Mount string `json:"mount"`
+	FS    string `json:"fs"`
+	Size  uint64 `json:"size"` // bytes
+}
+
+type MetricSample struct {
+	AgoMs    int64     `json:"ago_ms"` // how long before sending it was read
+	Load1    float64   `json:"load1"`
+	Load5    float64   `json:"load5"`
+	Load15   float64   `json:"load15"`
+	CPUs     int       `json:"cpus"`
+	MemTotal uint64    `json:"mem_total"` // bytes
+	MemAvail uint64    `json:"mem_avail"` // bytes the system can still give out without swapping
+	Disks    []DiskUse `json:"disks,omitempty"`
+}
+
+type DiskUse struct {
+	Mount string `json:"mount"`
+	Size  uint64 `json:"size"`  // bytes
+	Free  uint64 `json:"free"`  // bytes free, including those reserved for root
+	Avail uint64 `json:"avail"` // bytes free for normal users
 }
 
 // Remote probe: the master gives an agent a complete check list (never only

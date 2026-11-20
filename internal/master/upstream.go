@@ -116,7 +116,7 @@ func (s *Server) failing(id string, now int64) bool {
 		if d.Maint != nil {
 			return false
 		}
-		lv := s.checksView(&d.Checks, false)
+		lv := s.checksView(&d.Checks, false, false)
 		return lv.Checked && !lv.Up
 	}
 	if a := s.st.st.Agents[id]; a != nil {

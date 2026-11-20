@@ -68,6 +68,7 @@ type agentView struct {
 	Via          *devRef                    `json:"via,omitempty"`         // "Connected via"
 	ViaChain     []devRef                   `json:"via_chain,omitempty"`   // device page: every device above it, nearest first
 	Unreach      *devRef                    `json:"unreach,omitempty"`     // down, cut off behind this device (down or in maintenance)
+	Disks        []proto.DiskInfo           `json:"disks,omitempty"`       // agent device page: its filesystems, for a Disk space service
 }
 
 // setVia fills the network fields of a device's view. down: the device
@@ -124,7 +125,10 @@ func (s *Server) view(a *Agent, full bool) agentView {
 		v.CheckAddrs = agentAddresses(a)
 	}
 	if agentHasChecks(a) {
-		v.Checks = s.checksView(a.Checks, full)
+		v.Checks = s.checksView(a.Checks, full, !v.Online)
+	}
+	if full {
+		v.Disks = a.Disks
 	}
 	s.setVia(&v, a.Via, a.Maint == nil && a.Status != StatusPending && !v.Online, full)
 	if s.belowMin(a) {

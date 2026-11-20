@@ -35,13 +35,14 @@ type Checks struct {
 
 func (c *Checks) pinging() bool { return c.PingMode == "" }
 
-// activeChecks: the checks that run (the ping and the services not paused).
+// activeChecks: the checks from outside that run (the ping and the services
+// not paused; disk, memory and load are measured by the agent itself).
 func (c *Checks) activeChecks() int {
 	n := 0
 	if c.pinging() {
 		n++
 	}
-	for _, sv := range c.Services {
+	for _, sv := range c.outside() {
 		if !sv.Paused {
 			n++
 		}
@@ -259,7 +260,8 @@ func (s *Server) handleAgentChecks(w http.ResponseWriter, r *http.Request) {
 // attach gives an agent device that has no checks yet its checks block,
 // with its first usable address, checked by the master. Caller holds s.st.mu.
 func (s *Server) attach(d *checkDev) (int, error) {
-	if d.Agent == nil || d.Agent.Checks != nil {
+	// Already with an address (a block made for disk, memory or load only has none).
+	if d.Agent == nil || d.Address != "" {
 		return 0, nil
 	}
 	l := agentAddresses(d.Agent)
