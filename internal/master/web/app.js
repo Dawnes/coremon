@@ -251,6 +251,82 @@ function confirmBox(title, body, { okText = 'Confirm', danger = false } = {}) {
 }
 document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeModal(); });
 
+// Searchable dropdown: a button with a hidden input (the form value); it
+// opens a list with a search field on top that filters on name and IP,
+// in any case. Arrow keys move, Enter picks, Esc closes.
+// items: [{ v, label, sub, note, off, find }]; change: a data-change action.
+function pick(name, items, cur, { sm = false, change = '', ph = 'Search name or IP…', style = '' } = {}) {
+  const sel = items.find((x) => x.v === cur) || items[0];
+  return html`<div class="pick ${sm ? 'sm' : ''}" data-pick ${style ? raw(`style="${esc(style)}"`) : ''}>
+    <input type="hidden" name="${name}" value="${sel ? sel.v : ''}" ${change ? raw(`data-change="${esc(change)}"`) : ''}>
+    <button type="button" class="pick-btn" data-pick-open aria-haspopup="listbox">${pickLabel(sel)}</button>
+    <div class="pick-pop" hidden><input type="search" class="pick-q" placeholder="${ph}" autocomplete="off" spellcheck="false">
+      <div class="pick-list" role="listbox">${items.map((x) => html`<div class="pick-opt ${x.off ? 'off' : ''} ${x === sel ? 'sel' : ''}" role="option" data-v="${x.v}"
+        data-label="${x.label}" data-sub="${x.sub || ''}" data-s="${`${x.label} ${x.sub || ''} ${x.find || ''}`.toLowerCase()}">${x.label}${x.note ? html` <span class="dim small">(${x.note})</span>` : ''}${x.sub ? html`<span class="pick-sub">${x.sub}</span>` : ''}</div>`)}
+      <div class="pick-none" hidden>No match</div></div></div></div>`;
+}
+const pickLabel = (x) => html`<span class="pick-lbl">${x?.label || ''}</span>${x?.sub ? html`<span class="pick-sub">${x.sub}</span>` : ''}${icon('chev')}`;
+function pickClose(p, focus = true) {
+  if (!p) return;
+  p.classList.remove('open');
+  $('.pick-pop', p).hidden = true;
+  if (focus) $('.pick-btn', p).focus();
+}
+function pickMove(p, d, start = false) {
+  const opts = [...p.querySelectorAll('.pick-opt:not([hidden]):not(.off)')];
+  let i = opts.findIndex((o) => o.classList.contains(start ? 'sel' : 'act'));
+  p.querySelectorAll('.pick-opt.act').forEach((o) => o.classList.remove('act'));
+  if (!opts.length) return;
+  i = start ? Math.max(i, 0) : i < 0 ? 0 : (i + d + opts.length) % opts.length;
+  opts[i].classList.add('act');
+  opts[i].scrollIntoView({ block: 'nearest' });
+}
+function pickFilter(p) {
+  const q = $('.pick-q', p).value.trim().toLowerCase();
+  let n = 0;
+  p.querySelectorAll('.pick-opt').forEach((o) => { o.hidden = !!q && !o.dataset.s.includes(q); if (!o.hidden) n++; });
+  $('.pick-none', p).hidden = n > 0;
+  pickMove(p, 0, true);
+}
+function pickChoose(p, o) {
+  if (!o || o.classList.contains('off')) return;
+  const inp = $('input[type=hidden]', p), changed = inp.value !== o.dataset.v;
+  p.querySelectorAll('.pick-opt.sel').forEach((x) => x.classList.remove('sel'));
+  o.classList.add('sel');
+  inp.value = o.dataset.v;
+  setHTML($('.pick-btn', p), pickLabel({ label: o.dataset.label, sub: o.dataset.sub }));
+  pickClose(p);
+  if (changed) inp.dispatchEvent(new Event('change', { bubbles: true }));
+}
+document.addEventListener('click', (e) => {
+  const open = document.querySelector('.pick.open');
+  const o = e.target.closest('.pick-opt');
+  if (o) { pickChoose(o.closest('.pick'), o); return; }
+  const b = e.target.closest('[data-pick-open]');
+  if (b) {
+    const p = b.closest('.pick');
+    if (p === open) { pickClose(p); return; }
+    pickClose(open, false);
+    p.classList.add('open');
+    $('.pick-pop', p).hidden = false;
+    const q = $('.pick-q', p);
+    q.value = '';
+    pickFilter(p);
+    q.focus();
+    return;
+  }
+  if (open && !open.contains(e.target)) pickClose(open, false);
+});
+document.addEventListener('input', (e) => { if (e.target.classList?.contains('pick-q')) pickFilter(e.target.closest('.pick')); });
+window.addEventListener('keydown', (e) => {
+  const p = e.target.closest?.('.pick.open');
+  if (!p) return;
+  if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); pickClose(p); }
+  else if (e.key === 'ArrowDown' || e.key === 'ArrowUp') { e.preventDefault(); pickMove(p, e.key === 'ArrowDown' ? 1 : -1); }
+  else if (e.key === 'Enter') { e.preventDefault(); e.stopPropagation(); pickChoose(p, $('.pick-opt.act', p)); }
+  else if (e.key === 'Tab') pickClose(p, false);
+}, true);
+
 function statusBadge(st) {
   const m = { queued: ['mute', 'queued'], running: ['info', 'running'], success: ['ok', 'success'], failed: ['sec', 'failed'], timeout: ['sec', 'timeout'], cancelled: ['mute', 'cancelled'] };
   const [c, t] = m[st] || ['mute', st];
@@ -518,7 +594,66 @@ function showMustChange() {
 
 const isLocal = (a) => a.monitor === 'local';
 // Down: an agent device that stopped reporting, or a local device that stopped answering.
-const isDown = (a) => !a.maint && (isLocal(a) ? a.local.checked && !a.local.up : !a.online && a.status !== 'pending');
+// Unreachable (a.unreach): down, but cut off behind a device above it that
+// is down or in maintenance; not a failure of its own.
+const isDown = (a) => !a.maint && !a.unreach && (isLocal(a) ? a.local.checked && !a.local.up : !a.online && a.status !== 'pending');
+const unrText = (a) => `unreachable · behind ${a.unreach.name}`;
+// The address a device is known by: an agentless device's own, or an agent's first IPv4 (not loopback).
+const devIP = (a) => {
+  if (!a) return '';
+  if (isLocal(a)) return a.local.address;
+  const ips = a.facts?.ips || [];
+  return ips.find((ip) => ip.includes('.') && !ip.startsWith('127.')) || ips.find((ip) => ip !== '::1') || '';
+};
+// "Connected via" choices: every approved device except the device itself
+// and the devices below it (no loops).
+function viaItems(all, self) {
+  const below = new Set([self]);
+  for (let grew = true; grew;) {
+    grew = false;
+    for (const a of all) if (a.via && below.has(a.via.id) && !below.has(a.id)) { below.add(a.id); grew = true; }
+  }
+  const list = all.filter((a) => a.status !== 'pending' && !below.has(a.id)).sort(byName);
+  return [{ v: '', label: 'None', sub: "directly on the master's network" },
+    ...list.map((a) => ({ v: a.id, label: a.name, sub: `${devIP(a)} · ${isLocal(a) ? 'agentless' : 'agent'}`, find: (a.facts?.ips || []).join(' ') }))];
+}
+// "Checked by" choices: the master, and the agents with Remote probe on.
+function probeItems(pa, cur, curName, skip = '') {
+  const ag = pa.agents.filter((p) => p.id !== skip);
+  const items = [{ v: '', label: 'Master', sub: 'the master itself' },
+    ...ag.map((p) => ({ v: p.id, label: p.name, sub: p.note ? '' : !p.online ? 'offline' : `${p.checks} of ${pa.max} checks`, note: p.note, off: !!p.note && cur !== p.id }))];
+  if (cur && !ag.some((p) => p.id === cur)) items.push({ v: cur, label: curName || cur });
+  return items;
+}
+const VIA_HINT = 'The device it sits behind on the network, such as a switch, a router or the host of a VM. When that device is down or in maintenance and this one fails too, it shows as unreachable instead of down. Its checks keep running.';
+// "Connected via core › switch-2" (top down) on a device page, with a change link for admins.
+function viaLine(a) {
+  const ch = [...(a.via_chain || [])].reverse();
+  return html`<div class="sub">Connected via ${ch.length ? ch.map((x, i) => html`${i ? ' › ' : ''}<a href="#/device/${x.id}">${x.name}</a>`) : html`<span class="dim">none</span>`}${ifChange(html` <a href="#" class="small" data-act="via-edit" title="Change the device it is connected via">change</a>`)}</div>`;
+}
+function unrNotice(a) {
+  if (!a.unreach) return '';
+  return html`<div class="notice unr"><b>Unreachable</b> — it does not answer, and <a href="#/device/${a.unreach.id}"><b>${a.unreach.name}</b></a>, which it is connected via, is down or in maintenance. It is not counted as a failure of its own; its checks keep running.</div>`;
+}
+async function viaModal(a, done) {
+  const ov = await GET('overview');
+  openModal(html`<h3>Connected via: ${a.name}</h3>
+    <form class="form" data-submit="save">
+      <div class="field">Connected via${pick('via', viaItems(ov.agents, a.id), a.via?.id || '')}</div>
+      <div class="dim small">${VIA_HINT}</div>
+      <div class="actions"><button type="button" class="btn ghost" data-act="cancel">Cancel</button><button class="btn primary">Save</button></div>
+    </form>`, {
+    acts: {
+      cancel: () => closeModal(),
+      save: async (f) => {
+        const res = await POST((isLocal(a) ? 'locals/' : 'agents/') + a.id, { via: f.via.value });
+        closeModal();
+        toast('Saved', 'ok');
+        done?.(res);
+      },
+    },
+  });
+}
 // Maintenance: nothing checked or started automatically, no failures shown.
 const hhmm = (ts) => new Date(ts * 1000).toTimeString().slice(0, 5);
 const maintUntil = (m) => (m.until ? `until ${hhmm(m.until)}` : 'until ended');
@@ -561,6 +696,7 @@ const checksDownShort = (x) => `${x.n} ${x.L.ping ? 'check' : 'service'}${x.n ==
 const checksFailText = (x) => (x.L.svc_fail ? `${x.L.svc_fail.name}${x.L.svc_fail.step && x.L.svc_fail.step !== 'connect' ? `: ${stepLabel(x.L.svc_fail.step).toLowerCase()}` : ''}` : x.ping ? 'ping: no answer' : '');
 function agentDot(a) {
   if (a.maint) return html`<span class="dot maint" title="${maintText(a.maint)}"></span>`;
+  if (a.unreach) return html`<span class="dot unr" title="${unrText(a)}"></span>`;
   if (isLocal(a)) {
     const L = a.local, p = probeOut(a);
     if (p) return html`<span class="dot unk" title="${unknownText(p)}"></span>`;
@@ -722,7 +858,7 @@ function agentMatches(a, f, q, groups) {
   if (f === 'updates' && !(u.total > 0)) return false;
   if (f === 'security' && !(u.security > 0)) return false;
   if (f === 'reboot' && !u.reboot_required) return false;
-  if (f === 'offline' && !isDown(a)) return false;
+  if (f === 'offline' && !isDown(a) && !a.unreach) return false;
   if (f === 'pending' && a.status !== 'pending') return false;
   if (f === 'agent' && (a.core_is_latest || !a.core_version)) return false;
   if (q) {
@@ -747,10 +883,11 @@ function Dashboard() {
   const matches = (a) => agentMatches(a, st.filter, st.q, st.data.groups);
   function localCard(a) {
     const L = a.local, p = probeOut(a);
-    const state = a.maint ? 'maint' : p ? 'unk' : !L.checked ? 'wait' : L.up ? 'up' : 'down';
+    const state = a.maint ? 'maint' : p ? 'unk' : !L.checked ? 'wait' : L.up ? 'up' : a.unreach ? 'unr' : 'down';
     const svcDown = state === 'up' && L.svc_down > 0;
-    const accent = svcDown ? 'a-upd' : { maint: 'a-maint', unk: 'a-unk', wait: 'a-pend', up: 'a-ok', down: 'a-off' }[state];
+    const accent = svcDown ? 'a-upd' : { maint: 'a-maint', unk: 'a-unk', wait: 'a-pend', up: 'a-ok', down: 'a-off', unr: 'a-unr' }[state];
     const big = { maint: html`<div class="big maint">${icon('pause')}</div><div class="biglbl">in maintenance<br>${a.maint ? maintUntil(a.maint) : ''}</div>`,
+      unr: html`<div class="big unr">?</div><div class="biglbl">unreachable<br>behind ${a.unreach?.name || ''}</div>`,
       unk: html`<div class="big dim">?</div><div class="biglbl">unknown<br>${p ? p.note.replace(/:.*/, '') : ''}</div>`,
       wait: L.fails ? html`<div class="big some">?</div><div class="biglbl">no answer yet<br>${L.fails} of ${L.down_after} checks</div>`
       : L.last_error ? html`<div class="big sec" title="${L.last_error}">!</div><div class="biglbl">the master cannot<br>check it</div>`
@@ -763,7 +900,7 @@ function Dashboard() {
         <div class="top">${arranging() ? html`<span class="grip" title="Drag to reorder or move to another group">${icon('grip')}</span>` : ''}${agentDot(a)}
           <div style="min-width:0"><div class="name">${a.name}</div><div class="os">Agentless${L.probe ? html` · via ${L.probe.name}` : ''}</div><div class="os"><span class="ip">${L.address}</span></div></div></div>
         <div class="mid">${big}<div class="badges">${uptime}</div></div>
-        <div class="inforow"><span class="uptime">${icon('clock')}${state === 'maint' ? 'no checks now' : state === 'unk' ? 'no results now' : state === 'wait' ? (L.fails ? 'not decided yet' : 'not checked yet') : `${L.up ? 'up' : 'down'} ${dur(now() - L.since)}`}</span><span class="spacer"></span>${state === 'up' && L.ping && L.rtt_us ? html`<span class="tag mono">${rttText(L.rtt_us)}</span>` : ''}</div>
+        <div class="inforow"><span class="uptime">${icon('clock')}${state === 'maint' ? 'no checks now' : state === 'unk' ? 'no results now' : state === 'wait' ? (L.fails ? 'not decided yet' : 'not checked yet') : `${L.up ? 'up' : state === 'unr' ? 'no answer' : 'down'} ${dur(now() - L.since)}`}</span><span class="spacer"></span>${state === 'up' && L.ping && L.rtt_us ? html`<span class="tag mono">${rttText(L.rtt_us)}</span>` : ''}</div>
         <div class="foot"><span>${L.last_check ? when(L.last_check, 'checked ') : 'waiting'}</span></div>
       </div>`;
   }
@@ -775,10 +912,11 @@ function Dashboard() {
     if (a.status === 'pending') accent = 'a-pend';
     else if (a.maint) accent = 'a-maint';
     else if (a.below_min) accent = 'a-upd';
+    else if (a.unreach) accent = 'a-unr';
     else if (!a.online) accent = 'a-off';
     else if (u?.security) accent = 'a-sec';
     else if (u?.total) accent = 'a-upd';
-    const cdown = agentChecksDown(a);
+    const cdown = a.unreach ? null : agentChecksDown(a);
     if (cdown && accent === 'a-ok') accent = 'a-upd';
     const selectable = a.status === 'active' && !a.below_min && canChange();
     let mid;
@@ -804,8 +942,9 @@ function Dashboard() {
             : html`<div class="os">${osLabel(f)} · ${f.arch || '?'} · ${f.virt || ''}</div><div class="os">${ipLabel(f)}</div>`}</div>
           ${selectable ? html`<input type="checkbox" class="selbox" data-act="sel" data-id="${a.id}" ${st.sel.has(a.id) ? 'checked' : ''} title="Select">` : ''}</div>
         ${mid}
+        ${a.unreach ? html`<div class="svcline unr">${unrText(a)}</div>` : ''}
         ${cdown ? html`<div class="svcline" title="${cdown.L.svc_fail ? `${cdown.L.svc_fail.name}: ${cdown.L.svc_fail.error || 'down'}` : ''}">${checksDownText(cdown)}${checksFailText(cdown) ? ` · ${checksFailText(cdown)}` : ''}</div>` : ''}
-        ${a.status !== 'pending' ? html`<div class="inforow"><span class="uptime" title="${a.below_min ? '' : lastReboot(a)}">${icon('clock')}${!a.online ? (a.maint ? 'not connected' : 'offline') : a.below_min ? 'online' : 'up ' + dur(f.uptime_sec)}</span>${a.maint ? '' : healthBadges(a)}<span class="spacer"></span>${verPill(a)}</div>` : ''}
+        ${a.status !== 'pending' ? html`<div class="inforow"><span class="uptime" title="${a.below_min ? '' : lastReboot(a)}">${icon('clock')}${!a.online ? (a.maint ? 'not connected' : a.unreach ? 'unreachable' : 'offline') :a.below_min ? 'online' : 'up ' + dur(f.uptime_sec)}</span>${a.maint ? '' : healthBadges(a)}<span class="spacer"></span>${verPill(a)}</div>` : ''}
         <div class="foot">
           ${a.busy ? html`<span class="spin"></span><span>${a.busy} job${a.busy > 1 ? 's' : ''}</span>` : html`<span>${a.online ? (u ? when(u.checked_at, 'checked ') : 'online') : a.status === 'pending' ? '' : when(a.last_seen, 'seen ')}</span>`}
         </div>
@@ -823,6 +962,7 @@ function Dashboard() {
     const upd = active.reduce((s, a) => s + (a.updates?.total || 0), 0);
     const sec = active.reduce((s, a) => s + (a.updates?.security || 0), 0);
     const off = active.filter(isDown).length;
+    const unr = active.filter((a) => a.unreach && !a.maint).length;
     const selectable = list.filter((a) => a.status === 'active' && !isLocal(a));
     const allSel = selectable.length && selectable.every((a) => st.sel.has(a.id));
     const head = showHead ? html`
@@ -830,7 +970,7 @@ function Dashboard() {
         <button class="btn ghost sm iconbtn fold ${folded ? 'shut' : ''}" data-act="fold" data-gid="${g.id}" title="${folded ? 'Unfold' : 'Fold'}">${icon('chev')}</button>
         ${g.id && arranging() ? html`<span class="grip" title="Drag to reorder groups">${icon('grip')}</span>` : ''}
         <span class="gname">${g.name}</span>
-        <span class="gsum">${agents.length} device${agents.length === 1 ? '' : 's'}${upd ? html` · <b class="c-amber">${upd} update${upd === 1 ? '' : 's'}</b>` : ''}${sec ? html` · <b class="c-red">${sec} security</b>` : ''}${off ? html` · <b class="c-red">${off} offline</b>` : ''}</span>
+        <span class="gsum">${agents.length} device${agents.length === 1 ? '' : 's'}${upd ? html` · <b class="c-amber">${upd} update${upd === 1 ? '' : 's'}</b>` : ''}${sec ? html` · <b class="c-red">${sec} security</b>` : ''}${off ? html` · <b class="c-red">${off} offline</b>` : ''}${unr ? html` · <b class="c-unr">${unr} unreachable</b>` : ''}</span>
         <span class="spacer"></span>
         ${selectable.length && canChange() ? html`<label class="gsel" title="Select all devices in this group"><input type="checkbox" data-act="sel-group" data-gid="${g.id}" ${allSel ? 'checked' : ''}> select</label>` : ''}
       </div>` : '';
@@ -853,13 +993,20 @@ function Dashboard() {
     // Services OK: per agent its connection; per agentless device the
     // running ping and services. Undecided (waiting, retrying) is not OK.
     let svcTotal = 0, svcOK = 0, svcDown = 0, devClean = 0;
+    // Unreachable devices, per device they are cut off behind: the cause, once.
+    const behind = new Map();
     for (const a of active) {
       let t = 0, ok = 0, down = 0;
       // An agent counts its connection, plus the checks on its Services tab.
       const L = chk(a), [ct, cok, cdown] = L ? checkCounts(L) : [0, 0, 0];
-      if (a.maint) {
-        // In maintenance: counts, but not as OK and not as down.
+      if (a.maint || a.unreach) {
+        // In maintenance or unreachable: counts, but not as OK and not as down.
         t = (isLocal(a) ? 0 : 1) + ct;
+        if (a.unreach && !a.maint) {
+          const c = behind.get(a.unreach.id) || { name: a.unreach.name, n: 0 };
+          c.n++;
+          behind.set(a.unreach.id, c);
+        }
       } else {
         t = ct; ok = cok; down = cdown; // unknown (probe out): counts, but not as OK and not as down
         if (!isLocal(a)) {
@@ -899,7 +1046,8 @@ function Dashboard() {
     const hours = d.settings?.check_interval_hours || 6;
     setHTML($('#d-stats'), html`
       <div class="panel stat ${svcClass}" title="Agents: the connection. Agentless devices: the ping and every service that is not paused."><div class="label">Services OK</div><div class="value">${svcOK}<small> / ${svcTotal}</small></div>
-        <div class="statnote">${active.length} device${active.length === 1 ? '' : 's'} · ${devClean} without failures${reportOnly ? html` · <span title="Report-only devices only report; no checks, installs or reboots">${reportOnly} report only</span>` : ''}</div></div>
+        <div class="statnote">${active.length} device${active.length === 1 ? '' : 's'} · ${devClean} without failures${reportOnly ? html` · <span title="Report-only devices only report; no checks, installs or reboots">${reportOnly} report only</span>` : ''}</div>
+        ${[...behind.values()].map((c) => html`<div class="statnote"><span class="c-unr" title="Unreachable devices are not counted as failures">${c.n} unreachable behind ${c.name}</span></div>`)}</div>
       <div class="panel stat c-amber"><div class="label">Pending updates</div><div class="value">${totUpd}</div>
         ${totSec ? html`<div class="statnote"><span class="c-red">${totSec} security</span></div>` : ''}</div>
       <div class="panel stat c-violet"><div class="label">Reboot required</div><div class="value">${reboot}</div></div>
@@ -1091,7 +1239,7 @@ function DeviceList() {
   lastDashSub = 'devices';
   const st = { filter: 'all', q: '', data: null, sort: 'name', dir: 1 };
   const byText = (x, y) => String(x).localeCompare(String(y), undefined, { numeric: true, sensitivity: 'base' });
-  const statusText = (a) => (a.maint ? 'maintenance' : isLocal(a) ? (probeOut(a) ? 'unknown' : !a.local.checked ? 'waiting' : a.local.up ? (a.local.svc_down ? `${a.local.svc_down} service${a.local.svc_down === 1 ? '' : 's'} down` : 'online') : 'down')
+  const statusText = (a) => (a.maint ? 'maintenance' : a.unreach ? 'unreachable' : isLocal(a) ? (probeOut(a) ? 'unknown' : !a.local.checked ? 'waiting' : a.local.up ? (a.local.svc_down ? `${a.local.svc_down} service${a.local.svc_down === 1 ? '' : 's'} down` : 'online') : 'down')
     : a.status === 'pending' ? 'pending' : a.below_min ? 'update required' : !a.online ? 'offline' : agentChecksDown(a) ? checksDownShort(agentChecksDown(a)) : a.status === 'report_only' ? 'report only' : 'online');
   const lastTs = (a) => (isLocal(a) ? a.local.last_check || 0 : a.online ? a.updates?.checked_at || 0 : a.last_seen || 0);
   const healthN = (a) => (a.facts?.health?.failed_count > 0 ? 2 : 0) + (a.facts?.health?.auto_updates === 'on' ? 1 : 0);
@@ -1117,6 +1265,7 @@ function DeviceList() {
   }
   function last(a) {
     if (a.maint) return html`<span class="c-blue">maintenance</span><span class="dim">, ${maintUntil(a.maint)}</span>`;
+    if (a.unreach) return html`<span class="c-unr">unreachable</span><span class="dim">, behind ${a.unreach.name}</span>`;
     if (isLocal(a)) {
       const L = a.local, p = probeOut(a);
       if (p) return html`<span class="dim">${unknownText(p)}</span>`;
@@ -1131,7 +1280,7 @@ function DeviceList() {
   function row(a) {
     const u = a.updates, o = a.os_support, f = a.facts;
     return html`<tr>
-      <td class="nowrap" title="${statusText(a)}${a.below_min ? ` (agent ${a.core_version}, lowest allowed ${a.min_agent})` : ''}">${agentDot(a)}${statusText(a) === 'online' ? '' : html` <span class="small ${a.maint ? 'c-blue' : statusText(a) === 'unknown' ? 'dim' : a.status === 'pending' || a.status === 'report_only' || a.below_min || statusText(a) === 'waiting' || / (service|check)s? down/.test(statusText(a)) ? 'c-amber' : 'c-red'}">${statusText(a)}</span>`}</td>
+      <td class="nowrap" title="${statusText(a)}${a.below_min ? ` (agent ${a.core_version}, lowest allowed ${a.min_agent})` : ''}">${agentDot(a)}${statusText(a) === 'online' ? '' : html` <span class="small ${a.maint ? 'c-blue' : a.unreach ? 'c-unr' : statusText(a) === 'unknown' ? 'dim' : a.status === 'pending' || a.status === 'report_only' || a.below_min || statusText(a) === 'waiting' || / (service|check)s? down/.test(statusText(a)) ? 'c-amber' : 'c-red'}">${statusText(a)}</span>`}</td>
       <td class="nowrap"><a href="#/device/${a.id}"><b>${a.name}</b></a></td>
       <td class="opt muted">${groupName(a.group_id)}</td>
       <td class="opt small nowrap">${(f.ips || [])[0] || ''}</td>
@@ -1176,22 +1325,30 @@ function DeviceList() {
   };
 }
 
-// Dashboard > Map: every device in a box, with a line to whoever monitors
-// it. That is always a tree: the master on the left (its own agent device,
-// or a "Master" box), the devices it monitors in the next column, and the
-// devices a remote probe checks in a column right of that probe. Parents sit
-// centred on their children, so boxes never overlap and lines never cross.
-// Colours refresh in place; the drawing is only rebuilt when the tree changes.
+// Dashboard > Map, in three views (always opening on Network):
+// - Network: the tree of "Connected via": every device under the device it
+//   sits behind, the others under the master. Where a device above is down,
+//   the line breaks (✕) and the devices behind it are dimmed as unreachable.
+// - Monitoring: who checks what: the master, and each remote probe with the
+//   devices it checks.
+// - Full map: the network tree, plus a dotted line from each remote probe to
+//   every device it checks; hovering a box keeps only its own lines.
+// Every view is a tree: leaves take the next row, a parent is centred on its
+// children, so boxes never overlap and tree lines never cross. Colours
+// refresh in place; the drawing is only rebuilt when the tree changes.
 function MapPage() {
   lastDashSub = 'map';
   const W = 176, H = 40, ROW = 52, GAP = 96, PAD = 8;
-  const st = { key: '', data: null };
+  const st = { key: '', data: null, mode: 'network', nodes: new Map() };
   const byText = (x, y) => String(x).localeCompare(String(y), undefined, { numeric: true, sensitivity: 'base' });
-  // Monitoring colour: ok (green), bad (red) or unk (grey), with a short
-  // status; a third value marks a device that is down itself (its dot flashes).
+  const VIEWS = [['network', 'Network'], ['monitor', 'Monitoring'], ['full', 'Full map']];
+  // Monitoring colour: ok (green), bad (red), unr (unreachable) or unk
+  // (grey), with a short status; a third value marks a device that is down
+  // itself (its dot flashes).
   function health(a) {
     if (!a) return ['ok', 'the master'];
     if (a.maint) return ['unk', maintText(a.maint)];
+    if (a.unreach) return ['unr', unrText(a)];
     if (isLocal(a)) {
       const L = a.local, p = probeOut(a);
       if (p) return ['unk', unknownText(p)];
@@ -1206,93 +1363,163 @@ function MapPage() {
     if (x) return ['bad', `online · ${checksDownText(x)}${checksFailText(x) ? ` · ${checksFailText(x)}` : ''}`];
     return ['ok', a.status === 'report_only' ? 'online (report only)' : 'online'];
   }
-  // The tree: root (master), its devices, and each probe's devices.
-  function tree(d) {
+  // The remote probe that checks a device (agentless, or an agent device's services), or null.
+  const checker = (a) => (a ? (isLocal(a) ? a.local.probe : a.checks?.probe) || null : null);
+  // The tree of a view. Each node: { id, a, depth, kids, remote }.
+  function tree(d, mode) {
     const A = d.agents, groups = d.groups || [];
     const gi = (a) => { const i = groups.findIndex((g) => g.id === a.group_id); return i < 0 ? groups.length : i; };
     const rootA = A.find((a) => a.is_master && a.status !== 'pending' && !isLocal(a)) || null;
-    const agents = new Map(A.filter((a) => !isLocal(a)).map((a) => [a.id, a]));
+    const rootID = rootA ? rootA.id : 'root';
+    const byID = new Map(A.map((a) => [a.id, a]));
     const kids = new Map();
     const add = (pid, a, remote) => { if (!kids.has(pid)) kids.set(pid, []); kids.get(pid).push({ a, remote }); };
     for (const a of A) {
       if (a === rootA) continue;
-      const pid = isLocal(a) && a.local.probe && agents.has(a.local.probe.id) && a.local.probe.id !== rootA?.id ? a.local.probe.id : 'root';
-      add(pid, a, pid !== 'root');
+      let pid = rootID, remote = false;
+      if (mode === 'monitor') {
+        const p = isLocal(a) ? a.local.probe : null;
+        if (p && byID.has(p.id) && p.id !== rootID && !isLocal(byID.get(p.id))) { pid = p.id; remote = true; }
+      } else if (a.via && byID.has(a.via.id)) pid = a.via.id;
+      add(pid, a, remote);
     }
     for (const l of kids.values()) l.sort((x, y) => gi(x.a) - gi(y.a) || byText(x.a.name, y.a.name));
-    // Probe agents are level 1 (monitored by the master), their devices level 2.
-    const node = (id, a, remote, depth) => ({ id, a, remote, depth, kids: (kids.get(id) || []).map((k) => node(k.a.id, k.a, k.remote, depth + 1)) });
-    return node('root', rootA, false, 0);
+    const seen = new Set();
+    const node = (id, a, remote, depth) => {
+      seen.add(id);
+      return { id, a, remote, depth, kids: (kids.get(id) || []).filter((k) => !seen.has(k.a.id)).map((k) => node(k.a.id, k.a, k.remote, depth + 1)) };
+    };
+    const root = node(rootID, rootA, false, 0);
+    // Anything left (a loop in old data): under the master.
+    for (const a of A) if (a !== rootA && !seen.has(a.id)) root.kids.push(node(a.id, a, false, 1));
+    return root;
   }
   // Positions: leaves take the next free row; a parent is centred on its children.
   function place(root) {
     let row = 0;
     const all = [];
-    (function walk(n) {
+    (function walk(n, parent) {
+      n.parent = parent;
       n.x = PAD + n.depth * (W + GAP);
       if (!n.kids.length) { n.y = PAD + row * ROW; row++; }
-      else { n.kids.forEach(walk); n.y = (n.kids[0].y + n.kids[n.kids.length - 1].y) / 2; }
+      else { n.kids.forEach((k) => walk(k, n)); n.y = (n.kids[0].y + n.kids[n.kids.length - 1].y) / 2; }
       all.push(n);
-    })(root);
+    })(root, null);
     const depth = Math.max(...all.map((n) => n.depth));
     return { all, w: PAD * 2 + (depth + 1) * W + depth * GAP, h: PAD * 2 + Math.max(1, row) * ROW - (ROW - H) };
   }
-  // Curved connectors: an S-curve from the parent's right edge to each child.
-  function lines(all) {
+  // Tree lines: an S-curve from the parent's right edge to each child. In the
+  // network views a line to an unreachable device is dashed, and where the
+  // break starts (the parent is not unreachable itself) it gets a ✕.
+  function lines(all, mode) {
     const out = [];
     for (const n of all) {
       const x1 = n.x + W, y1 = n.y + H / 2;
       for (const k of n.kids) {
         const x2 = k.x, y2 = k.y + H / 2, mx = (x1 + x2) / 2;
-        out.push(html`<path class="mapline ${k.remote ? 'remote' : ''}" d="M${x1} ${y1} C${mx} ${y1} ${mx} ${y2} ${x2} ${y2}"/>`);
+        const cut = mode !== 'monitor' && !!k.a?.unreach;
+        out.push(html`<path class="mapline ${k.remote ? 'remote' : ''} ${cut ? 'cut' : ''}" data-k="t:${n.id}:${k.id}" d="M${x1} ${y1} C${mx} ${y1} ${mx} ${y2} ${x2} ${y2}"/>`);
+        if (cut && !n.a?.unreach) {
+          const cx = x1 + 16, cy = y1 + (y2 - y1) * 0.04;
+          out.push(html`<path class="mapcut" data-k="t:${n.id}:${k.id}" d="M${cx - 4} ${cy - 4} L${cx + 4} ${cy + 4} M${cx + 4} ${cy - 4} L${cx - 4} ${cy + 4}"/>`);
+        }
       }
     }
     return out;
   }
-  // The address shown under an agent device's name: its first IPv4 (not loopback).
-  const mapIP = (a) => { const ips = a?.facts?.ips || []; return ips.find((ip) => ip.includes('.') && !ip.startsWith('127.')) || ips.find((ip) => ip !== '::1') || ''; };
-  function box(n) {
-    const a = n.a, [cls, why, down] = health(a), name = a ? a.name : 'Master';
-    const tip = `${name}: ${why}${n.remote ? ` · checked by ${a.local.probe.name}` : ''}`;
-    const ip = a && !isLocal(a) ? mapIP(a) : '';
-    return html`<g class="mapbox ${cls} ${down ? 'down' : ''} ${a ? 'click' : ''}" id="map-${n.id}" ${a ? raw(`data-act="open" data-id="${esc(a.id)}"`) : ''} transform="translate(${n.x} ${n.y})">
-      <title>${tip}</title><rect width="${W}" height="${H}" rx="8"/><circle cx="16" cy="${H / 2}" r="5"/>
-      ${ip ? html`<text x="30" y="${H / 2 - 2}">${clipText(name, 20)}</text><text class="ip" x="30" y="${H / 2 + 11}">${ip}</text>`
-        : html`<text x="30" y="${H / 2 + 4.5}">${clipText(name, 20)}</text>`}</g>`;
+  // Full map: a dotted line from each remote probe to the devices it checks.
+  function checkLines(all) {
+    const at = new Map(all.map((n) => [n.id, n]));
+    const out = [];
+    for (const n of all) {
+      const p = checker(n.a), pn = p && at.get(p.id);
+      if (!pn || pn === n) continue;
+      const x1 = pn.x + W, y1 = pn.y + H / 2, x2 = n.x, y2 = n.y + H / 2, dx = Math.max(60, Math.abs(x2 - x1) / 2);
+      out.push(html`<path class="mapline check" data-k="c:${pn.id}:${n.id}" d="M${x1} ${y1} C${x1 + dx} ${y1} ${x2 - dx} ${y2} ${x2} ${y2}"/>`);
+    }
+    return out;
+  }
+  function tip(n) {
+    const a = n.a, p = checker(a);
+    return `${a ? a.name : 'Master'}: ${health(a)[1]}${p ? ` · checked by ${p.name}` : ''}${a?.via ? ` · connected via ${a.via.name}` : ''}`;
+  }
+  function box(n, mode) {
+    const a = n.a, [cls, , down] = health(a), name = a ? a.name : 'Master';
+    const ip = a && !isLocal(a) ? devIP(a) : '';
+    const p = mode !== 'monitor' ? checker(a) : null;
+    return html`<g class="mapbox ${cls} ${down ? 'down' : ''} ${a ? 'click' : ''}" id="map-${n.id}" data-id="${n.id}" ${a ? raw(`data-act="open"`) : ''} transform="translate(${n.x} ${n.y})">
+      <title>${tip(n)}</title><rect width="${W}" height="${H}" rx="8"/><circle cx="16" cy="${H / 2}" r="5"/>
+      ${ip || p ? html`<text x="30" y="${H / 2 - 2}">${clipText(name, p ? 16 : 20)}</text>${ip ? html`<text class="ip" x="30" y="${H / 2 + 11}">${ip}</text>` : ''}`
+        : html`<text x="30" y="${H / 2 + 4.5}">${clipText(name, 20)}</text>`}
+      ${p ? html`<text class="tag" x="${W - 8}" y="${H / 2 + 11}" text-anchor="end">by ${clipText(p.name, 12)}</text>` : ''}</g>`;
+  }
+  // Hover on the full map: the device, the devices above it (and their
+  // lines) and its checker (and that line) stay; the rest fades.
+  function focus(id) {
+    const svg = $('#map svg');
+    if (!svg) return;
+    svg.querySelectorAll('.hl').forEach((e) => e.classList.remove('hl'));
+    svg.classList.toggle('focus', !!id);
+    if (!id) return;
+    const n = st.nodes.get(id);
+    if (!n) return;
+    const keep = [`#map-${CSS.escape(id)}`];
+    for (let x = n; x.parent; x = x.parent) keep.push(`#map-${CSS.escape(x.parent.id)}`, `[data-k="t:${x.parent.id}:${x.id}"]`);
+    const p = checker(n.a);
+    if (p) keep.push(`#map-${CSS.escape(p.id)}`, `[data-k="c:${p.id}:${id}"]`);
+    // A probe: also the devices it checks.
+    for (const m of st.nodes.values()) if (checker(m.a)?.id === id) keep.push(`#map-${CSS.escape(m.id)}`, `[data-k="c:${id}:${m.id}"]`);
+    svg.querySelectorAll(keep.join(',')).forEach((e) => e.classList.add('hl'));
   }
   function render() {
     const d = st.data;
     if (!d) return;
-    const root = tree(d);
+    const mode = st.mode;
+    setHTML($('#map-tabs'), VIEWS.map(([k, l]) => html`<button class="${mode === k ? 'on' : ''}" data-act="mode" data-m="${k}">${l}</button>`));
+    const root = tree(d, mode);
     const { all, w, h } = place(root);
-    const key = all.map((n) => `${n.id}@${n.x},${n.y}${n.remote ? 'r' : ''}`).join('|') + '|' + all.map((n) => (n.a ? n.a.name + (isLocal(n.a) ? '' : '/' + mapIP(n.a)) : '')).join(',');
+    st.nodes = new Map(all.map((n) => [n.id, n]));
+    const key = mode + '|' + all.map((n) => `${n.id}@${n.x},${n.y}${n.remote ? 'r' : ''}${n.a?.unreach ? 'u' : ''}/${checker(n.a)?.id || ''}`).join('|') + '|' + all.map((n) => (n.a ? n.a.name + '/' + devIP(n.a) : '')).join(',');
     if (key === st.key) {
       // Same tree: only colours and status texts change.
       for (const n of all) {
         const g = document.getElementById('map-' + n.id);
         if (!g) continue;
-        const [cls, why, down] = health(n.a);
-        g.classList.remove('ok', 'bad', 'unk', 'down');
+        const [cls, , down] = health(n.a);
+        g.classList.remove('ok', 'bad', 'unk', 'unr', 'down');
         g.classList.add(cls);
         if (down) g.classList.add('down');
         const t = g.querySelector('title');
-        if (t) t.textContent = `${n.a ? n.a.name : 'Master'}: ${why}${n.remote ? ` · checked by ${n.a.local.probe.name}` : ''}`;
+        if (t) t.textContent = tip(n);
       }
       return;
     }
     st.key = key;
-    setHTML($('#map'), html`<div class="panel mapwrap"><svg class="mapsvg" width="${w}" height="${h}" viewBox="0 0 ${w} ${h}" role="img" aria-label="Monitoring map">
-      ${lines(all)}${all.map(box)}</svg></div>
-      <div class="row dim small" style="margin-top:10px;gap:16px"><span><i class="lg ok"></i>up</span><span><i class="lg bad"></i>down or a service down</span><span><i class="lg none"></i>unknown, waiting, pending or maintenance</span>
-        <span><svg width="28" height="8"><path class="mapline" d="M0 4 H28"/></svg> monitored by the master</span><span><svg width="28" height="8"><path class="mapline remote" d="M0 4 H28"/></svg> checked by a remote probe</span></div>`);
+    const legend = mode === 'monitor'
+      ? html`<span><svg width="28" height="8"><path class="mapline" d="M0 4 H28"/></svg> monitored by the master</span><span><svg width="28" height="8"><path class="mapline remote" d="M0 4 H28"/></svg> checked by a remote probe</span>`
+      : html`<span><svg width="28" height="8"><path class="mapline" d="M0 4 H28"/></svg> connected via</span><span><svg width="28" height="8"><path class="mapline cut" d="M0 4 H28"/></svg> cut off</span>
+        ${mode === 'full' ? html`<span><svg width="28" height="8"><path class="mapline check" d="M0 4 H28"/></svg> checked by a remote probe</span>` : html`<span><b style="color:var(--cyan);font-weight:500">by …</b> checked by a remote probe</span>`}`;
+    setHTML($('#map'), html`<div class="panel mapwrap"><svg class="mapsvg" width="${w}" height="${h}" viewBox="0 0 ${w} ${h}" role="img" aria-label="${VIEWS.find((v) => v[0] === mode)[1]} map">
+      ${lines(all, mode)}${mode === 'full' ? checkLines(all) : ''}${all.map((n) => box(n, mode))}</svg></div>
+      <div class="row dim small" style="margin-top:10px;gap:16px"><span><i class="lg ok"></i>up</span><span><i class="lg bad"></i>down or a service down</span>${mode === 'monitor' ? '' : html`<span><i class="lg unr"></i>unreachable</span>`}<span><i class="lg none"></i>unknown, waiting, pending or maintenance</span>
+        ${legend}</div>
+      ${mode === 'full' ? html`<div class="dim small" style="margin-top:6px">Point at a device to see only its own lines.</div>` : ''}`);
+    const svg = $('#map svg');
+    if (mode === 'full') {
+      svg.addEventListener('mouseover', (e) => { const g = e.target.closest('.mapbox'); focus(g ? g.dataset.id : ''); });
+      svg.addEventListener('mouseleave', () => focus(''));
+    }
   }
   return {
     interval: 5000,
     mount(el) {
-      el.innerHTML = r(html`${subTabs('dashboard', 'map')}<div class="page-head"><div><h1>Map</h1></div></div><div id="map"></div>`);
+      el.innerHTML = r(html`${subTabs('dashboard', 'map')}<div class="page-head"><div><h1>Map</h1></div></div><div class="tabs maptabs" id="map-tabs"></div><div id="map"></div>`);
     },
     async refresh() { const d = await GET('overview'); d.groups ||= []; st.data = d; render(); },
-    acts: { open: (t) => { location.hash = '#/device/' + t.dataset.id; } },
+    acts: {
+      open: (t) => { location.hash = '#/device/' + t.dataset.id; },
+      mode: (t) => { st.mode = t.dataset.m; st.key = ''; render(); },
+    },
   };
 }
 
@@ -1438,6 +1665,7 @@ function AgentPage([id, tab]) {
           ${a.status === 'report_only' ? html`<span class="badge info">${icon('pause')} report only</span>` : ''}${a.status === 'pending' ? html`<span class="badge upd">pending approval</span>` : ''}
           <span class="tag">${icon('folder')} ${g ? g.name : 'Ungrouped'}</span>${verPill(a)}</div>
           <div class="sub" title="${a.below_min ? '' : `${osLabel(f)} · ${f.kernel || ''} · ${f.arch} · ${f.virt}`}">${a.below_min ? html`agent ${a.core_version} · upgrade only · ${a.online ? 'online' : raw('offline, last seen ' + r(when(a.last_seen)))}` : html`${osLabel(f)} · ${f.kernel || ''} · ${f.arch} · ${f.virt} · <span title="${lastReboot(a)}">${a.online ? 'online, up ' + dur(f.uptime_sec) : raw('offline, last seen ' + r(when(a.last_seen)))}</span>`}</div>
+          ${a.status !== 'pending' ? viaLine(a) : ''}
           ${cdown ? html`<div class="sub"><a href="#" class="c-red" data-act="tab" data-t="services">${checksDownText(cdown)}</a>${cdown.L.svc_fail ? html` · <span class="c-red">${cdown.L.svc_fail.name}: ${cdown.L.svc_fail.error || 'down'}</span>` : cdown.ping ? html` · <span class="c-red">ping: ${cdown.L.ping_info.last_error || 'no answer'}</span>` : ''}</div>` : ''}</div>
         <span class="spacer"></span>
         ${a.busy ? html`<span class="row muted"><span class="spin"></span>${a.busy} job(s) active</span>` : ''}
@@ -1448,7 +1676,7 @@ function AgentPage([id, tab]) {
           title="${a.online ? 'Reboot this device' : maintBlocked(a) ? MAINT_OFF : 'The device is offline'}">${icon('refresh')} Reboot</button>` : ''}
         ${a.status !== 'pending' && (!a.is_master || a.maint) ? maintButton(a) : ''}
       </div>
-      ${maintNotice(a)}
+      ${maintNotice(a)}${unrNotice(a)}
       ${a.below_min ? html`<div class="notice row"><span><b>Agent update required.</b> Agent ${a.core_version} is older than the lowest allowed version ${a.min_agent}:
         the master stores and shows none of this device's data and runs nothing on it until the agent is updated.</span><span class="spacer"></span>
         ${ifChange(html`<button class="btn primary sm" data-act="agent-update" ${a.online ? '' : 'disabled'}>${icon('up')} Update agent to ${a.core_latest}</button>`)}</div>` : ''}
@@ -1715,6 +1943,7 @@ function AgentPage([id, tab]) {
       },
       'maint-start': () => maintStart(a(), refresh),
       'maint-end': () => maintEnd(a(), refresh),
+      'via-edit': () => viaModal(a(), refresh),
       'probe-on': async (t) => {
         const on = t.checked;
         try {
@@ -1750,24 +1979,25 @@ async function localEditModal(a, groups, done) {
   const isNew = !a;
   let pa = { agents: [], max: 200 };
   try { pa = await GET('probe-agents'); } catch { /* only Master can be chosen */ }
+  const ov = await GET('overview');
   const cur = a?.local.probe?.id || '';
-  const opts = html`<option value="" ${cur ? '' : 'selected'}>Master</option>${pa.agents.map((p) => html`<option value="${p.id}" ${cur === p.id ? 'selected' : ''} ${p.note && cur !== p.id ? 'disabled' : ''}>${p.name}${p.note ? ` (${p.note})` : !p.online ? ' (offline)' : ` (${p.checks} of ${pa.max} checks)`}</option>`)}
-    ${cur && !pa.agents.some((p) => p.id === cur) ? html`<option value="${cur}" selected>${a.local.probe.name}</option>` : ''}`;
   openModal(html`<h3>${isNew ? 'Add an agentless device' : `Edit ${a.name}`}</h3>
     <form class="form" data-submit="save">
       <label class="field">Name<input type="text" name="name" value="${a?.name || ''}" maxlength="64" placeholder="e.g. printer-hall" required ${isNew ? raw('autofocus') : ''}></label>
       <label class="field">IP address<input type="text" name="address" value="${a?.local.address || ''}" placeholder="e.g. 192.168.5.20" required spellcheck="false" autocomplete="off"></label>
       <div class="dim small">IPv4 or IPv6. No host names: Coremon does not rely on DNS. Each address can belong to one device only, per checking system.${isNew ? '' : ' A new address starts all checks over.'}</div>
-      <label class="field">Checked by<select name="probe">${opts}</select></label>
+      <div class="field">Checked by${pick('probe', probeItems(pa, cur, a?.local.probe?.name), cur)}</div>
       <div class="dim small">Master: the master checks the device itself. An agent: that agent checks it, for a network the master cannot reach; its results come in with the agent's contact. ${isNew ? '' : 'The history is kept when this changes.'}
         Only agents with Remote probe switched on are listed; switch it on on the agent's device page.</div>
+      <div class="field">Connected via${pick('via', viaItems(ov.agents, a?.id), a?.via?.id || '')}</div>
+      <div class="dim small">${VIA_HINT}</div>
       <label class="field">Group<select name="group">${groupOptions(groups, a?.group_id || '')}</select></label>
       <div class="actions"><button type="button" class="btn ghost" data-act="cancel">Cancel</button><button class="btn primary">${isNew ? html`${icon('plus')} Add device` : 'Save'}</button></div>
     </form>`, {
     acts: {
       cancel: () => closeModal(),
       save: async (f) => {
-        const body = { name: f.name.value, address: f.address.value.trim(), group_id: f.group.value, probe: f.probe.value };
+        const body = { name: f.name.value, address: f.address.value.trim(), group_id: f.group.value, probe: f.probe.value, via: f.via.value };
         const res = await POST(isNew ? 'locals' : `locals/${a.id}`, body);
         closeModal();
         toast(isNew ? `${res.name} added` : 'Saved', 'ok');
@@ -1789,9 +2019,11 @@ function uptimeBar(hist, { word = 'ping', compact = false } = {}) {
   const cells = [];
   for (let i = 95; i >= 0; i--) {
     const t = end - i * slot, h = by.get(t);
-    const cls = !h ? 'none' : h.ok === h.n ? 'ok' : h.ok === 0 ? 'bad' : 'part';
+    // Unreachable: every failure of the slot happened while a device above it was down.
+    const unr = h && h.ok < h.n && (h.u || 0) >= h.n - h.ok;
+    const cls = !h ? 'none' : h.ok === h.n ? 'ok' : unr ? 'unr' : h.ok === 0 ? 'bad' : 'part';
     const range = `${fmtDate(t).split(' ')[1]}–${fmtDate(t + slot).split(' ')[1]}`;
-    const why = h && h.f && h.ok < h.n ? `, failed: ${stepLabel(h.f)}` : '';
+    const why = (h && h.f && h.ok < h.n ? `, failed: ${stepLabel(h.f)}` : '') + (h?.u ? `, ${h.u} while unreachable behind a device that was down or in maintenance` : '');
     cells.push(html`<span class="${cls}" title="${range}: ${!h ? `no ${word}s` : `${h.ok} of ${h.n} ${word}${h.n === 1 ? '' : 's'} ${word === 'ping' ? 'answered' : 'up'}${why}`}"></span>`);
   }
   return compact ? html`<div class="upbar mini">${cells}</div>` : html`<div class="upbar">${cells}</div><div class="upaxis"><span>24 hours ago</span><span>now</span></div>`;
@@ -2005,9 +2237,6 @@ async function checksModal(a, done) {
   // No checks yet: the defaults, stored on Save for the services to come.
   const L = a.checks || { address: addrs[0] || '', probe: null }, cur = L.probe?.id || '';
   const other = !addrs.includes(L.address);
-  const agents = pa.agents.filter((p) => p.id !== a.id); // never its own agent
-  const opts = html`<option value="" ${cur ? '' : 'selected'}>Master</option>${agents.map((p) => html`<option value="${p.id}" ${cur === p.id ? 'selected' : ''} ${p.note && cur !== p.id ? 'disabled' : ''}>${p.name}${p.note ? ` (${p.note})` : !p.online ? ' (offline)' : ` (${p.checks} of ${pa.max} checks)`}</option>`)}
-    ${cur && !agents.some((p) => p.id === cur) ? html`<option value="${cur}" selected>${L.probe.name}</option>` : ''}`;
   openModal(html`<h3>Checks of ${a.name}</h3>
     <form class="form" data-submit="save">
       <label class="field">Address<select name="addr" data-change="addr">
@@ -2015,7 +2244,7 @@ async function checksModal(a, done) {
         <option value="" ${other ? 'selected' : ''}>Other address…</option></select></label>
       <label class="field" id="ck-other" style="${other ? '' : 'display:none'}">Other address<input type="text" name="other" value="${other ? L.address : ''}" placeholder="e.g. 192.168.5.20" spellcheck="false" autocomplete="off"></label>
       <div class="dim small">One of the addresses the agent reports, or another one such as a virtual IP. IPv4 or IPv6, no host names: Coremon does not rely on DNS (an HTTPS check has its own hostname). A new address starts all checks over.</div>
-      <label class="field">Checked by<select name="probe">${opts}</select></label>
+      <div class="field">Checked by${pick('probe', probeItems(pa, cur, L.probe?.name, a.id), cur)}</div>
       <div class="dim small">Master: the master checks the services itself. An agent: that agent checks them, for example from another network. Never the device's own agent: a check from outside also notices when the device is unreachable. The history is kept when this changes.</div>
       <div class="actions"><button type="button" class="btn ghost" data-act="cancel">Cancel</button><button class="btn primary">Save</button></div>
     </form>`, {
@@ -2037,7 +2266,7 @@ function LocalPage([id, tab]) {
   const pingNote = (L) => (L.ping_mode === 'paused' ? 'Ping is paused for this device.' : 'This device is not pinged.');
   function systemTab(a, L) {
     const P = L.ping_info, on = L.ping, out = probeOut(a);
-    const status = a.maint ? html`<span class="badge info xs">maintenance</span>` : out ? html`<span class="badge mute xs" title="${out.note}">unknown</span>` : !L.checked ? html`<span class="badge mute xs">waiting</span>` : L.up ? html`<span class="badge ok xs">up</span>` : html`<span class="badge sec xs">down</span>`;
+    const status = a.maint ? html`<span class="badge info xs">maintenance</span>` : out ? html`<span class="badge mute xs" title="${out.note}">unknown</span>` : !L.checked ? html`<span class="badge mute xs">waiting</span>` : L.up ? html`<span class="badge ok xs">up</span>` : a.unreach ? html`<span class="badge unr xs" title="${unrText(a)}">unreachable</span>` : html`<span class="badge sec xs">down</span>`;
     const svcs = L.services || [];
     const kv = [
       ['Status', html`${status} ${L.checked ? `since ${fmtDate(L.since)}` : ''}`],
@@ -2058,7 +2287,7 @@ function LocalPage([id, tab]) {
       <div class="panel panel-pad"><div class="row" style="margin-bottom:12px"><h2 style="margin:0">Ping, last 24 hours</h2><span class="spacer"></span>
         ${!P ? html`<span class="dim small">not pinged</span>` : P.uptime >= 0 ? html`<span class="muted small">${pctText(P.uptime)} of the pings answered${on ? '' : ' (paused)'}</span>` : html`<span class="dim small">${on ? 'no pings yet' : 'paused'}</span>`}</div>
         ${uptimeBar(P ? P.hist : [])}
-        <div class="row dim small" style="margin-top:10px;gap:14px"><span><i class="lg ok"></i>all answered</span><span><i class="lg part"></i>some answered</span><span><i class="lg bad"></i>none answered</span><span><i class="lg none"></i>no pings</span></div>
+        <div class="row dim small" style="margin-top:10px;gap:14px"><span><i class="lg ok"></i>all answered</span><span><i class="lg part"></i>some answered</span><span><i class="lg bad"></i>none answered</span><span><i class="lg unr"></i>unreachable</span><span><i class="lg none"></i>no pings</span></div>
         ${P ? html`<div class="row" style="margin:22px 0 10px"><h3 style="margin:0">Round-trip time</h3><span class="spacer"></span><span class="dim small">average per 5 minutes · point at the graph for lowest and highest</span></div>${rttGraph(P.rtt)}` : ''}</div>
       <div class="panel panel-pad" style="margin-top:16px"><div class="row" style="margin-bottom:12px"><h2 style="margin:0">Services, last 24 hours</h2><span class="spacer"></span>
         <button class="btn sm" data-act="tab" data-t="services">${canChange() ? 'Configure' : 'Details'}</button></div>
@@ -2080,19 +2309,20 @@ function LocalPage([id, tab]) {
     const a = d.agent, L = a.local;
     const g = d.groups.find((x) => x.id === a.group_id);
     const out = probeOut(a);
-    const state = a.maint ? 'in maintenance' : out ? unknownText(out) : !L.checked ? (L.fails ? `no answer yet (${L.fails} of ${L.down_after} checks before down)` : 'waiting for the first check') : L.up ? `up for ${dur(now() - L.since)}` : `down for ${dur(now() - L.since)}`;
+    const state = a.maint ? 'in maintenance' : out ? unknownText(out) : !L.checked ? (L.fails ? `no answer yet (${L.fails} of ${L.down_after} checks before down)` : 'waiting for the first check') : L.up ? `up for ${dur(now() - L.since)}` : a.unreach ? `${unrText(a)}, no answer for ${dur(now() - L.since)}` : `down for ${dur(now() - L.since)}`;
     const total = (L.services || []).length + (L.ping_info ? 1 : 0);
     setHTML($('#a-head'), html`
       <div class="page-head syshead">
         <div class="headinfo"><div class="row"><a href="#/dashboard/${lastDashSub}" class="btn ghost sm iconbtn" title="Back">${icon('back')}</a>${agentDot(a)}<h1>${a.name}</h1>
           <span class="tag">${icon('folder')} ${g ? g.name : 'Ungrouped'}</span><span class="verpill loc" title="${L.probe ? `Checked by the agent ${L.probe.name}` : 'Monitored by the master itself'}; no agent is installed on it">agentless${L.probe ? ` · via ${L.probe.name}` : ''}</span></div>
-          <div class="sub">${L.address} · ${state}${!a.maint && !out && L.up && L.svc_down ? html` · ${L.svc_down} of ${L.svc_total} services down${L.svc_fail ? html` · <span class="c-red">${L.svc_fail.name}: ${L.svc_fail.error || 'down'}</span>` : ''}` : ''}</div></div>
+          <div class="sub">${L.address} · ${state}${!a.maint && !out && L.up && L.svc_down ? html` · ${L.svc_down} of ${L.svc_total} services down${L.svc_fail ? html` · <span class="c-red">${L.svc_fail.name}: ${L.svc_fail.error || 'down'}</span>` : ''}` : ''}</div>
+          ${viaLine(a)}</div>
         <span class="spacer"></span>
         <button class="btn sm" data-act="ping" ${st.pinging || !L.ping || L.probe ? 'disabled' : ''} title="${L.probe ? `Checked by ${L.probe.name} on its own schedule` : L.ping ? 'Ping the device now' : pingNote(L)}">${st.pinging ? html`<span class="spin"></span>` : icon('pulse')} Ping now</button>
         ${ifChange(html`<button class="btn sm" data-act="edit">${icon('edit')} Edit</button><button class="btn danger sm" data-act="delete" title="Delete">${icon('trash')}</button>`)}
         ${maintButton(a)}
       </div>
-      ${maintNotice(a)}
+      ${maintNotice(a)}${unrNotice(a)}
       ${out && !a.maint ? html`<div class="notice grey"><b>Unknown – ${out.note}.</b> ${{
         offline: html`The agent <a href="#/device/${out.id}">${out.name}</a> that checks this device has no contact with the master. The master does not take over: the shown results are the last ones received.`,
         cleared: html`An administrator cleared the check list of <a href="#/device/${out.id}">${out.name}</a>. Checks resume after “Resend check list” on that agent's page, or when the checks change.`,
@@ -2118,6 +2348,7 @@ function LocalPage([id, tab]) {
       'maint-start': () => maintStart(st.data.agent, refresh),
       'maint-end': () => maintEnd(st.data.agent, refresh),
       edit: () => localEditModal(st.data.agent, st.data.groups, refresh),
+      'via-edit': () => viaModal(st.data.agent, refresh),
       delete: () => localDelete(st.data.agent, () => { location.hash = '#/dashboard/' + lastDashSub; }),
     },
   };
@@ -2239,18 +2470,18 @@ function Devices() {
         <tr>${ifChange(html`<td></td>`)}<td class="dim">Ungrouped</td><td class="muted">${count('')} device(s)</td>${ifChange(html`<td class="dim small w1">always last</td>`)}</tr></tbody></table>`
         : html`<div class="muted small" style="margin-top:10px">No groups yet. All devices are shown together.</div>`}`);
     const act = d.agents.filter((a) => a.status !== 'pending').sort(byName);
-    const seen = (a) => (a.maint ? html`<span class="c-blue">maintenance</span>` : isLocal(a) ? (probeOut(a) ? html`<span class="dim">${unknownText(probeOut(a))}</span>` : !a.local.checked ? html`<span class="dim">waiting</span>` : a.local.up ? 'up' : html`<span class="c-red">down</span>, last answer ${when(a.local.last_up)}`)
+    const seen = (a) => (a.maint ? html`<span class="c-blue">maintenance</span>` : a.unreach ? html`<span class="c-unr">unreachable</span>, behind ${a.unreach.name}` : isLocal(a) ? (probeOut(a) ? html`<span class="dim">${unknownText(probeOut(a))}</span>` : !a.local.checked ? html`<span class="dim">waiting</span>` : a.local.up ? 'up' : html`<span class="c-red">down</span>, last answer ${when(a.local.last_up)}`)
       : a.online ? 'online' : when(a.last_seen));
     setHTML($('#s-all'), act.length ? html`<div class="panel scrollx"><table class="tbl"><thead><tr><th>Device</th><th>Type</th><th>IP address</th><th>Group</th><th>OS</th><th>Agent</th><th>Last seen</th><th class="w1"></th></tr></thead>
       <tbody>${act.map((a) => html`<tr><td class="nowrap">${agentDot(a)} <a href="#/device/${a.id}"><b>${a.name}</b></a> ${a.status === 'report_only' ? html`<span class="badge info">report only</span>` : ''}${a.below_min ? html`<span class="badge upd xs">update required</span>` : ''}${a.ip_conflicts?.length ? html` <span class="badge sec xs" title="${a.ip_conflicts.map((c) => `IP ${c.ip} is also used by ${c.name}`).join('\n')}">IP also used</span>` : ''}</td>
-        <td class="muted nowrap">${isLocal(a) ? html`Agentless${a.local.probe ? html`<div class="dim small">via ${a.local.probe.name}</div>` : ''}` : 'Agent'}</td>
+        <td class="muted nowrap">${isLocal(a) ? html`Agentless${a.local.probe ? html`<div class="dim small">via ${a.local.probe.name}</div>` : ''}` : 'Agent'}${a.via ? html`<div class="dim small" title="Connected via">behind ${a.via.name}</div>` : ''}</td>
         <td class="mono small">${ipLabel(a.facts)}</td>
         <td>${canChange() ? html`<select class="sm" data-change="set-group" data-id="${a.id}" title="Group">${groupOptions(d.groups, a.group_id)}</select>` : html`<span class="muted">${d.groups.find((g) => g.id === a.group_id)?.name || 'Ungrouped'}</span>`}</td>
         <td class="muted">${isLocal(a) ? html`<span class="dim">—</span>` : osLabel(a.facts)}</td><td>${isLocal(a) ? html`<span class="dim">—</span>` : verPill(a)}</td>
         <td class="muted nowrap">${seen(a)}</td>
         ${ifChange(html`<td class="w1"><div class="row" style="flex-wrap:nowrap;justify-content:flex-start">${isLocal(a)
     ? html`<button class="btn ghost sm" style="min-width:104px;justify-content:flex-start" data-act="l-edit" data-id="${a.id}">${icon('edit')} Edit</button><button class="btn danger sm" data-act="l-delete" data-id="${a.id}" title="Delete">${icon('trash')}</button>`
-    : html`<button class="btn ghost sm" style="min-width:104px;justify-content:flex-start" data-act="rename" data-id="${a.id}">${icon('edit')} Rename</button><button class="btn danger sm" data-act="remove" data-id="${a.id}" title="Remove">${icon('trash')}</button>`}</div></td>`)}</tr>`)}</tbody></table></div>` : html`<div class="panel empty">No devices yet.</div>`);
+    : html`<button class="btn ghost sm" style="min-width:104px;justify-content:flex-start" data-act="rename" data-id="${a.id}">${icon('edit')} Edit</button><button class="btn danger sm" data-act="remove" data-id="${a.id}" title="Remove">${icon('trash')}</button>`}</div></td>`)}</tr>`)}</tbody></table></div>` : html`<div class="panel empty">No devices yet.</div>`);
     if (!st.addShown) { st.addShown = true; addPanel(); }
   }
   function addPanel() {
@@ -2273,11 +2504,12 @@ function Devices() {
           <input type="text" name="name" placeholder="Name, e.g. printer-hall" maxlength="64" style="width:220px" required>
           <input type="text" name="address" placeholder="IP address, e.g. 192.168.5.20" style="width:220px" required spellcheck="false" autocomplete="off">
           <select name="group" title="Group">${groupOptions(groups, '')}</select>
-          <select name="probe" title="Checked by: the master itself, or an agent for a network the master cannot reach"><option value="">Checked by: Master</option>
-            ${(st.probes?.agents || []).filter((p) => !p.note).map((p) => html`<option value="${p.id}">Checked by: ${p.name}${p.online ? '' : ' (offline)'}</option>`)}</select>
+          <span title="Checked by: the master itself, or an agent for a network the master cannot reach">${pick('probe', probeItems(st.probes || { agents: [], max: 200 }, '').map((x) => ({ ...x, label: `Checked by: ${x.label}` })), '', { style: 'width:230px' })}</span>
+          <span title="Connected via: the device it sits behind on the network">${pick('via', viaItems(st.data?.agents || [], '').map((x) => ({ ...x, label: `Connected via: ${x.label}`, find: `${x.find || ''} ${x.label}` })), '', { style: 'width:250px' })}</span>
           <button class="btn primary">${icon('plus')} Add device</button>
         </form>
-        <div class="dim small" style="margin-top:8px">IPv4 or IPv6 only, no host names. An address can belong to one device only, whether agent or agentless; devices checked by different agents may share an address (separate networks). Only agents with Remote probe switched on (on the agent's device page) can check devices.</div>`}`);
+        <div class="dim small" style="margin-top:8px">IPv4 or IPv6 only, no host names. An address can belong to one device only, whether agent or agentless; devices checked by different agents may share an address (separate networks). Only agents with Remote probe switched on (on the agent's device page) can check devices.
+          Connected via: the device it sits behind on the network, such as a switch; when that device is down, this one shows as unreachable instead of down.</div>`}`);
     if (st.type === 'agent') renderTokens();
   }
   function renderTokens() {
@@ -2341,9 +2573,10 @@ function Devices() {
       },
       'add-type': (t) => { st.type = t.dataset.t; addPanel(); },
       'l-add': async (f) => {
-        const res = await POST('locals', { name: f.name.value, address: f.address.value.trim(), group_id: f.group.value, probe: f.probe.value });
+        const res = await POST('locals', { name: f.name.value, address: f.address.value.trim(), group_id: f.group.value, probe: f.probe.value, via: f.via.value });
         toast(`${res.name} added — the first ping follows within seconds`, 'ok');
         f.name.value = ''; f.address.value = '';
+        st.addShown = false; // the new device can now be chosen as "Connected via"
         view.refresh();
       },
       'l-edit': (t) => localEditModal(agentBy(t.dataset.id), st.data.groups, () => view.refresh()),
@@ -2355,13 +2588,15 @@ function Devices() {
       },
       rename: (t) => {
         const ag = agentBy(t.dataset.id);
-        openModal(html`<h3>Rename ${ag.name}</h3><form class="form" data-submit="save">
+        openModal(html`<h3>Edit ${ag.name}</h3><form class="form" data-submit="save">
           <label class="field">Display name<input type="text" name="name" value="${ag.name}" maxlength="64" autofocus required></label>
           <div class="dim small">Host name on the device: ${ag.facts.hostname || '—'}. Only the name shown in Coremon changes.</div>
+          <div class="field">Connected via${pick('via', viaItems(st.data.agents, ag.id), ag.via?.id || '')}</div>
+          <div class="dim small">${VIA_HINT}</div>
           <div class="actions"><button type="button" class="btn ghost" data-act="cancel">Cancel</button><button class="btn primary">Save</button></div></form>`, {
           acts: {
             cancel: () => closeModal(),
-            save: async (f) => { await POST('agents/' + ag.id, { name: f.name.value }); closeModal(); toast('Renamed', 'ok'); view.refresh(); },
+            save: async (f) => { await POST('agents/' + ag.id, { name: f.name.value, via: f.via.value }); closeModal(); toast('Saved', 'ok'); view.refresh(); },
           },
         });
       },

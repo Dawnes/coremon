@@ -136,7 +136,7 @@ func (s *Server) probeIntake(a *Agent, rep *proto.ProbeReport, now time.Time) {
 	}
 	pings := map[string]*checkDev{}
 	svcs := map[string]*Service{}
-	svcDev := map[string]string{} // service ID -> device name
+	svcDev := map[string]*checkDev{} // service ID -> device
 	for _, d := range s.checkDevs() {
 		if d.Probe != a.ID || d.Maint != nil {
 			continue // late results for a device in maintenance are dropped
@@ -144,7 +144,7 @@ func (s *Server) probeIntake(a *Agent, rep *proto.ProbeReport, now time.Time) {
 		pings[d.ID] = d
 		for _, sv := range d.Services {
 			svcs[sv.ID] = sv
-			svcDev[sv.ID] = d.Name
+			svcDev[sv.ID] = d
 		}
 	}
 	res := rep.Results
@@ -191,17 +191,19 @@ func (s *Server) probeIntake(a *Agent, rep *proto.ProbeReport, now time.Time) {
 				continue
 			}
 			s.record(d.Checks, rtt, cerr, at)
+			s.noteBehind(d.ID, cerr != nil, d.Hist, at)
 			dl.add(d.Name+" · Ping", r.OK, outcome(r.OK, "up", rtt, cerr))
 		} else if sv := svcs[r.ID]; sv != nil {
 			if sv.Paused || t <= sv.LastCheck {
 				continue
 			}
 			ok := s.storeService(sv, rtt, cleanText(r.Banner, maxBanner), r.OK, cerr, r.Failed, at)
+			s.noteBehind(svcDev[sv.ID].ID, !r.OK && !sv.Reverse, sv.Hist, at)
 			what := outcome(r.OK, "reached", rtt, cerr)
 			if sv.Reverse {
 				what += " (expected closed)"
 			}
-			dl.add(svcDev[sv.ID]+" · "+sv.Name, ok, what)
+			dl.add(svcDev[sv.ID].Name+" · "+sv.Name, ok, what)
 		}
 	}
 }

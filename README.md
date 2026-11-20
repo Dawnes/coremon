@@ -35,8 +35,13 @@ as **agentless** devices: the master itself pings them and checks their services
 * **Services of agent devices**: the same service checks (and optionally a ping)
   on a device with an agent, on its Services tab: checked from outside by the
   master or by another agent, on one of its own addresses or another one.
-* **Map**: a live drawing of every device and who monitors it (the master or a
-  remote probe), coloured green, red or grey.
+* **Network dependencies**: each device can be **connected via** another device,
+  such as a switch or the host of a VM. When that device is down or in
+  maintenance, the devices behind it show as unreachable instead of down: the
+  cause is shown once, and their checks keep running.
+* **Map**: a live drawing of every device, as the network (who is connected via
+  whom, with the break where a device is down), as monitoring (the master or a
+  remote probe) or both together, coloured green, red, unreachable or grey.
 * **Maintenance**: pause all checks of a device for 5 minutes up to 4 hours, or
   until ended by hand; no automatic jobs run and no failures are shown meanwhile.
 * **Releases**: update the master and the agents from the website.

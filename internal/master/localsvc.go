@@ -408,8 +408,10 @@ func (s *Server) checkService(devID, svcID string) {
 		return
 	}
 	s.loc.mu.Lock()
-	s.recordService(sv, o, time.Now())
+	now := time.Now()
+	s.recordService(sv, o, now)
 	s.loc.mu.Unlock()
+	s.noteBehind(d.ID, o.Err != nil && !sv.Reverse, sv.Hist, now)
 }
 
 // ---- handlers ----

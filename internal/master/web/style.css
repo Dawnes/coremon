@@ -32,6 +32,7 @@
   --amber: #fbbf24;
   --red: #f87171;
   --blue: #60a5fa;
+  --unr: #818cf8; /* unreachable: cut off behind a device that is down */
   --radius: 12px;
   --r-md: 8px;
   --r-sm: 6px;
@@ -228,6 +229,7 @@ ul.plainlist { margin: 0; padding-left: 18px; line-height: 1.8; }
 .badge.reboot { color: #c4b5fd; background: rgba(167, 139, 250, 0.12); border-color: rgba(167, 139, 250, 0.28); }
 .badge.info { color: #93c5fd; background: rgba(96, 165, 250, 0.1); border-color: rgba(96, 165, 250, 0.25); }
 .badge.mute { color: var(--muted); background: transparent; border-color: var(--line-hi); }
+.badge.unr { color: #c7d2fe; background: rgba(129, 140, 248, 0.12); border-color: rgba(129, 140, 248, 0.35); }
 .badge.xs { font-size: 10.5px; padding: 0 5px; line-height: 16px; }
 .badge.new { color: #67e8f9; background: rgba(34, 211, 238, 0.1); border-color: rgba(34, 211, 238, 0.25); }
 
@@ -241,6 +243,7 @@ ul.plainlist { margin: 0; padding-left: 18px; line-height: 1.8; }
 .dot.pause { background: var(--blue); }
 .dot.unk { background: #94a3b8; box-shadow: 0 0 0 3px rgba(148, 163, 184, 0.15); }
 .dot.maint { background: var(--blue); box-shadow: 0 0 0 3px rgba(96, 165, 250, 0.25); }
+.dot.unr { background: var(--unr); box-shadow: 0 0 0 3px rgba(129, 140, 248, 0.2); }
 @keyframes pulse { 50% { opacity: 0.45; } }
 
 .spin { width: 14px; height: 14px; border-radius: 50%; border: 2px solid rgba(34, 211, 238, 0.25); border-top-color: var(--cyan); animation: rot .8s linear infinite; display: inline-block; flex: none; }
@@ -262,7 +265,10 @@ ul.plainlist { margin: 0; padding-left: 18px; line-height: 1.8; }
 .card.a-pend { --accent-bar: var(--grad); }
 .card.a-unk { --accent-bar: repeating-linear-gradient(90deg, #94a3b8 0 10px, transparent 10px 16px); }
 .card.a-maint { --accent-bar: repeating-linear-gradient(90deg, var(--blue) 0 10px, transparent 10px 16px); }
+.card.a-unr { --accent-bar: repeating-linear-gradient(90deg, var(--unr) 0 10px, transparent 10px 16px); }
 .big.maint { color: var(--blue); display: flex; align-items: center; }
+.card .big.unr { color: var(--unr); }
+.card .svcline.unr { color: var(--unr); }
 .big.maint svg { width: 32px; height: 32px; }
 .card .top { display: flex; align-items: center; gap: 9px; }
 .card .name { font-weight: 600; font-size: 15px; letter-spacing: -0.01em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -302,6 +308,7 @@ ul.plainlist { margin: 0; padding-left: 18px; line-height: 1.8; }
 .upbar span.ok, .lg.ok { background: rgba(74, 222, 128, 0.7); }
 .upbar span.part, .lg.part { background: rgba(251, 191, 36, 0.8); }
 .upbar span.bad, .lg.bad { background: rgba(248, 113, 113, 0.85); }
+.upbar span.unr, .lg.unr { background: rgba(129, 140, 248, 0.8); }
 .upbar span:hover { filter: brightness(1.4); }
 .upbar.mini { height: 16px; gap: 1px; }
 .upbar.mini span { min-width: 1px; border-radius: 1px; }
@@ -350,6 +357,7 @@ ul.plainlist { margin: 0; padding-left: 18px; line-height: 1.8; }
 .gempty { padding: 18px; text-align: center; color: var(--dim); font-size: 12.5px; border: 1px dashed var(--line-hi); border-radius: var(--radius); }
 .c-amber { color: var(--amber); font-weight: 600; }
 .c-blue { color: var(--blue); font-weight: 600; }
+.c-unr { color: var(--unr); font-weight: 600; }
 /* An offline device: a word that flashes red and yellow. */
 .flash-off { font-weight: 700; text-transform: uppercase; letter-spacing: 0.04em; color: var(--red); animation: flash-off 1s steps(1, end) infinite; }
 @keyframes flash-off { 50% { color: var(--amber); } }
@@ -374,6 +382,45 @@ ul.plainlist { margin: 0; padding-left: 18px; line-height: 1.8; }
 .mapbox.bad rect { stroke: rgba(248, 113, 113, 0.85); } .mapbox.bad circle { fill: var(--red); }
 .mapbox.unk rect { stroke: rgba(148, 163, 184, 0.55); } .mapbox.unk circle { fill: #94a3b8; }
 .mapbox text.ip { fill: var(--dim); font-family: var(--mono); font-size: 10.5px; font-weight: 400; }
+.mapbox text.tag { fill: var(--cyan); font-size: 10px; font-weight: 500; }
+/* Unreachable: cut off behind a device that is down; dimmed, dashed lines below the break. */
+.mapbox.unr rect { stroke: rgba(129, 140, 248, 0.75); stroke-dasharray: 4 3; } .mapbox.unr circle { fill: var(--unr); }
+.mapbox.unr { opacity: 0.6; }
+.mapline.cut { stroke: rgba(129, 140, 248, 0.6); stroke-dasharray: 3 4; }
+.mapcut { stroke: var(--red); stroke-width: 2; stroke-linecap: round; }
+/* Full map: lines from a remote probe to the devices it checks. */
+.mapline.check { stroke: rgba(34, 211, 238, 0.55); stroke-width: 1.2; stroke-dasharray: 2 4; }
+/* Hover on the full map: only the device's own lines stay. */
+.mapsvg.focus .mapline, .mapsvg.focus .mapcut { opacity: 0.12; }
+.mapsvg.focus .mapbox { opacity: 0.3; }
+.mapsvg.focus .hl { opacity: 1 !important; }
+.mapsvg.focus .mapline.hl { stroke-width: 2.2; }
+.mapsvg .mapline, .mapsvg .mapbox { transition: opacity .12s; }
+.maptabs { margin: 0 0 12px; }
+/* Searchable dropdown: a button that opens a list with a search field on top. */
+div.field { display: flex; flex-direction: column; gap: 6px; color: var(--text); font-size: 13px; font-weight: 500; }
+.pick { position: relative; min-width: 0; }
+.pick-btn { width: 100%; height: 36px; display: flex; align-items: center; gap: 8px; padding: 0 10px 0 12px; background: rgba(255, 255, 255, 0.03); border: 1px solid var(--line-hi);
+  color: var(--text); border-radius: var(--r-md); font: inherit; font-size: 14px; font-weight: 400; cursor: pointer; text-align: left; box-shadow: var(--shadow-xs); }
+.pick-btn:focus-visible, .pick.open .pick-btn { border-color: rgba(34, 211, 238, 0.5); box-shadow: 0 0 0 3px var(--ring); }
+.pick-btn .pick-lbl { flex: 0 1 auto; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.pick-btn .pick-sub { flex: 1 1 0; min-width: 0; color: var(--dim); font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.pick-btn svg { width: 14px; height: 14px; color: var(--dim); flex: none; }
+.pick.sm .pick-btn { height: 30px; font-size: 12.5px; }
+.pick-pop { position: absolute; z-index: 30; left: 0; right: 0; top: calc(100% + 4px); min-width: 240px; background: var(--panel-solid); border: 1px solid var(--line-hi);
+  border-radius: var(--r-md); box-shadow: var(--shadow-lg); padding: 6px; }
+.pick-pop[hidden] { display: none; }
+/* An open list stays above the panels that follow its own. */
+.panel:has(.pick.open) { position: relative; z-index: 20; }
+.pick-pop input { width: 100%; height: 32px; font-size: 13px; }
+.pick-list { max-height: 248px; overflow-y: auto; margin-top: 6px; }
+.pick-opt { display: flex; align-items: baseline; gap: 8px; padding: 6px 8px; border-radius: var(--r-sm); cursor: pointer; font-size: 13px; font-weight: 400; }
+.pick-opt .pick-sub { margin-left: auto; color: var(--dim); font-size: 12px; white-space: nowrap; }
+.pick-opt.act { background: var(--accent); }
+.pick-opt.sel { color: var(--cyan); }
+.pick-opt.off { color: var(--dim); cursor: not-allowed; }
+.pick-opt[hidden] { display: none; }
+.pick-none { padding: 8px; color: var(--dim); font-size: 12.5px; }
 /* A device that is down: its dot flashes red and yellow, like on the cards. */
 .mapbox.down circle { animation: flash-map 1s steps(1, end) infinite; }
 @keyframes flash-map { 50% { fill: var(--amber); } }
@@ -502,6 +549,7 @@ pre.legal { white-space: pre-wrap; word-wrap: break-word; font-size: 12.5px; lin
 .notice.red { border-color: rgba(248, 113, 113, 0.3); background: rgba(248, 113, 113, 0.06); color: #fca5a5; }
 .notice.blue { border-color: rgba(96, 165, 250, 0.3); background: rgba(96, 165, 250, 0.06); color: #93c5fd; }
 .notice.green { border-color: rgba(74, 222, 128, 0.3); background: rgba(74, 222, 128, 0.06); color: #86efac; }
+.notice.unr { border-color: rgba(129, 140, 248, 0.35); background: rgba(129, 140, 248, 0.07); color: #c7d2fe; }
 .notice.grey { border-color: rgba(148, 163, 184, 0.3); background: rgba(148, 163, 184, 0.06); color: #cbd5e1; }
 
 .bulkbar {

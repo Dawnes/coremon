@@ -140,6 +140,8 @@ type Agent struct {
 	// master or another agent; nil until a service is added or the address
 	// and checker are set.
 	Checks *Checks `json:"checks,omitempty"`
+	// Via: the device it is connected via ("Connected via"); "" = none.
+	Via string `json:"via,omitempty"`
 
 	ProbeCap    bool                       `json:"-"` // the agent can probe agentless devices
 	ProbeVer    string                     `json:"-"` // the check list the agent runs

@@ -29,6 +29,8 @@ type LocalDevice struct {
 	Checks
 	// Maint: in maintenance; nothing is checked.
 	Maint *Maintenance `json:"maint,omitempty"`
+	// Via: the device it is connected via ("Connected via"); "" = none.
+	Via string `json:"via,omitempty"`
 }
 
 const (
@@ -110,6 +112,7 @@ type histSlot struct {
 	OK int    `json:"ok"`
 	N  int    `json:"n"`
 	F  string `json:"f,omitempty"` // services: the sub-probe of the slot's latest failure
+	U  int    `json:"u,omitempty"` // failures while a device above it was down or in maintenance (unreachable)
 }
 
 const (
@@ -353,6 +356,7 @@ func (s *Server) localDeviceView(d *LocalDevice, full bool) agentView {
 	v.Facts.IPs = []string{d.Address}
 	v.Local = lv
 	v.Conflicts = s.localConflicts(d)
+	s.setVia(&v, d.Via, d.Maint == nil && lv.Checked && !lv.Up, full)
 	return v
 }
 
@@ -590,7 +594,9 @@ func (s *Server) pingOne(id string) {
 			d.LastCheck, d.LastError = time.Now().Unix(), se.Error()
 			s.markChecks()
 		} else {
-			s.record(d.Checks, rtt, err, time.Now())
+			now := time.Now()
+			s.record(d.Checks, rtt, err, now)
+			s.noteBehind(d.ID, err != nil, d.Hist, now)
 		}
 	}
 	s.st.mu.Unlock()
@@ -704,6 +710,7 @@ func (s *Server) handleLocalCreate(w http.ResponseWriter, r *http.Request) {
 		Address string `json:"address"`
 		GroupID string `json:"group_id"`
 		Probe   string `json:"probe"`
+		Via     string `json:"via"`
 	}
 	if !readJSON(w, r, &req, 4096) {
 		return
@@ -733,6 +740,10 @@ func (s *Server) handleLocalCreate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	d := &LocalDevice{ID: "l_" + randHex(8), Name: name, Checks: Checks{Address: ip}, GroupID: req.GroupID, AddedAt: time.Now().Unix()}
+	if d.Via, err = s.checkVia(d.ID, req.Via); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
 	if req.Probe != "" {
 		if err := s.probeAllowed(req.Probe, 1, s.ownIPs()); err != nil {
 			http.Error(w, err.Error(), http.StatusConflict)
@@ -743,7 +754,11 @@ func (s *Server) handleLocalCreate(w http.ResponseWriter, r *http.Request) {
 	d.Order = s.st.nextOrder(d.GroupID)
 	s.st.st.Locals[d.ID] = d
 	s.st.markDirty()
-	s.writeLocalAudit(r, "device.local_added", d, "address "+ip+", checked by "+s.probeName(d.Probe))
+	detail := "address " + ip + ", checked by " + s.probeName(d.Probe)
+	if d.Via != "" {
+		detail += ", connected via " + s.viaName(d.Via)
+	}
+	s.writeLocalAudit(r, "device.local_added", d, detail)
 	s.probeSyncAll(time.Now())
 	writeJSON(w, s.localDeviceView(d, false))
 }
@@ -754,6 +769,7 @@ func (s *Server) handleLocalUpdate(w http.ResponseWriter, r *http.Request) {
 		Address *string `json:"address"`
 		GroupID *string `json:"group_id"`
 		Probe   *string `json:"probe"`
+		Via     *string `json:"via"`
 	}
 	if !readJSON(w, r, &req, 4096) {
 		return
@@ -763,6 +779,14 @@ func (s *Server) handleLocalUpdate(w http.ResponseWriter, r *http.Request) {
 	d := s.localOr404(w, r)
 	if d == nil {
 		return
+	}
+	via := d.Via
+	if req.Via != nil {
+		var err error
+		if via, err = s.checkVia(d.ID, *req.Via); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
 	}
 	// Everything is checked before anything changes.
 	name := ""
@@ -818,6 +842,10 @@ func (s *Server) handleLocalUpdate(w http.ResponseWriter, r *http.Request) {
 		changes = append(changes, "name "+d.Name+" → "+name)
 		d.Name = name
 	}
+	if via != d.Via {
+		changes = append(changes, "connected via "+s.viaName(d.Via)+" → "+s.viaName(via))
+		d.Via = via
+	}
 	if ip != d.Address {
 		changes = append(changes, "address "+d.Address+" → "+ip)
 		d.Address = ip
@@ -851,6 +879,7 @@ func (s *Server) handleLocalDelete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	delete(s.st.st.Locals, d.ID)
+	s.dropVia(d.ID)
 	s.st.markDirty()
 	s.markChecks()
 	s.writeLocalAudit(r, "device.local_removed", d, "address "+d.Address)

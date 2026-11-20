@@ -65,6 +65,21 @@ type agentView struct {
 	Probe        *agentProbeView            `json:"probe,omitempty"`       // the agent checks agentless devices
 	Checks       *localView                 `json:"checks,omitempty"`      // agent device: its services, checked from outside
 	CheckAddrs   []string                   `json:"check_addrs,omitempty"` // agent device page: addresses its checks can use
+	Via          *devRef                    `json:"via,omitempty"`         // "Connected via"
+	ViaChain     []devRef                   `json:"via_chain,omitempty"`   // device page: every device above it, nearest first
+	Unreach      *devRef                    `json:"unreach,omitempty"`     // down, cut off behind this device (down or in maintenance)
+}
+
+// setVia fills the network fields of a device's view. down: the device
+// itself counts as down. Caller holds s.st.mu.
+func (s *Server) setVia(v *agentView, via string, down, full bool) {
+	if via != "" {
+		v.Via = s.devRefOf(via)
+	}
+	if full {
+		v.ViaChain = s.viaChain(v.ID)
+	}
+	v.Unreach = s.unreachable(v.ID, down)
 }
 
 func (s *Server) view(a *Agent, full bool) agentView {
@@ -111,6 +126,7 @@ func (s *Server) view(a *Agent, full bool) agentView {
 	if agentHasChecks(a) {
 		v.Checks = s.checksView(a.Checks, full)
 	}
+	s.setVia(&v, a.Via, a.Maint == nil && a.Status != StatusPending && !v.Online, full)
 	if s.belowMin(a) {
 		v.BelowMin, v.MinAgent = true, s.minAgent()
 		v.Facts = proto.Facts{OS: a.Facts.OS, Arch: a.Facts.Arch}
@@ -253,6 +269,7 @@ func (s *Server) handleAgentUpdate(w http.ResponseWriter, r *http.Request) {
 		Name       *string `json:"name"`
 		GroupID    *string `json:"group_id"`
 		ReportOnly *bool   `json:"report_only"`
+		Via        *string `json:"via"`
 	}
 	if !readJSON(w, r, &req, 16<<10) {
 		return
@@ -262,6 +279,17 @@ func (s *Server) handleAgentUpdate(w http.ResponseWriter, r *http.Request) {
 	a := s.agentOr404(w, r)
 	if a == nil {
 		return
+	}
+	if req.Via != nil {
+		via, err := s.checkVia(a.ID, *req.Via)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		if via != a.Via {
+			s.audit.writeAgent(actor(r), clientIP(r), "device.via_changed", a, "connected via "+s.viaName(a.Via)+" → "+s.viaName(via))
+			a.Via = via
+		}
 	}
 	if req.Name != nil {
 		n, err := checkName("device name", *req.Name, maxSystemName)
@@ -363,6 +391,7 @@ func (s *Server) handleRemove(w http.ResponseWriter, r *http.Request) {
 	}
 	delete(s.st.st.Agents, a.ID)
 	delete(s.wakes, a.ID)
+	s.dropVia(a.ID)
 	s.st.markDirty()
 	s.markChecks()
 	s.probeSyncAll(time.Now()) // a probe drops the device's service checks
