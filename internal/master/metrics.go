@@ -31,10 +31,10 @@ const (
 	maxMetricBatch  = 240
 	maxAgentDisks   = 64
 	gib             = 1 << 30
-	defaultDiskPct  = 90.0 // as Zabbix: space critically low at 90% used
+	defaultDiskPct  = 90.0 // space critically low at 90% used
 	defaultDiskFree = 10.0 // GB
-	defaultMemPct   = 90.0 // as Zabbix: high memory utilization, 90% for 5 minutes
-	defaultLoadCore = 1.5  // as Zabbix: 1-minute load per CPU above 1.5 for 5 minutes
+	defaultMemPct   = 90.0 // high memory use: 90% for 5 minutes
+	defaultLoadCore = 1.5  // 1-minute load per CPU above 1.5 for 5 minutes
 )
 
 // metricDefaults: limit and readings in a row of a new service.

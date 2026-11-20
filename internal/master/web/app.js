@@ -2176,8 +2176,8 @@ function serviceModal(dev, svc, presets0, lim, methods, done) {
         <label class="field" style="flex:1"><span id="m-lim-lbl"></span><input type="number" name="limit" step="any" min="0" value="${keep ? svc.limit : metricDef[m][0]}" required></label>
         <label class="field" style="flex:1">Readings in a row<input type="number" name="readings" min="1" max="30" value="${keep ? svc.readings : metricDef[m][1]}" required></label></div>
       <div class="dim small">${m === 'load'
-        ? 'The 1-minute load average divided by the number of CPU cores, as Zabbix does: above 1.5 for 5 minutes is the usual alarm.'
-        : m === 'memory' ? 'Used memory is the total minus what the system can still give out without swapping; swap is not looked at. As Zabbix: above 90% for 5 minutes.'
+        ? 'The 1-minute load average divided by the number of CPU cores: above 1.5 for 5 minutes is the usual alarm.'
+        : m === 'memory' ? 'Used memory is the total minus what the system can still give out without swapping; swap is not looked at. Above 90% for 5 minutes is the usual alarm.'
           : 'As df: the space reserved for root counts as used. Percent used suits most disks; GB free suits large ones.'}
         Measured by the agent on the device every minute and sent with its regular contact: the service is down after this many readings in a row past the limit, and up again at the first reading within it.</div>`);
     metricLabel(f);
