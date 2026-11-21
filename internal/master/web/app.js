@@ -2172,6 +2172,9 @@ const stepLabel = (k) => STEP_LABEL[k] || k;
 const svcProto = (s) => (s.metric ? { disk: `DISK ${s.mount}`, memory: 'MEMORY', load: 'CPU' }[s.method] || '' : `${(s.method || 'tcp').toUpperCase()} ${s.port}`);
 // Disk, memory and load: the limit as text ("> 90% used", "< 10 GB free", "> 1.5 per core").
 const metricLimit = (s) => (s.method === 'disk' && s.limit_kind === 'free' ? `< ${s.limit} GB free` : s.method === 'load' ? `> ${s.limit} per core` : `> ${s.limit}% used`);
+// The disk size or total memory of the last reading: the master's text ends
+// with "… of 100 GB" for disk and memory.
+const metricTotal = (s) => (s.method === 'load' ? '' : (/ of (\S+ [KMGT]?B)$/.exec(s.banner || '') || [])[1] || '');
 const metricVal = (s, v) => (s.method === 'load' ? v.toFixed(2) : s.limit_kind === 'free' ? `${v.toFixed(1)} GB` : `${Math.round(v)}%`);
 // What a service checks beyond its port: the HTTPS host and path, or the DNS question.
 const svcTarget = (s) => (s.method === 'https' ? ` · ${s.host}${s.path !== '/' ? s.path : ''}` : s.method === 'dns' ? ` · ${s.rtype} ${s.host}` : '');
@@ -2191,7 +2194,9 @@ function svcState(s) {
   // Measured: readings in a row past the limit, instead of retries.
   const tries = s.metric ? (n) => `${n} of ${s.readings} past the limit` : (n) => `retry ${n} of ${s.retries}`;
   if (!s.checked) return s.fails ? html`<span class="badge upd xs" title="${s.last_error || ''}">${tries(s.fails)}</span>` : html`<span class="badge mute xs">waiting</span>`;
-  if (s.up) return s.fails ? html`<span class="badge upd xs" title="${s.last_error || ''}">up · ${tries(s.fails)}</span>` : html`<span class="badge ok xs">up</span>`;
+  // Disk, memory and CPU load are not "up" but within their limit: "ok".
+  const up = s.metric ? 'ok' : 'up';
+  if (s.up) return s.fails ? html`<span class="badge upd xs" title="${s.last_error || ''}">${up} · ${tries(s.fails)}</span>` : html`<span class="badge ok xs">${up}</span>`;
   return html`<span class="badge sec xs" title="${s.last_error || ''}">down</span>`;
 }
 function pingState(P) {
@@ -2604,7 +2609,7 @@ function metricGraphs(a) {
   if (!list.length) return '';
   return html`<div class="setgrid" style="margin-bottom:16px">${list.map((s) => html`<div class="panel panel-pad">
     <div class="row" style="margin-bottom:14px"><h2 style="margin:0">${s.name}</h2><span class="dim small mono">${svcProto(s)}</span><span class="spacer"></span>
-      ${svcState(s)}${s.last_check && !s.stale ? html` <span class="small"><b>${metricVal(s, s.value)}</b>${s.method === 'load' ? ' per core' : s.limit_kind === 'free' ? ' free' : ' used'}</span>` : ''}</div>
+      ${svcState(s)}${s.last_check && !s.stale ? html` <span class="small"><b>${metricVal(s, s.value)}</b>${s.method === 'load' ? ' per core' : s.limit_kind === 'free' ? ' free' : ' used'}${metricTotal(s) ? html` <span class="dim">of ${metricTotal(s)}</span>` : ''}</span>` : ''}</div>
     ${valGraph(s)}
     <div class="dim small" style="margin-top:4px">Last 24 hours, five-minute averages; the dashed line is the limit (down ${metricLimit(s)} for ${s.readings} reading${s.readings === 1 ? '' : 's'} in a row).</div></div>`)}</div>`;
 }

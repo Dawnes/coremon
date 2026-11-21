@@ -153,7 +153,7 @@ select.sm { height: 30px; padding: 0 8px; font-size: 12.5px; }
 
 .toolbar { display: flex; gap: 10px; align-items: center; margin-bottom: 18px; flex-wrap: wrap; }
 .chips { display: flex; gap: 6px; flex-wrap: wrap; }
-.toolbar .typetabs { margin-left: auto; }
+.toolbar .typetabs { margin-left: auto; margin-bottom: 0; }
 .chip {
   height: 32px; padding: 0 12px; border-radius: var(--r-md); border: 1px solid var(--line-hi); background: rgba(255, 255, 255, 0.03);
   color: var(--muted); cursor: pointer; font: inherit; font-size: 13px; font-weight: 500; transition: background .12s, color .12s; box-shadow: var(--shadow-xs);

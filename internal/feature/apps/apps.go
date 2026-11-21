@@ -91,6 +91,18 @@ var defs = []def{
 	{"Tailscale", regexp.MustCompile(`^tailscale$`), false, []string{"tailscaled.service"}},
 	{"QEMU", regexp.MustCompile(`^(?:qemu-system-[a-z0-9]+|pve-qemu-kvm)$`), false, nil},
 	{"Unbound", regexp.MustCompile(`^unbound$`), false, []string{"unbound.service"}},
+	{"HAProxy", regexp.MustCompile(`^haproxy$`), false, []string{"haproxy.service"}},
+	{"Squid", regexp.MustCompile(`^squid(?:-openssl)?$`), false, []string{"squid.service"}},
+	{"Chrony", regexp.MustCompile(`^chrony$`), false, []string{"chrony.service", "chronyd.service"}},
+	{"NTPsec", regexp.MustCompile(`^ntpsec$`), false, []string{"ntpsec.service"}},
+	{"vsftpd", regexp.MustCompile(`^vsftpd$`), false, []string{"vsftpd.service"}},
+	// ClamAV: one row for the scanner and its signature updates.
+	{"ClamAV", regexp.MustCompile(`^clamav(?:-daemon)?$`), false, []string{"clamav-daemon.service", "clamav-freshclam.service"}},
+	{"Dovecot", regexp.MustCompile(`^dovecot-core$`), false, []string{"dovecot.service"}},
+	// InfluxDB 1 and 2 are different products: a row each.
+	{"InfluxDB 1", regexp.MustCompile(`^influxdb$`), false, []string{"influxdb.service"}},
+	{"InfluxDB 2", regexp.MustCompile(`^influxdb2$`), false, []string{"influxdb.service"}},
+	{"Webmin", regexp.MustCompile(`^webmin$`), false, []string{"webmin.service"}},
 }
 
 func UnitPatterns() []string {

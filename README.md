@@ -18,8 +18,9 @@ as **agentless** devices: the master itself pings them and checks their services
 
 * **Dashboard**: all devices at a glance, in your own groups, with filters.
 * **Updates**: check, install selected packages or upgrade all, with live output.
-* **Applications**: 31 common applications (Apache, Docker, Exim, MariaDB, Nginx,
-  OpenSSL, PostgreSQL, the SSH server and more) with version, status and ports,
+* **Applications**: 41 common applications (Apache, ClamAV, Docker, Dovecot,
+  HAProxy, MariaDB, Nginx, OpenSSL, PostgreSQL, the SSH server and more) with
+  version, status and ports,
   per device and as one list for the whole environment.
 * **Vulnerabilities**: known CVEs of those applications, with severity, fixes
   and actively exploited ones highlighted.

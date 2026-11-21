@@ -55,7 +55,7 @@ Version: 1.17.1-2+deb12u2
 		Ports:   map[string][]Port{"tailscaled.service": {{Port: 41641, Proto: "udp", Addr: "0.0.0.0"}}},
 	}
 	rows := scan(strings.NewReader(status), sys, nil)
-	if len(rows) != 32 { // 31 applications, Tomcat twice
+	if len(rows) != 42 { // 41 applications, Tomcat twice
 		t.Fatalf("%d rows", len(rows))
 	}
 	by := map[string]App{}
@@ -81,5 +81,42 @@ Version: 1.17.1-2+deb12u2
 	}
 	if by["QEMU"].Running != "" || by["Unbound"].Running != "stopped" {
 		t.Errorf("QEMU %q, Unbound %q", by["QEMU"].Running, by["Unbound"].Running)
+	}
+}
+
+// Agent 0.3.14: HAProxy, Squid, Chrony, NTPsec, vsftpd, ClamAV, Dovecot,
+// InfluxDB 1 and 2, Webmin.
+func TestApplications0314(t *testing.T) {
+	pkg := func(name, ver string) string {
+		return "Package: " + name + "\nStatus: install ok installed\nVersion: " + ver + "\n\n"
+	}
+	status := pkg("haproxy", "2.6.12-1+deb12u2") + pkg("squid-openssl", "5.7-2+deb12u3") + pkg("chrony", "4.3-2+deb12u1") +
+		pkg("ntpsec", "1.2.2+dfsg1-1+deb12u1") + pkg("vsftpd", "3.0.3-13+b2") + pkg("clamav", "1.0.7+dfsg-1~deb12u1") +
+		pkg("clamav-daemon", "1.0.7+dfsg-1~deb12u1") + pkg("dovecot-core", "1:2.3.19.1+dfsg1-2.1+deb12u1") +
+		pkg("influxdb2", "2.7.11-1") + pkg("webmin", "2.302") + pkg("dovecot-imapd", "1:2.3.19.1+dfsg1-2.1+deb12u1")
+	sys := &System{
+		Active:  map[string]bool{"haproxy.service": true, "clamav-daemon.service": false, "clamav-freshclam.service": true, "influxdb.service": true, "chrony.service": true},
+		Enabled: map[string]bool{"haproxy.service": true, "clamav-freshclam.service": true},
+	}
+	by := map[string]App{}
+	for _, a := range scan(strings.NewReader(status), sys, nil) {
+		by[a.Name] = a
+	}
+	for name, want := range map[string]string{
+		"HAProxy": "2.6.12", "Squid": "5.7", "Chrony": "4.3", "NTPsec": "1.2.2", "vsftpd": "3.0.3",
+		"ClamAV": "1.0.7", "Dovecot": "2.3.19.1", "InfluxDB 2": "2.7.11", "Webmin": "2.302",
+	} {
+		if a := by[name]; !a.Installed || a.Version != want {
+			t.Errorf("%s: %+v, want version %s", name, a, want)
+		}
+	}
+	if by["InfluxDB 1"].Installed || by["InfluxDB 2"].Running != "running" {
+		t.Errorf("InfluxDB: %+v / %+v", by["InfluxDB 1"], by["InfluxDB 2"])
+	}
+	if c := by["ClamAV"]; c.Running != "running" || c.Boot != "enabled" { // freshclam runs, the scanner does not
+		t.Errorf("ClamAV: %+v", c)
+	}
+	if by["HAProxy"].Running != "running" || by["Dovecot"].Package != "dovecot-core" {
+		t.Errorf("HAProxy %+v, Dovecot %+v", by["HAProxy"], by["Dovecot"])
 	}
 }
