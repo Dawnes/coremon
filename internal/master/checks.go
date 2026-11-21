@@ -126,13 +126,11 @@ func (s *Server) checkDevOr404(w http.ResponseWriter, r *http.Request, create bo
 	return nil
 }
 
-// minChecks: an agentless device must keep at least one running check (its
-// status comes from them); an agent device may have none.
-func (d *checkDev) minChecks() int {
-	if d.Local != nil {
-		return 1
-	}
-	return 0
+// lastCheck: stopping one more check would leave an agentless device without
+// any (its status comes from them). An agent device may have none at all,
+// so for it this is never true.
+func (d *checkDev) lastCheck() bool {
+	return d.Local != nil && d.activeChecks() <= 1
 }
 
 // devView: the device's own view (after a change), as the website needs it.

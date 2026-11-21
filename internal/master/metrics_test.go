@@ -127,4 +127,25 @@ func TestAgentMetrics(t *testing.T) {
 	if r := cd.Devices["a_web"].Services[data.ID]; len(r.Vals) == 0 || r.Value != 5 {
 		t.Errorf("checks.dat: %+v", r)
 	}
+	// An agent device may end up without any check: the outside one first,
+	// then the measured ones, even when only measured ones are left.
+	var ids []string
+	for _, sv := range a.Checks.Services {
+		if !sv.isMetric() {
+			ids = append([]string{sv.ID}, ids...)
+		} else {
+			ids = append(ids, sv.ID)
+		}
+	}
+	if code, b := c.do("POST", "/api/ui/locals/a_web/services/"+load.ID+"/pause", `{"paused":true}`); code != 200 {
+		t.Errorf("pause a measured service: %d %s", code, b)
+	}
+	for _, id := range ids {
+		if code, b := c.do("POST", "/api/ui/locals/a_web/services/"+id+"/delete", ""); code != 200 {
+			t.Errorf("delete %s: %d %s", id, code, b)
+		}
+	}
+	if len(a.Checks.Services) != 0 {
+		t.Errorf("left: %d", len(a.Checks.Services))
+	}
 }

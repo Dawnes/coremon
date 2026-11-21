@@ -627,32 +627,20 @@ function probeItems(pa, cur, curName, skip = '') {
 }
 const VIA_HINT = 'The device it sits behind on the network, such as a switch, a router or the host of a VM. When that device is down or in maintenance and this one fails too, it shows as unreachable instead of down. Its checks keep running.';
 // "Connected via core › switch-2" (top down) on a device page, with a change link for admins.
+// Disk, memory and CPU load of an agent device as reversed letters D M C:
+// green within the limit, red down, grey unknown/paused (all grey in maintenance).
+function statLetters(a) {
+  const S = !isLocal(a) && a.status !== 'pending' && a.checks?.stats;
+  if (!S || !S.length) return '';
+  return html`<span class="stl">${S.map((x) => html`<span class="${a.maint ? 'unk' : x.s}">${x.k.toUpperCase()}</span>`)}</span>`;
+}
 function viaLine(a) {
   const ch = [...(a.via_chain || [])].reverse();
-  return html`<div class="sub">Connected via ${ch.length ? ch.map((x, i) => html`${i ? ' › ' : ''}<a href="#/device/${x.id}">${x.name}</a>`) : html`<span class="dim">none</span>`}${ifChange(html` <a href="#" class="small" data-act="via-edit" title="Change the device it is connected via">change</a>`)}</div>`;
+  return html`<div class="sub">Connected via ${ch.length ? ch.map((x, i) => html`${i ? ' › ' : ''}<a href="#/device/${x.id}">${x.name}</a>`) : html`<span class="dim">none</span>`}</div>`;
 }
 function unrNotice(a) {
   if (!a.unreach) return '';
   return html`<div class="notice unr"><b>Unreachable</b> — it does not answer, and <a href="#/device/${a.unreach.id}"><b>${a.unreach.name}</b></a>, which it is connected via, is down or in maintenance. It is not counted as a failure of its own; its checks keep running.</div>`;
-}
-async function viaModal(a, done) {
-  const ov = await GET('overview');
-  openModal(html`<h3>Connected via: ${a.name}</h3>
-    <form class="form" data-submit="save">
-      <div class="field">Connected via${pick('via', viaItems(ov.agents, a.id), a.via?.id || '')}</div>
-      <div class="dim small">${VIA_HINT}</div>
-      <div class="actions"><button type="button" class="btn ghost" data-act="cancel">Cancel</button><button class="btn primary">Save</button></div>
-    </form>`, {
-    acts: {
-      cancel: () => closeModal(),
-      save: async (f) => {
-        const res = await POST((isLocal(a) ? 'locals/' : 'agents/') + a.id, { via: f.via.value });
-        closeModal();
-        toast('Saved', 'ok');
-        done?.(res);
-      },
-    },
-  });
 }
 // Maintenance: nothing checked or started automatically, no failures shown.
 const hhmm = (ts) => new Date(ts * 1000).toTimeString().slice(0, 5);
@@ -852,14 +840,17 @@ async function saveLayout(groupsOrder, lists) {
   await POST('layout', body);
 }
 
-const FILTER_CHIPS = [['all', 'All'], ['updates', 'Updates'], ['security', 'Security'], ['reboot', 'Reboot'], ['offline', 'Offline'], ['pending', 'Pending'], ['agent', 'Agent outdated']];
-function agentMatches(a, f, q, groups) {
+const FILTER_CHIPS = [['all', 'No filter'], ['updates', 'Updates'], ['reboot', 'Reboot'], ['offline', 'Offline'], ['agent', 'Agent outdated']];
+const TYPE_TABS = [['all', 'All'], ['agent', 'Agents'], ['local', 'Agentless']];
+// The device type switch next to the filter chips (never remembered).
+const typeTabs = (cur) => TYPE_TABS.map(([k, l]) => html`<button class="${cur === k ? 'on' : ''}" data-act="type" data-t="${k}">${l}</button>`);
+function agentMatches(a, f, q, groups, type) {
   const u = a.updates || {};
+  if (type === 'agent' && isLocal(a)) return false;
+  if (type === 'local' && !isLocal(a)) return false;
   if (f === 'updates' && !(u.total > 0)) return false;
-  if (f === 'security' && !(u.security > 0)) return false;
   if (f === 'reboot' && !u.reboot_required) return false;
   if (f === 'offline' && !isDown(a) && !a.unreach) return false;
-  if (f === 'pending' && a.status !== 'pending') return false;
   if (f === 'agent' && (a.core_is_latest || !a.core_version)) return false;
   if (q) {
     const g = groups.find((x) => x.id === a.group_id);
@@ -877,10 +868,10 @@ function Dashboard() {
   lastDashSub = 'overview';
   // arrange: the layout is unlocked (admins only). Never stored: every
   // page load starts locked.
-  const st = { filter: 'all', q: '', sel: new Set(), data: null, folded: new Set(), drag: null, arrange: false };
+  const st = { filter: 'all', type: 'all', q: '', sel: new Set(), data: null, folded: new Set(), drag: null, arrange: false };
   const arranging = () => canChange() && st.arrange;
-  const filtering = () => st.filter !== 'all' || st.q !== '';
-  const matches = (a) => agentMatches(a, st.filter, st.q, st.data.groups);
+  const filtering = () => st.filter !== 'all' || st.type !== 'all' || st.q !== '';
+  const matches = (a) => agentMatches(a, st.filter, st.q, st.data.groups, st.type);
   function localCard(a) {
     const L = a.local, p = probeOut(a);
     const state = a.maint ? 'maint' : p ? 'unk' : !L.checked ? 'wait' : L.up ? 'up' : a.unreach ? 'unr' : 'down';
@@ -940,7 +931,7 @@ function Dashboard() {
           <div style="min-width:0"><div class="name">${a.name}</div>${a.below_min
             ? html`<div class="os">agent ${a.core_version} · lowest allowed ${a.min_agent}</div><div class="os">upgrade only — no data shown</div>`
             : html`<div class="os">${osLabel(f)} · ${f.arch || '?'} · ${f.virt || ''}</div><div class="os">${ipLabel(f)}</div>`}</div>
-          ${selectable ? html`<input type="checkbox" class="selbox" data-act="sel" data-id="${a.id}" ${st.sel.has(a.id) ? 'checked' : ''} title="Select">` : ''}</div>
+          ${statLetters(a) || selectable ? html`<div class="tcorner">${statLetters(a)}${selectable ? html`<input type="checkbox" class="selbox" data-act="sel" data-id="${a.id}" ${st.sel.has(a.id) ? 'checked' : ''} title="Select">` : ''}</div>` : ''}</div>
         ${mid}
         ${a.unreach ? html`<div class="svcline unr">${unrText(a)}</div>` : ''}
         ${cdown ? html`<div class="svcline" title="${cdown.L.svc_fail ? `${cdown.L.svc_fail.name}: ${cdown.L.svc_fail.error || 'down'}` : ''}">${checksDownText(cdown)}${checksFailText(cdown) ? ` · ${checksFailText(cdown)}` : ''}</div>` : ''}
@@ -1045,7 +1036,7 @@ function Dashboard() {
     if (allCurrent) oldest = null;
     const hours = d.settings?.check_interval_hours || 6;
     setHTML($('#d-stats'), html`
-      <div class="panel stat ${svcClass}" title="Agents: the connection. Agentless devices: the ping and every service that is not paused."><div class="label">Services OK</div><div class="value">${svcOK}<small> / ${svcTotal}</small></div>
+      <div class="panel stat ${svcClass}" title="Agents: the connection and their services. Agentless devices: the ping and their services. Paused checks are not counted."><div class="label">Services OK</div><div class="value">${svcOK}<small> / ${svcTotal}</small></div>
         <div class="statnote">${active.length} device${active.length === 1 ? '' : 's'} · ${devClean} without failures${reportOnly ? html` · <span title="Report-only devices only report; no checks, installs or reboots">${reportOnly} report only</span>` : ''}</div>
         ${[...behind.values()].map((c) => html`<div class="statnote"><span class="c-unr" title="Unreachable devices are not counted as failures">${c.n} unreachable behind ${c.name}</span></div>`)}</div>
       <div class="panel stat c-amber"><div class="label">Pending updates</div><div class="value">${totUpd}</div>
@@ -1057,7 +1048,8 @@ function Dashboard() {
         ${oldest ? html`<div class="value datev">${fmtDate(oldest.ts)}</div><div class="statnote">${ago(oldest.ts)} · ${oldest.a.name} (${oldest.a.online ? 'last update check' : 'offline'})</div>`
           : allCurrent ? html`<div class="value datev">All current</div><div class="statnote">all checked within ${hours} h</div>`
           : html`<div class="value">—</div><div class="statnote">nothing to report</div>`}</div>`);
-    setHTML($('#d-chips'), filterChips(A, st.filter, (a, f) => agentMatches(a, f, st.q, d.groups)));
+    setHTML($('#d-chips'), filterChips(A, st.filter, (a, f) => agentMatches(a, f, st.q, d.groups, st.type)));
+    setHTML($('#d-type'), typeTabs(st.type));
     if (!A.length) {
       setHTML($('#d-cards'), html`<div class="panel empty"><div class="big">🛰️</div><div>No devices yet.</div>${ifChange(html`<div style="margin-top:14px"><a class="btn primary" href="#/settings/devices">${icon('plus')} Add your first device</a></div>`)}</div>`);
     } else {
@@ -1166,7 +1158,7 @@ function Dashboard() {
           ${ifChange(html`<span id="d-arrange"></span><button class="btn" data-act="check-all">${icon('refresh')} Check now</button>`)}</div>
         <div id="d-notice"></div><div id="d-arrange-note"></div>
         <div class="stats" id="d-stats"></div>
-        <div class="toolbar"><input type="search" class="search" id="d-q" placeholder="Search name, OS, IP, group…"><div class="chips" id="d-chips"></div></div>
+        <div class="toolbar"><input type="search" class="search" id="d-q" placeholder="Search name, OS, IP, group…"><div class="chips" id="d-chips"></div><div class="tabs typetabs" id="d-type"></div></div>
         <div id="d-cards"></div>
         <div id="d-bulk"></div>`);
       $('#d-q').addEventListener('input', (e) => { st.q = e.target.value; render(); });
@@ -1181,6 +1173,7 @@ function Dashboard() {
     acts: {
       arrange: () => { st.arrange = !st.arrange; render(); },
       filter: (t) => { st.filter = t.dataset.f; render(); },
+      type: (t) => { st.type = t.dataset.t; render(); },
       fold: (t) => { const g = t.dataset.gid; st.folded.has(g) ? st.folded.delete(g) : st.folded.add(g); render(); },
       'open-agent': (t) => { location.hash = '#/device/' + t.dataset.id; },
       sel: (t) => { t.checked ? st.sel.add(t.dataset.id) : st.sel.delete(t.dataset.id); render(); },
@@ -1237,7 +1230,7 @@ const osShort = (f) => (f.os_id && f.os_version ? f.os_id.charAt(0).toUpperCase(
 
 function DeviceList() {
   lastDashSub = 'devices';
-  const st = { filter: 'all', q: '', data: null, sort: 'name', dir: 1 };
+  const st = { filter: 'all', type: 'all', q: '', data: null, sort: 'name', dir: 1 };
   const byText = (x, y) => String(x).localeCompare(String(y), undefined, { numeric: true, sensitivity: 'base' });
   const statusText = (a) => (a.maint ? 'maintenance' : a.unreach ? 'unreachable' : isLocal(a) ? (probeOut(a) ? 'unknown' : !a.local.checked ? 'waiting' : a.local.up ? (a.local.svc_down ? `${a.local.svc_down} service${a.local.svc_down === 1 ? '' : 's'} down` : 'online') : 'down')
     : a.status === 'pending' ? 'pending' : a.below_min ? 'update required' : !a.online ? 'offline' : agentChecksDown(a) ? checksDownShort(agentChecksDown(a)) : a.status === 'report_only' ? 'report only' : 'online');
@@ -1249,6 +1242,7 @@ function DeviceList() {
     ['group', 'Group', (a) => groupName(a.group_id), 'opt'],
     ['ip', 'IP', (a) => (a.facts.ips || [])[0] || '', 'opt'],
     ['os', 'OS', (a) => (isLocal(a) ? '~local' : osShort(a.facts)), 'opt'],
+    ['stats', 'Stats', (a) => (isLocal(a) ? -1 : (a.checks?.stats || []).reduce((n, x) => n + (x.s === 'down' ? 10 : 1), 0)), 'opt'],
     ['updates', 'Updates', (a) => a.updates?.total ?? -1, 'num'],
     ['cve', 'CVE', (a) => a.vulns?.badge ?? -1, 'num'],
     ['reboot', 'Reboot', (a) => (a.updates?.reboot_required ? 1 : 0), ''],
@@ -1285,6 +1279,7 @@ function DeviceList() {
       <td class="opt muted">${groupName(a.group_id)}</td>
       <td class="opt small nowrap">${(f.ips || [])[0] || ''}</td>
       <td class="opt nowrap" title="${a.below_min || isLocal(a) ? '' : osLabel(f)}">${isLocal(a) ? html`<span class="dim" title="Monitored by the master with a ping; no agent">agentless</span>` : a.below_min ? html`<span class="dim">—</span>` : clipText(osShort(f), 14)}${o?.status === 'expired' ? html` <span class="badge sec xs" title="${osSupportText(o, f.os_id)}">EOL</span>` : o?.status === 'soon' ? html` <span class="badge upd xs" title="${osSupportText(o, f.os_id)}">EOL soon</span>` : ''}</td>
+      <td class="opt nowrap">${statLetters(a)}</td>
       <td class="num"><b class="${u?.security ? 'c-red' : u?.total ? 'c-amber' : 'dim'}">${u ? u.total : '—'}</b></td>
       <td class="num">${!a.vulns ? html`<span class="dim">—</span>` : a.vulns.badge ? html`<b class="c-red" title="${CVE_RED}">${a.vulns.badge}</b>` : html`<span class="dim">0</span>`}</td>
       <td>${!u ? html`<span class="dim">—</span>` : u.reboot_required ? html`<span class="badge reboot xs">required</span>` : html`<span class="badge ok xs">no</span>`}</td>
@@ -1296,8 +1291,9 @@ function DeviceList() {
     const d = st.data;
     if (!d) return;
     const A = d.agents;
-    setHTML($('#l-chips'), filterChips(A, st.filter, (a, f) => agentMatches(a, f, st.q, d.groups)));
-    const shown = A.filter((a) => agentMatches(a, st.filter, st.q, d.groups));
+    setHTML($('#l-chips'), filterChips(A, st.filter, (a, f) => agentMatches(a, f, st.q, d.groups, st.type)));
+    setHTML($('#l-type'), typeTabs(st.type));
+    const shown = A.filter((a) => agentMatches(a, st.filter, st.q, d.groups, st.type));
     if (!A.length) return setHTML($('#l-table'), html`<div class="panel empty">No devices yet.</div>`);
     if (!shown.length) return setHTML($('#l-table'), html`<div class="panel empty">No devices match this filter.</div>`);
     const groups = [...d.groups].sort((x, y) => byText(x.name, y.name));
@@ -1313,13 +1309,14 @@ function DeviceList() {
     interval: 5000,
     mount(el) {
       el.innerHTML = r(html`${subTabs('dashboard', 'devices')}<div class="page-head"><div><h1>Device List</h1><div class="sub">All devices at a glance</div></div></div>
-        <div class="toolbar"><input type="search" class="search" id="l-q" placeholder="Search name, OS, IP, group…"><div class="chips" id="l-chips"></div></div>
+        <div class="toolbar"><input type="search" class="search" id="l-q" placeholder="Search name, OS, IP, group…"><div class="chips" id="l-chips"></div><div class="tabs typetabs" id="l-type"></div></div>
         <div id="l-table"></div>`);
       $('#l-q').addEventListener('input', (e) => { st.q = e.target.value; render(); });
     },
     async refresh() { const d = await GET('overview'); d.groups ||= []; st.data = d; render(); },
     acts: {
       filter: (t) => { st.filter = t.dataset.f; render(); },
+      type: (t) => { st.type = t.dataset.t; render(); },
       sort: (t) => { const k = t.dataset.k; st.dir = st.sort === k ? -st.dir : 1; st.sort = k; render(); },
     },
   };
@@ -1338,8 +1335,10 @@ function DeviceList() {
 // refresh in place; the drawing is only rebuilt when the tree changes.
 function MapPage() {
   lastDashSub = 'map';
-  const W = 176, H = 40, ROW = 52, GAP = 96, PAD = 8;
-  const st = { key: '', data: null, mode: 'network', nodes: new Map() };
+  const W = 176, H = 40, ROW = 52, GAP = 112, PAD = 8;
+  // view: zoom k and offset x/y of the drawing (fitted to the screen on every
+  // visit and view change, never stored); size: the drawing's own size.
+  const st = { key: '', data: null, mode: 'network', nodes: new Map(), view: null, size: null, hh: 0 };
   const byText = (x, y) => String(x).localeCompare(String(y), undefined, { numeric: true, sensitivity: 'base' });
   const VIEWS = [['network', 'Network'], ['monitor', 'Monitoring'], ['full', 'Full map']];
   // Monitoring colour: ok (green), bad (red), unr (unreachable) or unk
@@ -1408,20 +1407,40 @@ function MapPage() {
     const depth = Math.max(...all.map((n) => n.depth));
     return { all, w: PAD * 2 + (depth + 1) * W + depth * GAP, h: PAD * 2 + Math.max(1, row) * ROW - (ROW - H) };
   }
+  // The state of the tree line to device k (under n): live (both ends answer:
+  // a slow pulse runs toward the master; a service down does not stop it),
+  // bad (k itself is down: red, still) or neither (unknown, maintenance, cut).
+  function lineState(n, k, mode) {
+    const cut = mode !== 'monitor' && !!k.a?.unreach;
+    const kh = health(k.a), nh = health(n.a), alive = (h) => (h[0] === 'ok' || h[0] === 'bad') && !h[2];
+    return { cut, live: !cut && alive(kh) && alive(nh), bad: !cut && !!kh[2] };
+  }
+  // The ping time of a device and where it is measured from: "4 ms via probe-1".
+  function pingLabel(a) {
+    const L = a && !a.maint && !a.unreach && !probeOut(a) ? chk(a) : null;
+    if (!L || !L.ping || !L.checked || !L.up || !L.rtt_us) return '';
+    return `${rttText(L.rtt_us)} via ${clipText(L.probe ? L.probe.name : 'master', 10)}`;
+  }
   // Tree lines: an S-curve from the parent's right edge to each child. In the
   // network views a line to an unreachable device is dashed, and where the
-  // break starts (the parent is not unreachable itself) it gets a ✕.
+  // break starts (the parent is not unreachable itself) it gets a ✕. Each
+  // line has a pulse on top (shown while live) and the child's ping time.
+  // The pulse runs from the child to the parent; alternating levels take
+  // turns, so the wave flows on toward the master.
   function lines(all, mode) {
     const out = [];
     for (const n of all) {
       const x1 = n.x + W, y1 = n.y + H / 2;
       for (const k of n.kids) {
         const x2 = k.x, y2 = k.y + H / 2, mx = (x1 + x2) / 2;
-        const cut = mode !== 'monitor' && !!k.a?.unreach;
-        out.push(html`<path class="mapline ${k.remote ? 'remote' : ''} ${cut ? 'cut' : ''}" data-k="t:${n.id}:${k.id}" d="M${x1} ${y1} C${mx} ${y1} ${mx} ${y2} ${x2} ${y2}"/>`);
-        if (cut && !n.a?.unreach) {
+        const s = lineState(n, k, mode), d = `M${x1} ${y1} C${mx} ${y1} ${mx} ${y2} ${x2} ${y2}`, tk = `t:${n.id}:${k.id}`;
+        out.push(html`<path class="mapline ${k.remote ? 'remote' : ''} ${s.cut ? 'cut' : ''} ${s.bad ? 'bad' : ''}" data-k="${tk}" d="${d}"/>`);
+        out.push(html`<path class="mappulse ${s.live ? 'live' : ''}" data-p="${tk}" d="${d}" pathLength="100" style="animation-delay:${(k.depth % 2) * 2.5}s"/>`);
+        const pl = pingLabel(k.a);
+        if (pl) out.push(html`<text class="mapping" data-k="${tk}" id="mapping-${k.id}" x="${x2 - 6}" y="${y2 - 5}" text-anchor="end">${pl}</text>`);
+        if (s.cut && !n.a?.unreach) {
           const cx = x1 + 16, cy = y1 + (y2 - y1) * 0.04;
-          out.push(html`<path class="mapcut" data-k="t:${n.id}:${k.id}" d="M${cx - 4} ${cy - 4} L${cx + 4} ${cy + 4} M${cx + 4} ${cy - 4} L${cx - 4} ${cy + 4}"/>`);
+          out.push(html`<path class="mapcut" data-k="${tk}" d="M${cx - 4} ${cy - 4} L${cx + 4} ${cy + 4} M${cx + 4} ${cy - 4} L${cx - 4} ${cy + 4}"/>`);
         }
       }
     }
@@ -1447,7 +1466,7 @@ function MapPage() {
     const a = n.a, [cls, , down] = health(a), name = a ? a.name : 'Master';
     const ip = a && !isLocal(a) ? devIP(a) : '';
     const p = mode !== 'monitor' ? checker(a) : null;
-    return html`<g class="mapbox ${cls} ${down ? 'down' : ''} ${a ? 'click' : ''}" id="map-${n.id}" data-id="${n.id}" ${a ? raw(`data-act="open"`) : ''} transform="translate(${n.x} ${n.y})">
+    return html`<g class="mapbox ${cls} ${down ? 'down' : ''} ${a?.maint ? 'maint' : ''} ${a ? 'click' : ''}" id="map-${n.id}" data-id="${n.id}" ${a ? raw(`data-act="open"`) : ''} transform="translate(${n.x} ${n.y})">
       <title>${tip(n)}</title><rect width="${W}" height="${H}" rx="8"/><circle cx="16" cy="${H / 2}" r="5"/>
       ${ip || p ? html`<text x="30" y="${H / 2 - 2}">${clipText(name, p ? 16 : 20)}</text>${ip ? html`<text class="ip" x="30" y="${H / 2 + 11}">${ip}</text>` : ''}`
         : html`<text x="30" y="${H / 2 + 4.5}">${clipText(name, 20)}</text>`}
@@ -1479,36 +1498,110 @@ function MapPage() {
     const root = tree(d, mode);
     const { all, w, h } = place(root);
     st.nodes = new Map(all.map((n) => [n.id, n]));
-    const key = mode + '|' + all.map((n) => `${n.id}@${n.x},${n.y}${n.remote ? 'r' : ''}${n.a?.unreach ? 'u' : ''}/${checker(n.a)?.id || ''}`).join('|') + '|' + all.map((n) => (n.a ? n.a.name + '/' + devIP(n.a) : '')).join(',');
+    const key = mode + '|' + all.map((n) => `${n.id}@${n.x},${n.y}${n.remote ? 'r' : ''}${n.a?.unreach ? 'u' : ''}${pingLabel(n.a) ? 'p' : ''}/${checker(n.a)?.id || ''}`).join('|') + '|' + all.map((n) => (n.a ? n.a.name + '/' + devIP(n.a) : '')).join(',');
     if (key === st.key) {
-      // Same tree: only colours and status texts change.
+      // Same tree: only colours, pulses, ping times and status texts change.
       for (const n of all) {
         const g = document.getElementById('map-' + n.id);
         if (!g) continue;
         const [cls, , down] = health(n.a);
-        g.classList.remove('ok', 'bad', 'unk', 'unr', 'down');
+        g.classList.remove('ok', 'bad', 'unk', 'unr', 'down', 'maint');
         g.classList.add(cls);
         if (down) g.classList.add('down');
+        if (n.a?.maint) g.classList.add('maint');
         const t = g.querySelector('title');
         if (t) t.textContent = tip(n);
+        if (!n.parent) continue;
+        const tk = `t:${n.parent.id}:${n.id}`, s = lineState(n.parent, n, mode);
+        document.querySelector(`#map path.mapline[data-k="${CSS.escape(tk)}"]`)?.classList.toggle('bad', s.bad);
+        document.querySelector(`#map path.mappulse[data-p="${CSS.escape(tk)}"]`)?.classList.toggle('live', s.live);
+        const pt = document.getElementById('mapping-' + n.id);
+        if (pt) pt.textContent = pingLabel(n.a);
       }
       return;
     }
     st.key = key;
+    const keep = st.view && st.size && st.size.mode === mode ? st.view : null;
+    st.size = { w, h, mode };
     const legend = mode === 'monitor'
       ? html`<span><svg width="28" height="8"><path class="mapline" d="M0 4 H28"/></svg> monitored by the master</span><span><svg width="28" height="8"><path class="mapline remote" d="M0 4 H28"/></svg> checked by a remote probe</span>`
       : html`<span><svg width="28" height="8"><path class="mapline" d="M0 4 H28"/></svg> connected via</span><span><svg width="28" height="8"><path class="mapline cut" d="M0 4 H28"/></svg> cut off</span>
         ${mode === 'full' ? html`<span><svg width="28" height="8"><path class="mapline check" d="M0 4 H28"/></svg> checked by a remote probe</span>` : html`<span><b style="color:var(--cyan);font-weight:500">by …</b> checked by a remote probe</span>`}`;
-    setHTML($('#map'), html`<div class="panel mapwrap"><svg class="mapsvg" width="${w}" height="${h}" viewBox="0 0 ${w} ${h}" role="img" aria-label="${VIEWS.find((v) => v[0] === mode)[1]} map">
-      ${lines(all, mode)}${mode === 'full' ? checkLines(all) : ''}${all.map((n) => box(n, mode))}</svg></div>
-      <div class="row dim small" style="margin-top:10px;gap:16px"><span><i class="lg ok"></i>up</span><span><i class="lg bad"></i>down or a service down</span>${mode === 'monitor' ? '' : html`<span><i class="lg unr"></i>unreachable</span>`}<span><i class="lg none"></i>unknown, waiting, pending or maintenance</span>
-        ${legend}</div>
-      ${mode === 'full' ? html`<div class="dim small" style="margin-top:6px">Point at a device to see only its own lines.</div>` : ''}`);
+    setHTML($('#map'), html`<div class="panel mapwrap"><div class="mapctl"><button class="btn ghost sm iconbtn" data-act="zoom" data-f="1.25" title="Zoom in">+</button><button class="btn ghost sm iconbtn" data-act="zoom" data-f="0.8" title="Zoom out">−</button><button class="btn ghost sm" data-act="fit" title="Show the whole map">Fit</button></div>
+      <svg class="mapsvg" width="100%" height="${st.hh || 320}" role="img" aria-label="${VIEWS.find((v) => v[0] === mode)[1]} map"><g id="map-vp">
+      ${lines(all, mode)}${mode === 'full' ? checkLines(all) : ''}${all.map((n) => box(n, mode))}</g></svg></div>
+      <div class="row dim small" style="margin-top:10px;gap:16px"><span><i class="lg ok"></i>up</span><span><i class="lg bad"></i>down or a service down</span>${mode === 'monitor' ? '' : html`<span><i class="lg unr"></i>unreachable</span>`}<span><i class="lg maint"></i>maintenance</span><span><i class="lg none"></i>unknown, waiting or pending</span>
+        ${legend}<span><b style="color:var(--muted);font-weight:500">4 ms via …</b> ping time, and who pings</span></div>
+      <div class="dim small" style="margin-top:6px">Scroll or pinch to zoom, drag to move.${mode === 'full' ? ' Point at a device to see only its own lines.' : ''}</div>`);
     const svg = $('#map svg');
     if (mode === 'full') {
       svg.addEventListener('mouseover', (e) => { const g = e.target.closest('.mapbox'); focus(g ? g.dataset.id : ''); });
       svg.addEventListener('mouseleave', () => focus(''));
     }
+    panZoom(svg);
+    if (keep) { st.view = keep; apply(); } else fit();
+  }
+  // Zoom and pan: the drawing sits in one group that is moved and scaled.
+  function apply() {
+    const v = st.view, g = $('#map-vp');
+    if (v && g) g.setAttribute('transform', `translate(${v.x.toFixed(1)} ${v.y.toFixed(1)}) scale(${v.k.toFixed(4)})`);
+  }
+  // Fit: the whole map on one screen (never larger than its own size).
+  function fit() {
+    const svg = $('#map svg');
+    if (!svg || !st.size) return;
+    const { w, h } = st.size, cw = svg.clientWidth || w;
+    const ch = Math.max(320, window.innerHeight - svg.getBoundingClientRect().top - 90);
+    const k = Math.min(cw / w, ch / h, 1);
+    st.hh = Math.max(260, Math.ceil(h * k));
+    svg.setAttribute('height', st.hh);
+    st.view = { k, x: (cw - w * k) / 2, y: (st.hh - h * k) / 2 };
+    apply();
+  }
+  function zoomAt(px, py, f) {
+    const v = st.view;
+    if (!v) return;
+    const k = Math.min(4, Math.max(0.15, v.k * f));
+    v.x = px - (px - v.x) * (k / v.k);
+    v.y = py - (py - v.y) * (k / v.k);
+    v.k = k;
+    apply();
+  }
+  function panZoom(svg) {
+    const pts = new Map();
+    let drag = null, moved = false, pinch = 0;
+    const local = (e) => { const r = svg.getBoundingClientRect(); return [e.clientX - r.left, e.clientY - r.top]; };
+    svg.addEventListener('wheel', (e) => { e.preventDefault(); const [x, y] = local(e); zoomAt(x, y, Math.exp(-e.deltaY * 0.0015)); }, { passive: false });
+    svg.addEventListener('pointerdown', (e) => {
+      if (e.pointerType === 'mouse' && e.button !== 0) return;
+      pts.set(e.pointerId, local(e));
+      moved = false;
+      if (pts.size === 1) drag = { p: local(e), x: st.view.x, y: st.view.y };
+      if (pts.size === 2) { const [a, b] = [...pts.values()]; pinch = Math.hypot(a[0] - b[0], a[1] - b[1]); drag = null; }
+    });
+    svg.addEventListener('pointermove', (e) => {
+      if (!pts.has(e.pointerId)) return;
+      const p = local(e);
+      pts.set(e.pointerId, p);
+      if (pts.size === 2 && pinch) {
+        const [a, b] = [...pts.values()], dd = Math.hypot(a[0] - b[0], a[1] - b[1]);
+        zoomAt((a[0] + b[0]) / 2, (a[1] + b[1]) / 2, dd / pinch);
+        pinch = dd;
+        moved = true;
+      } else if (drag) {
+        const dx = p[0] - drag.p[0], dy = p[1] - drag.p[1];
+        if (!moved && Math.abs(dx) + Math.abs(dy) < 5) return;
+        if (!moved) { moved = true; svg.setPointerCapture(e.pointerId); svg.classList.add('panning'); }
+        st.view.x = drag.x + dx;
+        st.view.y = drag.y + dy;
+        apply();
+      }
+    });
+    const up = (e) => { pts.delete(e.pointerId); if (pts.size < 2) pinch = 0; if (!pts.size) { drag = null; svg.classList.remove('panning'); } };
+    svg.addEventListener('pointerup', up);
+    svg.addEventListener('pointercancel', up);
+    // A drag is not a click on the device under it.
+    svg.addEventListener('click', (e) => { if (moved) { e.stopPropagation(); e.preventDefault(); moved = false; } }, true);
   }
   return {
     interval: 5000,
@@ -1519,6 +1612,8 @@ function MapPage() {
     acts: {
       open: (t) => { location.hash = '#/device/' + t.dataset.id; },
       mode: (t) => { st.mode = t.dataset.m; st.key = ''; render(); },
+      zoom: (t) => { const svg = $('#map svg'); if (svg) zoomAt(svg.clientWidth / 2, svg.clientHeight / 2, +t.dataset.f); },
+      fit: () => fit(),
     },
   };
 }
@@ -1944,7 +2039,6 @@ function AgentPage([id, tab]) {
       },
       'maint-start': () => maintStart(a(), refresh),
       'maint-end': () => maintEnd(a(), refresh),
-      'via-edit': () => viaModal(a(), refresh),
       'probe-on': async (t) => {
         const on = t.checked;
         try {
@@ -2075,7 +2169,7 @@ function rttGraph(rtt) {
 const STEP_LABEL = { connect: 'Connect', greeting: 'Greeting', tls: 'TLS handshake', cert: 'Certificate valid', cert_days: 'Certificate days', http: 'HTTP status',
   query: 'Query', rcode: 'Server status', records: 'Records', expect: 'Expected value', time: 'Response time' };
 const stepLabel = (k) => STEP_LABEL[k] || k;
-const svcProto = (s) => (s.metric ? { disk: `DISK ${s.mount}`, memory: 'MEMORY', load: 'LOAD' }[s.method] || '' : `${(s.method || 'tcp').toUpperCase()} ${s.port}`);
+const svcProto = (s) => (s.metric ? { disk: `DISK ${s.mount}`, memory: 'MEMORY', load: 'CPU' }[s.method] || '' : `${(s.method || 'tcp').toUpperCase()} ${s.port}`);
 // Disk, memory and load: the limit as text ("> 90% used", "< 10 GB free", "> 1.5 per core").
 const metricLimit = (s) => (s.method === 'disk' && s.limit_kind === 'free' ? `< ${s.limit} GB free` : s.method === 'load' ? `> ${s.limit} per core` : `> ${s.limit}% used`);
 const metricVal = (s, v) => (s.method === 'load' ? v.toFixed(2) : s.limit_kind === 'free' ? `${v.toFixed(1)} GB` : `${Math.round(v)}%`);
@@ -2404,7 +2498,6 @@ function LocalPage([id, tab]) {
       'maint-start': () => maintStart(st.data.agent, refresh),
       'maint-end': () => maintEnd(st.data.agent, refresh),
       edit: () => localEditModal(st.data.agent, st.data.groups, refresh),
-      'via-edit': () => viaModal(st.data.agent, refresh),
       delete: () => localDelete(st.data.agent, () => { location.hash = '#/dashboard/' + lastDashSub; }),
     },
   };

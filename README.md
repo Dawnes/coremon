@@ -39,7 +39,8 @@ as **agentless** devices: the master itself pings them and checks their services
   its own agent every minute: disk space per mount point (% used or GB free),
   memory in use and the 1-minute load per core, each down after a set number of
   readings in a row past its limit. Each one has a 24-hour graph on the
-  device's System tab.
+  device's System tab, and a D, M or C letter on its dashboard tile and in the
+  Device List (green, red, or grey when unknown).
 * **Network dependencies**: each device can be **connected via** another device,
   such as a switch or the host of a VM. When that device is down or in
   maintenance, the devices behind it show as unreachable instead of down: the
@@ -47,6 +48,8 @@ as **agentless** devices: the master itself pings them and checks their services
 * **Map**: a live drawing of every device, as the network (who is connected via
   whom, with the break where a device is down), as monitoring (the master or a
   remote probe) or both together, coloured green, red, unreachable or grey.
+  Healthy lines carry a slow pulse toward the master, lines show the ping time
+  and who measures it, and the map zooms and pans (it opens fitted to the screen).
 * **Maintenance**: pause all checks of a device for 5 minutes up to 4 hours, or
   until ended by hand; no automatic jobs run and no failures are shown meanwhile.
 * **Releases**: update the master and the agents from the website.
@@ -99,7 +102,7 @@ checked by it. A device whose agent is offline shows as unknown, not down.
 A device with an agent can have services too (its **Services** tab): they are
 checked from outside like those of an agentless device, by the master or by
 another agent, never by its own agent. Its own status still comes from its agent.
-The exceptions are **Disk space**, **Memory** and **System load** (at the top of
+The exceptions are **Disk space**, **Memory** and **CPU load** (at the top of
 Add service): its own agent measures them every minute and sends the readings
 with its regular contact. The defaults follow common monitoring practice: disk
 more than 90% used for 3 readings, memory more than 90% for 5, and load more than

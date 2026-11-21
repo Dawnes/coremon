@@ -146,7 +146,7 @@ func (p *svcPreset) allows(method string) bool {
 var svcPresets = []svcPreset{
 	{Key: metricDisk, Name: "Disk space", Group: "Measured by the agent", Method: metricDisk, Agent: true},
 	{Key: metricMem, Name: "Memory", Group: "Measured by the agent", Method: metricMem, Agent: true},
-	{Key: metricLoad, Name: "System load", Group: "Measured by the agent", Method: metricLoad, Agent: true},
+	{Key: metricLoad, Name: "CPU load", Group: "Measured by the agent", Method: metricLoad, Agent: true},
 	{Key: "ssh", Name: "SSH", Port: 22, Greeting: true, Group: "Remote access"},
 	{Key: "telnet", Name: "Telnet", Port: 23, Group: "Remote access"},
 	{Key: "rdp", Name: "RDP", Port: 3389, Group: "Remote access"},
@@ -791,7 +791,7 @@ func (s *Server) handleServiceDelete(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "service not found", http.StatusNotFound)
 		return
 	}
-	if !gone.Paused && d.activeChecks() <= d.minChecks() {
+	if !gone.Paused && d.lastCheck() {
 		http.Error(w, noCheckMsg, http.StatusConflict)
 		return
 	}
@@ -874,7 +874,7 @@ func (s *Server) handleServicePause(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, s.devView(d, true))
 		return
 	}
-	if req.Paused && d.activeChecks() <= d.minChecks() {
+	if req.Paused && d.lastCheck() {
 		http.Error(w, noCheckMsg, http.StatusConflict)
 		return
 	}

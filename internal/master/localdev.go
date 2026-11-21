@@ -316,6 +316,7 @@ type localView struct {
 	SvcPaused int           `json:"svc_paused"`
 	SvcFail   *svcFailView  `json:"svc_fail,omitempty"` // the first running service that is down: what failed
 	Services  []serviceView `json:"services,omitempty"` // device page only
+	Stats     []statView    `json:"stats,omitempty"`    // disk, memory and CPU load in that order, when added
 
 	Probe *localProbeView `json:"probe,omitempty"` // checked by an agent instead of the master
 }
@@ -326,6 +327,43 @@ type svcFailView struct {
 	Step   string `json:"step,omitempty"`
 	Method string `json:"method"`
 	Error  string `json:"error,omitempty"`
+}
+
+// statView: one letter on the dashboard: d(isk), m(emory) or c(pu load), and
+// its state: ok, down, or unk (paused, no readings yet or now). All disks of
+// a device share one letter: down when any is down, else ok when any is ok.
+type statView struct {
+	K string `json:"k"`
+	S string `json:"s"`
+}
+
+func metricStats(vs []serviceView, svcs []*Service) []statView {
+	rank := map[string]int{"unk": 0, "ok": 1, "down": 2}
+	state := map[string]string{}
+	for i, sv := range svcs {
+		if !sv.isMetric() {
+			continue
+		}
+		k := map[string]string{metricDisk: "d", metricMem: "m", metricLoad: "c"}[sv.Method]
+		v, st := vs[i], "unk"
+		switch {
+		case sv.Paused || !v.Checked:
+		case !v.Up:
+			st = "down"
+		default:
+			st = "ok"
+		}
+		if cur, ok := state[k]; !ok || rank[st] > rank[cur] {
+			state[k] = st
+		}
+	}
+	var out []statView
+	for _, k := range []string{"d", "m", "c"} {
+		if st, ok := state[k]; ok {
+			out = append(out, statView{K: k, S: st})
+		}
+	}
+	return out
 }
 
 // pingView: the ping as one of the device's checks, also while paused.
@@ -411,6 +449,7 @@ func (s *Server) checksView(d *Checks, full, noReadings bool) *localView {
 		}
 	}
 	lv.SvcTotal = len(running)
+	lv.Stats = metricStats(svcs, d.Services)
 	if !d.pinging() {
 		servicesStatus(lv, running)
 	}
@@ -954,7 +993,7 @@ func (s *Server) handlePingState(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, s.devView(d, true))
 		return
 	}
-	if mode != "" && d.pinging() && d.activeChecks() <= d.minChecks() {
+	if mode != "" && d.pinging() && d.lastCheck() {
 		http.Error(w, noCheckMsg, http.StatusConflict)
 		return
 	}

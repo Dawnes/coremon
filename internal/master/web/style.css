@@ -153,6 +153,7 @@ select.sm { height: 30px; padding: 0 8px; font-size: 12.5px; }
 
 .toolbar { display: flex; gap: 10px; align-items: center; margin-bottom: 18px; flex-wrap: wrap; }
 .chips { display: flex; gap: 6px; flex-wrap: wrap; }
+.toolbar .typetabs { margin-left: auto; }
 .chip {
   height: 32px; padding: 0 12px; border-radius: var(--r-md); border: 1px solid var(--line-hi); background: rgba(255, 255, 255, 0.03);
   color: var(--muted); cursor: pointer; font: inherit; font-size: 13px; font-weight: 500; transition: background .12s, color .12s; box-shadow: var(--shadow-xs);
@@ -274,6 +275,12 @@ ul.plainlist { margin: 0; padding-left: 18px; line-height: 1.8; }
 .card .name { font-weight: 600; font-size: 15px; letter-spacing: -0.01em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .card .os { color: var(--muted); font-size: 12.5px; margin-top: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .card .selbox { margin-left: auto; }
+.card .tcorner { margin-left: auto; align-self: flex-start; display: flex; flex-direction: column; align-items: flex-end; gap: 8px; }
+.card .tcorner .selbox { margin-left: 0; }
+.stl { display: inline-flex; gap: 3px; }
+.stl span { display: inline-grid; place-items: center; width: 16px; height: 16px; border-radius: 4px; font: 700 10.5px/1 var(--mono); color: var(--bg); background: var(--green); }
+.stl span.down { background: var(--red); }
+.stl span.unk { background: var(--dim); }
 .card .mid { display: flex; align-items: flex-end; gap: 14px; margin: 14px 0 12px; }
 .card .big { font-size: 32px; font-weight: 700; letter-spacing: -0.04em; line-height: 1; }
 .card .big.zero { color: var(--green); }
@@ -371,8 +378,25 @@ ul.plainlist { margin: 0; padding-left: 18px; line-height: 1.8; }
 .setgrid > .panel { min-width: 0; }
 @media (max-width: 1100px) { .setgrid { grid-template-columns: 1fr; } }
 /* Dashboard > Map */
-.mapwrap { padding: 16px; overflow-x: auto; }
-.mapsvg { display: block; font-family: var(--sans); }
+.mapwrap { padding: 16px; overflow: hidden; position: relative; }
+.mapsvg { display: block; font-family: var(--sans); touch-action: none; cursor: grab; user-select: none; }
+.mapsvg.panning { cursor: grabbing; }
+.mapctl { position: absolute; top: 10px; right: 10px; z-index: 2; display: flex; gap: 4px; }
+.mapctl .iconbtn { font-size: 16px; line-height: 1; }
+/* Healthy lines: a slow pulse toward the master; a line to a down device: red and still. */
+.mappulse { fill: none; stroke: var(--cyan); stroke-width: 2.2; stroke-linecap: round; stroke-dasharray: 5 195; opacity: 0; pointer-events: none; }
+.mappulse.live { opacity: 0.85; animation: map-pulse 5s linear infinite; }
+@keyframes map-pulse { from { stroke-dashoffset: 0; } to { stroke-dashoffset: 200; } }
+.mapline.bad { stroke: rgba(248, 113, 113, 0.6); }
+.mapping { fill: var(--muted); font-size: 9.5px; font-family: var(--mono); pointer-events: none; }
+/* Glows in the state colour; a device that is down pulses; maintenance is tinted blue. */
+.mapbox.ok rect { filter: drop-shadow(0 0 5px rgba(74, 222, 128, 0.28)); }
+.mapbox.bad rect { filter: drop-shadow(0 0 6px rgba(248, 113, 113, 0.4)); }
+.mapbox.down rect { animation: map-glow 1.8s ease-in-out infinite; }
+@keyframes map-glow { 50% { filter: drop-shadow(0 0 13px rgba(248, 113, 113, 0.85)); } }
+.mapbox.maint rect { stroke: rgba(96, 165, 250, 0.8); fill: #121b2e; filter: drop-shadow(0 0 5px rgba(96, 165, 250, 0.3)); } .mapbox.maint circle { fill: #60a5fa; }
+.lg.maint { background: rgba(96, 165, 250, 0.8); }
+@media (prefers-reduced-motion: reduce) { .mappulse.live { animation: none; opacity: 0; } .mapbox.down rect { animation: none; } }
 .mapline { fill: none; stroke: rgba(255, 255, 255, 0.28); stroke-width: 1.5; }
 .mapline.remote { stroke-dasharray: 5 4; }
 .mapbox rect { fill: var(--panel-solid); stroke-width: 1.5; }
@@ -392,7 +416,8 @@ ul.plainlist { margin: 0; padding-left: 18px; line-height: 1.8; }
 /* Full map: lines from a remote probe to the devices it checks. */
 .mapline.check { stroke: rgba(34, 211, 238, 0.55); stroke-width: 1.2; stroke-dasharray: 2 4; }
 /* Hover on the full map: only the device's own lines stay. */
-.mapsvg.focus .mapline, .mapsvg.focus .mapcut { opacity: 0.12; }
+.mapsvg.focus .mapline, .mapsvg.focus .mapcut, .mapsvg.focus .mapping { opacity: 0.12; }
+.mapsvg.focus .mappulse { opacity: 0; }
 .mapsvg.focus .mapbox { opacity: 0.3; }
 .mapsvg.focus .hl { opacity: 1 !important; }
 .mapsvg.focus .mapline.hl { stroke-width: 2.2; }
