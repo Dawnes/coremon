@@ -4,7 +4,6 @@ package agent
 
 import (
 	"os"
-	"runtime"
 	"syscall"
 
 	"coremon/internal/proto"
@@ -13,7 +12,7 @@ import (
 // readMetrics: load from /proc/loadavg, memory from /proc/meminfo and the
 // local filesystems from /proc/self/mounts with statfs.
 func readMetrics() ([]proto.DiskInfo, *proto.MetricSample) {
-	s := &proto.MetricSample{CPUs: runtime.NumCPU()}
+	s := &proto.MetricSample{CPUs: cpuCount()}
 	ok := false
 	if b, err := os.ReadFile("/proc/loadavg"); err == nil {
 		if l1, l5, l15, good := parseLoadavg(string(b)); good {

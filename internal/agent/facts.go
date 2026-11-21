@@ -9,7 +9,7 @@ import (
 )
 
 func baseFacts() proto.Facts {
-	f := proto.Facts{OS: runtime.GOOS, Arch: runtime.GOARCH, CPUs: runtime.NumCPU()}
+	f := proto.Facts{OS: runtime.GOOS, Arch: runtime.GOARCH, CPUs: cpuCount()}
 	f.Hostname, _ = os.Hostname()
 	ifaces, _ := net.Interfaces()
 	for _, ifc := range ifaces {

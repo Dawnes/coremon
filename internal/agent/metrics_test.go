@@ -7,6 +7,17 @@ import (
 	"coremon/internal/proto"
 )
 
+func TestParseCPUList(t *testing.T) {
+	for in, want := range map[string]int{"0": 1, "\t2\n": 1, "0-19": 20, "0-3,6,8-9": 7, "": 0, "x": 0, "3-1": 0, "0-": 0} {
+		if got := parseCPUList(in); got != want {
+			t.Errorf("%q: %d, want %d", in, got, want)
+		}
+	}
+	if cpuCount() < 1 {
+		t.Error("cpuCount below 1")
+	}
+}
+
 func TestParseMetrics(t *testing.T) {
 	if l1, l5, l15, ok := parseLoadavg("0.52 0.31 0.20 1/123 4567\n"); !ok || l1 != 0.52 || l5 != 0.31 || l15 != 0.20 {
 		t.Errorf("loadavg: %v %v %v %v", l1, l5, l15, ok)
