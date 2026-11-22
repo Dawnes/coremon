@@ -1,7 +1,7 @@
 package agent
 
 // Remote probe: the agent checks agentless devices for the master (ping,
-// TCP and HTTPS), on its own schedule, from a complete check list the master
+// TCP, HTTPS, DNS and certificates), on its own schedule, from a complete check list the master
 // sends. The list is kept in memory only: after a restart the agent starts
 // empty and the master sends the list again (unless an admin cleared it).
 
@@ -36,7 +36,7 @@ type probeFuncs struct {
 // svcSpec: the service check of a tcp, https or dns check.
 func svcSpec(c proto.ProbeCheck) probe.Service {
 	return probe.Service{Method: c.Kind, Port: c.Port, Greeting: c.Greeting, Host: c.Host, Path: c.Path, Codes: c.Codes,
-		CertValid: c.CertValid, CertDays: c.CertDays, RType: c.RType, Expect: c.Expect, MaxMs: c.MaxMs}
+		CertValid: c.CertValid, CertDays: c.CertDays, RType: c.RType, Expect: c.Expect, MaxMs: c.MaxMs, CertTime: c.CertTime, Remote: c.Remote}
 }
 
 type pcheck struct {
@@ -81,7 +81,7 @@ func validProbeList(l proto.ProbeList) error {
 			return fmt.Errorf("invalid or duplicate check id %q", c.ID)
 		case net.ParseIP(c.Address) == nil:
 			return fmt.Errorf("check %s: %q is not an IP address", c.ID, c.Address)
-		case c.Kind != "ping" && c.Kind != probe.MethodTCP && c.Kind != probe.MethodHTTPS && c.Kind != probe.MethodDNS:
+		case c.Kind != "ping" && c.Kind != probe.MethodTCP && c.Kind != probe.MethodHTTPS && c.Kind != probe.MethodDNS && c.Kind != probe.MethodCert:
 			return fmt.Errorf("check %s: unknown kind %q", c.ID, c.Kind)
 		case c.Interval < probeMinInterval || c.Interval > 86400:
 			return fmt.Errorf("check %s: invalid interval", c.ID)
@@ -212,7 +212,7 @@ func (p *prober) run(ctx context.Context, c proto.ProbeCheck) proto.ProbeResult 
 		}
 	} else {
 		o := p.fn.svc(ctx, c.Address, svcSpec(c), timeout)
-		rtt, res.Banner, err = o.RTT, o.Detail, o.Err
+		rtt, res.Banner, err, res.Cert = o.RTT, o.Detail, o.Err, o.Cert
 		if err != nil {
 			res.Failed = o.Failed
 		}

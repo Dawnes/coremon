@@ -2166,7 +2166,7 @@ function rttGraph(rtt) {
     <div class="rttg-unit">ms</div></div>`;
 }
 // Sub-probes of a service check (the master's probe.Steps), in order.
-const STEP_LABEL = { connect: 'Connect', greeting: 'Greeting', tls: 'TLS handshake', cert: 'Certificate valid', cert_days: 'Certificate days', http: 'HTTP status',
+const STEP_LABEL = { connect: 'Connect', greeting: 'Greeting', tls: 'TLS handshake', cert: 'Certificate valid', cert_time: 'Valid in time', cert_days: 'Certificate days', http: 'HTTP status',
   query: 'Query', rcode: 'Server status', records: 'Records', expect: 'Expected value', time: 'Response time' };
 const stepLabel = (k) => STEP_LABEL[k] || k;
 const svcProto = (s) => (s.metric ? { disk: `DISK ${s.mount}`, memory: 'MEMORY', load: 'CPU' }[s.method] || '' : `${(s.method || 'tcp').toUpperCase()} ${s.port}`);
@@ -2177,7 +2177,10 @@ const metricLimit = (s) => (s.method === 'disk' && s.limit_kind === 'free' ? `< 
 const metricTotal = (s) => (s.method === 'load' ? '' : (/ of (\S+ [KMGT]?B)$/.exec(s.banner || '') || [])[1] || '');
 const metricVal = (s, v) => (s.method === 'load' ? v.toFixed(2) : s.limit_kind === 'free' ? `${v.toFixed(1)} GB` : `${Math.round(v)}%`);
 // What a service checks beyond its port: the HTTPS host and path, or the DNS question.
-const svcTarget = (s) => (s.method === 'https' ? ` · ${s.host}${s.path !== '/' ? s.path : ''}` : s.method === 'dns' ? ` · ${s.rtype} ${s.host}` : '');
+const svcTarget = (s) => (s.method === 'https' ? ` · ${s.host}${s.path !== '/' ? s.path : ''}` : s.method === 'dns' ? ` · ${s.rtype} ${s.host}`
+  : s.method === 'cert' ? ` · ${s.host}${s.target === 'dns' ? ' (DNS)' : ''}` : '');
+// A certificate check's web address as typed: name, and the port when not 443.
+const certAddr = (s) => (s.port && s.port !== 443 ? `${s.host.includes(':') ? `[${s.host}]` : s.host}:${s.port}` : s.host || '');
 // How the last check went per sub-probe: ✓ passed, ✗ failed, – not reached.
 function svcSteps(s) {
   if (!s.steps || s.steps.length < 2 || !s.last_check || s.paused || s.reverse) return '';
@@ -2185,7 +2188,8 @@ function svcSteps(s) {
   if (s.last_error && at < 0) return '';
   return html`<div class="steps">${s.steps.map((k, i) => {
     const st = at < 0 || i < at ? 'ok' : i === at ? 'bad' : 'skip';
-    return html`<span class="step ${st}" title="${st === 'bad' ? s.last_error : st === 'skip' ? 'Not reached: an earlier step failed' : 'Passed'}">${st === 'ok' ? '✓' : st === 'bad' ? '✗' : '–'} ${stepLabel(k)}</span>`;
+    const label = s.method === 'cert' && k === 'cert' ? 'Valid chain' : s.method === 'cert' && k === 'cert_days' ? 'Not expiring soon' : stepLabel(k);
+    return html`<span class="step ${st}" title="${st === 'bad' ? s.last_error : st === 'skip' ? 'Not reached: an earlier step failed' : 'Passed'}">${st === 'ok' ? '✓' : st === 'bad' ? '✗' : '–'} ${label}</span>`;
   })}</div>`;
 }
 function svcState(s) {
@@ -2222,6 +2226,9 @@ function methodFields(m, vals, fixed = {}) {
     if (fd.type === 'select') {
       return html`<label class="field">${fd.label}<select name="f_${fd.key}">${fd.options.map((o) => html`<option value="${o}" ${o === val ? 'selected' : ''}>${o}</option>`)}</select></label>${hint(fd)}`;
     }
+    if (fd.type === 'switch') {
+      return html`<div class="field">${fd.label}<div class="segsw">${fd.choices.map(([k, l]) => html`<label><input type="radio" name="f_${fd.key}" value="${k}" ${k === val ? 'checked' : ''}><span>${l}</span></label>`)}</div></div>${hint(fd)}`;
+    }
     return html`<label class="field">${fd.label}<input type="text" name="f_${fd.key}" value="${val}" placeholder="${fd.placeholder || ''}" maxlength="253" ${fd.key === 'host' ? 'required' : ''}></label>${hint(fd)}`;
   });
 }
@@ -2253,6 +2260,8 @@ function serviceModal(dev, svc, presets0, lim, methods, done) {
   const drawFields = (f, keep) => {
     const m = method(f.method.value), p = presets.find((x) => x.key === f.preset.value);
     let vals = keep ? s : null;
+    // A certificate check shows its web address with the port in it.
+    if (vals && m.key === 'cert') vals = { ...vals, host: certAddr(vals) };
     // A default service brings its own certificate choice (Proxmox: self-signed).
     if (!vals && p && m.key === 'https') vals = { cert_valid: !!p.cert_valid, cert_days: 14 };
     const fixed = p && m.key === 'tcp' ? { greeting: p.greeting } : {};
@@ -2293,7 +2302,12 @@ function serviceModal(dev, svc, presets0, lim, methods, done) {
     $('#svc-tcp').style.display = ping || met ? 'none' : '';
     $('#svc-ping').style.display = ping ? '' : 'none';
     $('#svc-metric').style.display = met ? '' : 'none';
-    $('#svc-title').textContent = isNew ? `Add a service to ${dev.name}${addr && !met && !ping ? ` on ${addr}` : ''}` : `Edit ${s.name}`;
+    const cert = p?.method === 'cert';
+    $('#svc-title').textContent = isNew ? `Add a service to ${dev.name}${addr && !met && !ping && !cert ? ` on ${addr}` : ''}` : `Edit ${s.name}`;
+    // A certificate check: the port is part of its web address; it runs once an hour by default.
+    $('#svc-port').style.display = cert ? 'none' : '';
+    if (isNew && cert && +f.interval.value === lim.interval) f.interval.value = 3600;
+    if (isNew && !cert && +f.interval.value === 3600) f.interval.value = lim.interval;
     if (!met) setHTML($('#svc-metric'), '');
     if (ping) return setHTML($('#svc-fields'), '');
     if (met) {
@@ -2304,7 +2318,7 @@ function serviceModal(dev, svc, presets0, lim, methods, done) {
     f.port.disabled = !!p;
     // Only the check methods that suit the service (a custom port: all of
     // them); another service starts with its own method.
-    const allowed = p ? methods.filter((m) => (p.methods || ['tcp']).includes(m.key)) : methods;
+    const allowed = p ? methods.filter((m) => (p.methods || ['tcp']).includes(m.key)) : methods.filter((m) => m.key !== 'cert');
     let cur = f.method.value;
     if (f.preset.value !== lastPreset) cur = p ? (p.methods || ['tcp'])[0] : 'tcp';
     if (!allowed.some((m) => m.key === cur)) cur = allowed[0].key;
@@ -2331,14 +2345,15 @@ function serviceModal(dev, svc, presets0, lim, methods, done) {
       <label class="field">Service<select name="preset" data-change="preset">
         ${presets.filter((p) => p.agent).map((p) => html`<option value="${p.key}" ${s.preset === p.key ? 'selected' : ''}>${p.name}</option>`)}
         ${canPing ? html`<option value="ping" ${pingFirst ? 'selected' : ''}>Ping (ICMP)</option>` : ''}
-        ${groups.map((g) => presets.filter((p) => p.group === g && !p.agent).map((p) => html`<option value="${p.key}" ${s.preset === p.key ? 'selected' : ''}>${p.name} (${p.port})</option>`))}
+        ${presets.filter((p) => p.method === 'cert').map((p) => html`<option value="${p.key}" ${s.preset === p.key ? 'selected' : ''}>${p.name}</option>`)}
+        ${groups.map((g) => presets.filter((p) => p.group === g && !p.agent && p.method !== 'cert').map((p) => html`<option value="${p.key}" ${s.preset === p.key ? 'selected' : ''}>${p.name} (${p.port})</option>`))}
         <option value="" ${!s.preset ? 'selected' : ''}>Custom port…</option></select></label>
       <div class="notice blue" id="svc-ping" style="margin:0;display:none">The ping uses the same settings for every device: every ${lim.ping_interval} s, down after ${lim.ping_down_after} unanswered pings (Settings → General → Ping).${isLocal(dev) ? '' : ' It shows whether the address answers; the device\'s own status still comes from its agent.'}</div>
       <div id="svc-metric" class="stack" style="gap:12px;display:none"></div>
       <div id="svc-tcp" class="stack" style="gap:12px">
       <div class="row" style="gap:12px;align-items:flex-end">
         <label class="field" style="flex:2">Name<input type="text" name="name" value="${s.name}" maxlength="48" required></label>
-        <label class="field" style="flex:1">Port<input type="number" name="port" min="1" max="65535" value="${s.port}" required></label>
+        <label class="field" style="flex:1" id="svc-port">Port<input type="number" name="port" min="1" max="65535" value="${s.port}" required></label>
         <label class="field" style="flex:1">Check<select name="method" data-change="method">${methods.map((m) => html`<option value="${m.key}" ${(s.method || 'tcp') === m.key ? 'selected' : ''}>${m.name}</option>`)}</select></label></div>
       <div id="svc-fields" class="stack" style="gap:10px"></div>
       <div class="row" style="gap:12px">
@@ -2383,6 +2398,43 @@ function serviceModal(dev, svc, presets0, lim, methods, done) {
     },
   });
   fill($('.modal form'));
+}
+// Certificate Validity "Show": the certificate the last check saw (also when
+// it failed), with its chain, every name it is valid for and the connection.
+function certModal(s) {
+  const c = s?.cert;
+  if (!c) return;
+  const days = (t) => Math.floor((t - now()) / 86400);
+  const until = (t) => {
+    const d = days(t);
+    return html`${fmtDate(t)} <span class="${d < 0 ? 'c-red' : d < (s.cert_days || 10) ? 'c-amber' : 'dim'}">(${d < 0 ? `expired ${-d} day${d === -1 ? '' : 's'} ago` : `${d} day${d === 1 ? '' : 's'} left`})</span>`;
+  };
+  const row = (k, v) => html`<tr><th>${k}</th><td>${v}</td></tr>`;
+  const entry = (e, i) => html`<div class="panel panel-pad certbox">
+    <div class="row" style="margin-bottom:8px"><b>${i === 0 ? 'Server certificate' : e.ca ? `Certificate authority ${i}` : `Intermediate ${i}`}</b></div>
+    <table class="certtbl">
+      ${row('Subject', html`<span class="mono small">${e.subject}</span>`)}
+      ${e.names?.length ? row(`Valid names (${e.names.length})`, html`<div class="certnames">${e.names.map((n) => html`<span class="mono small">${n}</span>`)}</div>`) : ''}
+      ${row('Issued by', html`<span class="mono small">${e.issuer}</span>`)}
+      ${row('Valid from', fmtDate(e.not_before))}
+      ${row('Valid until', until(e.not_after))}
+      ${row('Key', e.key)}
+      ${row('Signature', e.sigalg)}
+      ${row('Serial number', html`<span class="mono small">${e.serial}</span>`)}
+      ${row('SHA-256 fingerprint', html`<span class="mono small certfp">${e.sha256}</span>`)}
+    </table></div>`;
+  openModal(html`<h3>${s.name}: ${certAddr(s)}</h3>
+    <div class="dim small" style="margin:-6px 0 12px">As seen by the last check${s.last_check ? html`, ${when(s.last_check)}` : ''}.</div>
+    ${s.last_error ? html`<div class="notice red" style="margin-bottom:12px">${s.last_error}</div>` : ''}
+    <table class="certtbl" style="margin-bottom:12px">
+      ${row('Connected to', html`<span class="mono small">${c.addr}</span>${s.target === 'dns' ? html` <span class="dim small">(where ${s.host} points)</span>` : html` <span class="dim small">(this device's address)</span>`}`)}
+      ${row('Protocol', `${c.tls}${c.cipher ? ` · ${c.cipher}` : ''}`)}
+    </table>
+    <div class="stack" style="gap:12px">${(c.chain || []).map(entry)}</div>
+    <div class="actions"><button type="button" class="btn primary" data-act="close">Close</button></div>`, {
+    wide: true,
+    acts: { close: () => closeModal() },
+  });
 }
 // Where an agent device's services are checked: the address and who checks them.
 async function checksModal(a, done) {
@@ -2539,6 +2591,7 @@ function servicesTable(st, L) {
         <td style="min-width:150px">${uptimeBar(s.hist, { word: 'check', compact: true })}<div class="dim small">${s.uptime >= 0 ? `${pctText(s.uptime)} up` : 'no checks yet'}</div></td>
         <td class="dim small nowrap">every ${s.interval} s<br>${s.retries} retr${s.retries === 1 ? 'y' : 'ies'} · ${s.timeout} s${s.greeting ? html`<br>greeting` : ''}${s.method === 'https' ? html`<br>status ${s.codes}${s.cert_days ? ` · cert ≥ ${s.cert_days} d` : ''}` : ''}${s.method === 'dns' && s.max_ms ? html`<br>answer ≤ ${s.max_ms} ms` : ''}</td>
         <td class="w1"><div class="row" style="flex-wrap:nowrap;gap:6px">
+          ${s.method === 'cert' ? html`<button class="btn ghost sm" data-act="svc-cert" data-sid="${s.id}" title="${s.cert ? 'The certificate the last check saw' : 'No certificate seen yet'}" ${s.cert ? '' : 'disabled'}>Show</button>` : ''}
           <button class="btn ghost sm iconbtn" data-act="svc-check" data-sid="${s.id}" title="${L.probe ? 'Checked by a remote probe on its own schedule' : 'Check now'}" ${st.checking.has(s.id) || s.paused || L.probe ? 'disabled' : ''}>${st.checking.has(s.id) ? html`<span class="spin"></span>` : icon('refresh')}</button>
           ${ifChange(html`${pauseBtn(s.paused, 'svc-pause', `data-sid="${esc(s.id)}"`)}<button class="btn ghost sm iconbtn" data-act="svc-edit" data-sid="${s.id}" title="Edit">${icon('edit')}</button><button class="btn danger sm iconbtn" data-act="svc-delete" data-sid="${s.id}" title="Delete">${icon('trash')}</button>`)}</div></td>
       </tr>`))}</tbody></table></div>`;
@@ -2641,6 +2694,7 @@ function serviceActs(st, id, render) {
     },
     'svc-add': () => serviceModal(st.data.agent, null, st.data.presets, st.data.svc_limits, st.data.svc_methods, setAgent),
     'svc-edit': (t) => serviceModal(st.data.agent, svc(t.dataset.sid), st.data.presets, st.data.svc_limits, st.data.svc_methods, setAgent),
+    'svc-cert': (t) => certModal(svc(t.dataset.sid)),
     'svc-pause': async (t) => {
       const s = svc(t.dataset.sid);
       setAgent(await POST(`locals/${id}/services/${s.id}/pause`, { paused: !s.paused }));

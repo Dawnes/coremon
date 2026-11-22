@@ -137,7 +137,7 @@ const (
 
 type ProbeCheck struct {
 	ID       string `json:"id"`   // the master's id of the check
-	Kind     string `json:"kind"` // "ping", "tcp", "https" (agent 0.3.10 and later) or "dns" (0.3.11 and later)
+	Kind     string `json:"kind"` // "ping", "tcp", "https" (agent 0.3.10 and later), "dns" (0.3.11 and later) or "cert" (0.3.15 and later)
 	Address  string `json:"address"`
 	Port     int    `json:"port,omitempty"`
 	Greeting bool   `json:"greeting,omitempty"`
@@ -149,6 +149,10 @@ type ProbeCheck struct {
 	Codes     string `json:"codes,omitempty"`
 	CertValid bool   `json:"cert_valid,omitempty"`
 	CertDays  int    `json:"cert_days,omitempty"`
+	// cert (agent 0.3.15 and later): Host is the name; certificate valid in
+	// time; Remote: connect to where Host points (DNS) instead of Address.
+	CertTime bool `json:"cert_time,omitempty"`
+	Remote   bool `json:"remote,omitempty"`
 	// dns: the name to resolve is Host; record type, expected value (an
 	// answer must contain it) and maximum response time in ms.
 	RType     string `json:"rtype,omitempty"`
@@ -174,6 +178,30 @@ type ProbeResult struct {
 	Error  string `json:"error,omitempty"`
 	Setup  bool   `json:"setup,omitempty"`  // the agent could not run the check at all (no permission)
 	Failed string `json:"failed,omitempty"` // the sub-probe that failed (connect, greeting, tls, cert, cert_days, http)
+	// cert checks: the certificate the server presented (also when the check failed).
+	Cert *CertInfo `json:"cert,omitempty"`
+}
+
+// CertInfo: what a TLS server presented: the connection and the chain, the
+// server's own certificate first.
+type CertInfo struct {
+	Addr   string      `json:"addr"`   // the address connected to
+	TLS    string      `json:"tls"`    // e.g. "TLS 1.3"
+	Cipher string      `json:"cipher"` // e.g. "TLS_AES_128_GCM_SHA256"
+	Chain  []CertEntry `json:"chain"`
+}
+
+type CertEntry struct {
+	Subject   string   `json:"subject"`
+	Issuer    string   `json:"issuer"`
+	Names     []string `json:"names,omitempty"` // every name and IP address it is valid for
+	NotBefore int64    `json:"not_before"`
+	NotAfter  int64    `json:"not_after"`
+	Key       string   `json:"key"`    // e.g. "RSA 2048", "ECDSA P-256"
+	SigAlg    string   `json:"sigalg"` // e.g. "SHA256-RSA"
+	Serial    string   `json:"serial"` // hex
+	SHA256    string   `json:"sha256"` // fingerprint, hex with colons
+	CA        bool     `json:"ca,omitempty"`
 }
 
 type ProbeReport struct {

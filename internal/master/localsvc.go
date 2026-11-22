@@ -8,11 +8,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net"
 	"net/http"
 	"strings"
 	"time"
 
 	"coremon/internal/probe"
+	"coremon/internal/proto"
 )
 
 type Service struct {
@@ -36,6 +38,13 @@ type Service struct {
 	CertValid bool   `json:"cert_valid,omitempty"`
 	CertDays  int    `json:"cert_days,omitempty"`
 
+	// cert (Certificate Validity): Host and Port are the web address;
+	// CertValid is the valid chain (trusted and issued for Host), CertTime
+	// valid at this time, CertDays the warning before it expires. Remote:
+	// connect to where Host points (DNS) instead of the device's address.
+	CertTime bool `json:"cert_time,omitempty"`
+	Remote   bool `json:"remote,omitempty"`
+
 	// dns: the name to resolve is Host; record type, expected value (an
 	// answer must contain it, "" = not checked), maximum response time in ms
 	// (0 = not checked). The query goes to the DNS server on the device.
@@ -53,25 +62,26 @@ type Service struct {
 	Readings  int     `json:"readings,omitempty"`
 
 	// Results: kept in checks.dat, not in state.dat.
-	Checked   bool       `json:"-"`
-	Up        bool       `json:"-"`
-	Since     int64      `json:"-"`
-	LastCheck int64      `json:"-"`
-	LastOK    int64      `json:"-"`
-	RTTUs     int64      `json:"-"`
-	Fails     int        `json:"-"`
-	LastError string     `json:"-"`
-	Banner    string     `json:"-"`
-	Failed    string     `json:"-"` // the sub-probe of the last failed check
-	Hist      []histSlot `json:"-"`
-	Value     float64    `json:"-"` // measured: the last reading (in metricUnit)
-	Vals      []valSlot  `json:"-"` // measured: the readings in five-minute slots, for the graph
+	Checked   bool            `json:"-"`
+	Up        bool            `json:"-"`
+	Since     int64           `json:"-"`
+	LastCheck int64           `json:"-"`
+	LastOK    int64           `json:"-"`
+	RTTUs     int64           `json:"-"`
+	Fails     int             `json:"-"`
+	LastError string          `json:"-"`
+	Banner    string          `json:"-"`
+	Failed    string          `json:"-"` // the sub-probe of the last failed check
+	Hist      []histSlot      `json:"-"`
+	Value     float64         `json:"-"` // measured: the last reading (in metricUnit)
+	Vals      []valSlot       `json:"-"` // measured: the readings in five-minute slots, for the graph
+	Cert      *proto.CertInfo `json:"-"` // cert: what the last check saw, for "Show"
 }
 
 // spec: what the check needs.
 func (sv *Service) spec() probe.Service {
 	return probe.Service{Method: sv.Method, Port: sv.Port, Greeting: sv.Greeting, Host: sv.Host, Path: sv.Path, Codes: sv.Codes,
-		CertValid: sv.CertValid, CertDays: sv.CertDays, RType: sv.RType, Expect: sv.Expect, MaxMs: sv.MaxMs}
+		CertValid: sv.CertValid, CertDays: sv.CertDays, RType: sv.RType, Expect: sv.Expect, MaxMs: sv.MaxMs, CertTime: sv.CertTime, Remote: sv.Remote}
 }
 
 // kind: the check method's name in a remote probe's list.
@@ -147,6 +157,8 @@ var svcPresets = []svcPreset{
 	{Key: metricDisk, Name: "Disk space", Group: "Measured by the agent", Method: metricDisk, Agent: true},
 	{Key: metricMem, Name: "Memory", Group: "Measured by the agent", Method: metricMem, Agent: true},
 	{Key: metricLoad, Name: "CPU load", Group: "Measured by the agent", Method: metricLoad, Agent: true},
+	// The port is part of the web address the admin enters (443 when none).
+	{Key: "cert", Name: "Certificate Validity", Port: 443, Group: "Certificates", Method: probe.MethodCert},
 	{Key: "ssh", Name: "SSH", Port: 22, Greeting: true, Group: "Remote access"},
 	{Key: "telnet", Name: "Telnet", Port: 23, Group: "Remote access"},
 	{Key: "rdp", Name: "RDP", Port: 3389, Group: "Remote access"},
@@ -179,17 +191,18 @@ var svcPresets = []svcPreset{
 
 // svcField: one setting of a check method, as the service form shows it.
 // Types: bool (tickbox), text, select (one of Options), limit (tickbox
-// with a number in Unit; 0 = off).
+// with a number in Unit; 0 = off), switch (one of Choices: value, label).
 type svcField struct {
-	Key         string   `json:"key"`
-	Label       string   `json:"label"`
-	Type        string   `json:"type"`
-	Hint        string   `json:"hint,omitempty"`
-	Placeholder string   `json:"placeholder,omitempty"`
-	Default     any      `json:"default,omitempty"`
-	Max         int      `json:"max,omitempty"`
-	Unit        string   `json:"unit,omitempty"`
-	Options     []string `json:"options,omitempty"`
+	Key         string      `json:"key"`
+	Label       string      `json:"label"`
+	Type        string      `json:"type"`
+	Hint        string      `json:"hint,omitempty"`
+	Placeholder string      `json:"placeholder,omitempty"`
+	Default     any         `json:"default,omitempty"`
+	Max         int         `json:"max,omitempty"`
+	Unit        string      `json:"unit,omitempty"`
+	Options     []string    `json:"options,omitempty"`
+	Choices     [][2]string `json:"choices,omitempty"`
 }
 
 // svcMethod: a check method and its settings. Its sub-probes come from
@@ -232,6 +245,20 @@ var svcMethods = []svcMethod{
 			{Key: "max_ms", Label: "Answer within", Type: "limit", Unit: "ms", Default: probe.DefaultMaxMs, Max: probe.MaxMaxMs,
 				Hint: "Fails when the answer takes longer. The request timeout below still ends a check that gets no answer."},
 		}},
+	{Key: probe.MethodCert, Name: "Certificate",
+		Fields: []svcField{
+			{Key: "host", Label: "Web address", Type: "text", Placeholder: "www.example.com or www.example.com:8443",
+				Hint: "A name, optionally with a port (443 when none). A full https:// address works too; a path is ignored."},
+			{Key: "target", Label: "Connect to", Type: "switch", Default: certTargetHost,
+				Choices: [][2]string{{certTargetHost, "This device's address"}, {certTargetDNS, "Where the name points (DNS)"}},
+				Hint:    "This device's address: tests the certificate this device serves, with the name presented to it. Where the name points: looks the name up in DNS and tests whatever answers there, for example an outside website."},
+			{Key: "cert_valid", Label: "Valid chain", Type: "bool", Default: true,
+				Hint: "Trusted by the standard roots of the system that checks, and issued for this name. A self-signed certificate fails."},
+			{Key: "cert_time", Label: "Valid in time", Type: "bool", Default: true,
+				Hint: "Not expired, and already valid (also the intermediate certificates the server sends)."},
+			{Key: "cert_days", Label: "Down when it expires within", Type: "limit", Unit: "days", Default: probe.CertCheckDays, Max: probe.MaxCertDays,
+				Hint: "A warning in time, before it expires."},
+		}},
 }
 
 func presetByKey(k string) *svcPreset {
@@ -255,38 +282,41 @@ func serviceCheck(ctx context.Context, addr string, spec probe.Service, timeout 
 // ---- view ----
 
 type serviceView struct {
-	ID        string     `json:"id"`
-	Name      string     `json:"name"`
-	Preset    string     `json:"preset,omitempty"`
-	Method    string     `json:"method"`
-	Port      int        `json:"port"`
-	Greeting  bool       `json:"greeting"`
-	Host      string     `json:"host,omitempty"`
-	Path      string     `json:"path,omitempty"`
-	Codes     string     `json:"codes,omitempty"`
-	CertValid bool       `json:"cert_valid"`
-	CertDays  int        `json:"cert_days"`
-	RType     string     `json:"rtype,omitempty"`
-	Expect    string     `json:"expect,omitempty"`
-	MaxMs     int        `json:"max_ms"`
-	Steps     []string   `json:"steps"`            // the sub-probes, in order
-	Failed    string     `json:"failed,omitempty"` // the sub-probe of the last failed check
-	Interval  int        `json:"interval"`
-	Retries   int        `json:"retries"`
-	Timeout   int        `json:"timeout"`
-	Reverse   bool       `json:"reverse"`
-	Paused    bool       `json:"paused"`
-	Checked   bool       `json:"checked"`
-	Up        bool       `json:"up"`
-	Since     int64      `json:"since"`
-	LastCheck int64      `json:"last_check"`
-	LastOK    int64      `json:"last_ok"`
-	RTTUs     int64      `json:"rtt_us"`
-	Fails     int        `json:"fails"`
-	LastError string     `json:"last_error,omitempty"`
-	Banner    string     `json:"banner,omitempty"`
-	Uptime    float64    `json:"uptime"`
-	Hist      []histSlot `json:"hist,omitempty"`
+	ID        string          `json:"id"`
+	Name      string          `json:"name"`
+	Preset    string          `json:"preset,omitempty"`
+	Method    string          `json:"method"`
+	Port      int             `json:"port"`
+	Greeting  bool            `json:"greeting"`
+	Host      string          `json:"host,omitempty"`
+	Path      string          `json:"path,omitempty"`
+	Codes     string          `json:"codes,omitempty"`
+	CertValid bool            `json:"cert_valid"`
+	CertDays  int             `json:"cert_days"`
+	RType     string          `json:"rtype,omitempty"`
+	Expect    string          `json:"expect,omitempty"`
+	MaxMs     int             `json:"max_ms"`
+	CertTime  bool            `json:"cert_time"`
+	Target    string          `json:"target,omitempty"` // cert: "device" or "dns"
+	Cert      *proto.CertInfo `json:"cert,omitempty"`   // cert: what the last check saw (device page only)
+	Steps     []string        `json:"steps"`            // the sub-probes, in order
+	Failed    string          `json:"failed,omitempty"` // the sub-probe of the last failed check
+	Interval  int             `json:"interval"`
+	Retries   int             `json:"retries"`
+	Timeout   int             `json:"timeout"`
+	Reverse   bool            `json:"reverse"`
+	Paused    bool            `json:"paused"`
+	Checked   bool            `json:"checked"`
+	Up        bool            `json:"up"`
+	Since     int64           `json:"since"`
+	LastCheck int64           `json:"last_check"`
+	LastOK    int64           `json:"last_ok"`
+	RTTUs     int64           `json:"rtt_us"`
+	Fails     int             `json:"fails"`
+	LastError string          `json:"last_error,omitempty"`
+	Banner    string          `json:"banner,omitempty"`
+	Uptime    float64         `json:"uptime"`
+	Hist      []histSlot      `json:"hist,omitempty"`
 
 	// Measured by the agent: the settings, the last reading and the graph.
 	Metric    bool       `json:"metric,omitempty"`
@@ -314,8 +344,10 @@ func (s *Server) serviceView(sv *Service, now int64, full bool) serviceView {
 	} else {
 		v.Steps = probe.Steps(sv.spec())
 	}
+	v.CertTime, v.Target = sv.CertTime, sv.certTarget()
 	if full {
 		v.Hist = h
+		v.Cert = sv.Cert
 	}
 	return v
 }
@@ -326,6 +358,9 @@ func (s *Server) serviceView(sv *Service, now int64, full bool) serviceView {
 // last one fails the service is down, and it is then checked every 30 s
 // until it is up again. Caller holds s.st.mu and s.loc.mu.
 func (s *Server) recordService(sv *Service, o probe.Outcome, now time.Time) {
+	if sv.Method == probe.MethodCert && o.Cert != nil {
+		sv.Cert = cleanCert(o.Cert)
+	}
 	if s.storeService(sv, o.RTT, o.Detail, o.Err == nil, o.Err, o.Failed, now) {
 		s.loc.next[sv.ID] = now.Add(time.Duration(sv.Interval) * time.Second)
 	} else {
@@ -470,6 +505,8 @@ type serviceReq struct {
 	RType     *string `json:"rtype"`
 	Expect    *string `json:"expect"`
 	MaxMs     *int    `json:"max_ms"`
+	CertTime  *bool   `json:"cert_time"`
+	Target    *string `json:"target"` // cert: "device" or "dns"
 
 	metricReq
 }
@@ -488,9 +525,16 @@ func (sv *Service) setMethod(m string, certValid bool) {
 		sv.Mount, sv.Limit, sv.LimitKind, sv.Readings = "", 0, "", 0
 		sv.Interval, sv.Retries, sv.Timeout = defaultSvcInterval, defaultSvcRetries, defaultSvcTimeout
 	}
+	if sv.Method == probe.MethodCert && sv.Interval == certInterval {
+		sv.Interval = defaultSvcInterval // leaving a certificate check: the usual heartbeat
+	}
 	sv.Method = m
 	sv.Host, sv.Path, sv.Codes, sv.CertValid, sv.CertDays, sv.RType, sv.Expect, sv.MaxMs = "", "", "", false, 0, "", "", 0
+	sv.CertTime, sv.Remote, sv.Cert = false, false, nil
 	switch m {
+	case probe.MethodCert:
+		sv.Greeting, sv.Reverse = false, false
+		sv.CertValid, sv.CertTime, sv.CertDays, sv.Interval = true, true, probe.CertCheckDays, certInterval
 	case probe.MethodHTTPS:
 		sv.Greeting, sv.Reverse = false, false
 		sv.Path, sv.Codes, sv.CertValid, sv.CertDays = "/", probe.DefaultCodes, certValid, probe.DefaultCertDays
@@ -510,14 +554,19 @@ func (req *serviceReq) apply(sv *Service) error {
 				sv.setMethod("", false) // a custom port is checked from outside
 			}
 		} else if p := presetByKey(*req.Preset); p != nil {
-			if p.Key != sv.Preset {
+			changed := p.Key != sv.Preset
+			if changed {
 				if p.Agent {
 					sv.setMetric(p.Method)
 				} else {
 					sv.setMethod(p.Method, p.CertValid) // a new default service starts with its own method
 				}
 			}
-			sv.Preset, sv.Port, sv.Greeting = p.Key, p.Port, p.Greeting
+			// A certificate check keeps the port of its web address.
+			if changed || p.Method != probe.MethodCert {
+				sv.Port = p.Port
+			}
+			sv.Preset, sv.Greeting = p.Key, p.Greeting
 			if sv.Name == "" && req.Name == nil {
 				sv.Name = p.Name
 			}
@@ -540,7 +589,7 @@ func (req *serviceReq) apply(sv *Service) error {
 		return req.applyMetric(sv)
 	}
 	if req.Method != nil {
-		if m := *req.Method; m != "" && m != probe.MethodTCP && m != probe.MethodHTTPS && m != probe.MethodDNS {
+		if m := *req.Method; m != "" && m != probe.MethodTCP && m != probe.MethodHTTPS && m != probe.MethodDNS && m != probe.MethodCert {
 			return errors.New("unknown check method")
 		}
 		sv.setMethod(*req.Method, true)
@@ -585,6 +634,38 @@ func (req *serviceReq) apply(sv *Service) error {
 		}
 		if req.CertDays != nil {
 			sv.CertDays = *req.CertDays
+		}
+	}
+	if sv.Method == probe.MethodCert {
+		sv.Greeting = false
+		if req.Host != nil {
+			h, port, err := probe.ParseTarget(*req.Host)
+			if err != nil {
+				return err
+			}
+			sv.Host, sv.Port = h, port
+		}
+		if req.CertValid != nil {
+			sv.CertValid = *req.CertValid
+		}
+		if req.CertTime != nil {
+			sv.CertTime = *req.CertTime
+		}
+		if req.CertDays != nil {
+			sv.CertDays = *req.CertDays
+		}
+		if req.Target != nil {
+			switch *req.Target {
+			case certTargetHost:
+				sv.Remote = false
+			case certTargetDNS:
+				sv.Remote = true
+			default:
+				return errors.New(`connect to must be "device" or "dns"`)
+			}
+		}
+		if sv.Remote && net.ParseIP(sv.Host) != nil {
+			return errors.New("an IP address is not looked up in DNS: choose This device's address, or enter a name")
 		}
 	}
 	if sv.Method == probe.MethodDNS {
@@ -642,6 +723,21 @@ func (sv *Service) describe() string {
 			d += fmt.Sprintf(", certificate valid ≥ %d days", sv.CertDays)
 		}
 	}
+	if sv.Method == probe.MethodCert {
+		d = fmt.Sprintf("%s certificate %s:%d, every %ds, %d retries, timeout %ds", sv.Name, sv.Host, sv.Port, sv.Interval, sv.Retries, sv.Timeout)
+		if sv.Remote {
+			d += ", where the name points (DNS)"
+		}
+		if sv.CertValid {
+			d += ", valid chain"
+		}
+		if sv.CertTime {
+			d += ", valid in time"
+		}
+		if sv.CertDays > 0 {
+			d += fmt.Sprintf(", down %d days before it expires", sv.CertDays)
+		}
+	}
 	if sv.Method == probe.MethodDNS {
 		d += fmt.Sprintf(", DNS %s %s", sv.RType, sv.Host)
 		if sv.Expect != "" {
@@ -663,7 +759,7 @@ func (sv *Service) describe() string {
 // resetService: a changed check starts over.
 func (s *Server) resetService(sv *Service) {
 	sv.Checked, sv.Up, sv.Since, sv.LastCheck, sv.LastOK, sv.RTTUs, sv.Fails, sv.LastError, sv.Banner, sv.Failed, sv.Hist = false, false, 0, 0, 0, 0, 0, "", "", "", nil
-	sv.Value, sv.Vals = 0, nil
+	sv.Value, sv.Vals, sv.Cert = 0, nil, nil
 	s.loc.mu.Lock()
 	delete(s.loc.next, sv.ID)
 	s.loc.mu.Unlock()

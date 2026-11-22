@@ -21,6 +21,7 @@ import (
 	"net/http"
 	"time"
 
+	"coremon/internal/probe"
 	"coremon/internal/proto"
 )
 
@@ -63,7 +64,7 @@ func (s *Server) probeList(agentID string) proto.ProbeList {
 				l.Checks = append(l.Checks, proto.ProbeCheck{ID: sv.ID, Kind: sv.kind(), Address: d.Address, Port: sv.Port,
 					Greeting: sv.Greeting, Reverse: sv.Reverse, Interval: sv.Interval, Timeout: sv.Timeout, Retries: sv.Retries,
 					Host: sv.Host, Path: sv.Path, Codes: sv.Codes, CertValid: sv.CertValid, CertDays: sv.CertDays,
-					RType: sv.RType, Expect: sv.Expect, MaxMs: sv.MaxMs})
+					RType: sv.RType, Expect: sv.Expect, MaxMs: sv.MaxMs, CertTime: sv.CertTime, Remote: sv.Remote})
 			}
 		}
 	}
@@ -198,6 +199,9 @@ func (s *Server) probeIntake(a *Agent, rep *proto.ProbeReport, now time.Time) {
 				continue
 			}
 			ok := s.storeService(sv, rtt, cleanText(r.Banner, maxBanner), r.OK, cerr, r.Failed, at)
+			if sv.Method == probe.MethodCert && r.Cert != nil {
+				sv.Cert = cleanCert(r.Cert)
+			}
 			s.noteBehind(svcDev[sv.ID].ID, !r.OK && !sv.Reverse, sv.Hist, at)
 			what := outcome(r.OK, "reached", rtt, cerr)
 			if sv.Reverse {

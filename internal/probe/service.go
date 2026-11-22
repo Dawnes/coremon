@@ -10,9 +10,13 @@ package probe
 //   - dns:   query the DNS server on the device (UDP, TCP when truncated),
 //            server status, records of the asked type, (optional) expected
 //            value, (optional) response time
+//   - cert:  connect, TLS handshake, (optional) valid chain: trusted and
+//            issued for the name, (optional) valid in time, (optional) not
+//            expiring within N days; no HTTP request
 // The hostname is used for SNI and the Host header only: the connection
 // always goes to the device's own address, nothing is looked up in DNS
-// (a DNS check asks the device's own DNS server).
+// (a DNS check asks the device's own DNS server). The one exception: a
+// cert check with Remote connects to wherever the name points.
 
 import (
 	"context"
@@ -22,13 +26,17 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"coremon/internal/proto"
 )
 
 const (
 	MethodTCP   = "tcp"
 	MethodHTTPS = "https"
 	MethodDNS   = "dns"
+	MethodCert  = "cert"
 
+	StepCertTime = "cert_time" // cert: valid at this time (not expired, not before its start)
 	StepConnect  = "connect"
 	StepGreeting = "greeting"
 	StepTLS      = "tls"
@@ -43,6 +51,7 @@ const (
 
 	DefaultCodes    = "200-399"
 	DefaultCertDays = 14
+	CertCheckDays   = 10 // cert: down when it expires within this many days
 	MaxCertDays     = 365
 	DefaultDNSType  = "A"
 	DefaultMaxMs    = 3000
@@ -68,6 +77,8 @@ type Service struct {
 	RType     string // dns: record type
 	Expect    string // dns: an answer must contain this ("" = not checked)
 	MaxMs     int    // dns: maximum response time in ms (0 = not checked)
+	CertTime  bool   // cert: valid at this time
+	Remote    bool   // cert: connect to where Host points (DNS), not to the device
 }
 
 // Outcome of one check.
@@ -76,6 +87,7 @@ type Outcome struct {
 	Detail string        // the greeting line, or "HTTP 200 · certificate valid until …"
 	Failed string        // the sub-probe that failed; "" when all passed
 	Err    error
+	Cert   *proto.CertInfo // cert: what the server presented (also when failed)
 }
 
 // Steps: the sub-probes a service runs, in order.
@@ -87,6 +99,19 @@ func Steps(s Service) []string {
 		}
 		if s.MaxMs > 0 {
 			st = append(st, StepTime)
+		}
+		return st
+	}
+	if s.Method == MethodCert {
+		st := []string{StepConnect, StepTLS}
+		if s.CertValid {
+			st = append(st, StepCert)
+		}
+		if s.CertTime {
+			st = append(st, StepCertTime)
+		}
+		if s.CertDays > 0 {
+			st = append(st, StepCertDays)
 		}
 		return st
 	}
@@ -109,7 +134,7 @@ func Steps(s Service) []string {
 // KnownStep: s is a sub-probe name (for results that come from an agent).
 func KnownStep(s string) bool {
 	switch s {
-	case StepConnect, StepGreeting, StepTLS, StepCert, StepCertDays, StepHTTP,
+	case StepConnect, StepGreeting, StepTLS, StepCert, StepCertTime, StepCertDays, StepHTTP,
 		StepQuery, StepRcode, StepRecords, StepExpect, StepTime:
 		return true
 	}
@@ -126,6 +151,17 @@ func Validate(s Service) error {
 		return nil
 	case MethodDNS:
 		return validDNS(s)
+	case MethodCert:
+		if s.Greeting {
+			return errors.New("a certificate check does not wait for a greeting")
+		}
+		if err := ValidHost(s.Host); err != nil {
+			return err
+		}
+		if s.CertDays < 0 || s.CertDays > MaxCertDays {
+			return fmt.Errorf("certificate days must be 1-%d", MaxCertDays)
+		}
+		return nil
 	case MethodHTTPS:
 	default:
 		return fmt.Errorf("unknown check method %q", s.Method)
@@ -246,6 +282,8 @@ func Check(ctx context.Context, addr string, s Service, timeout time.Duration) O
 		return checkHTTPS(ctx, addr, s, timeout)
 	case MethodDNS:
 		return checkDNS(ctx, addr, s, timeout)
+	case MethodCert:
+		return checkCert(ctx, addr, s, timeout)
 	}
 	return checkTCP(ctx, addr, s, timeout)
 }

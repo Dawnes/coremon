@@ -13,6 +13,8 @@ import (
 	"os"
 	"path/filepath"
 	"time"
+
+	"coremon/internal/proto"
 )
 
 const (
@@ -22,20 +24,21 @@ const (
 
 // runFields: the result side of one check.
 type runFields struct {
-	Checked   bool       `json:"checked,omitempty"`
-	Up        bool       `json:"up,omitempty"`
-	Since     int64      `json:"since,omitempty"`
-	LastCheck int64      `json:"last_check,omitempty"`
-	LastOK    int64      `json:"last_ok,omitempty"`
-	RTTUs     int64      `json:"rtt_us,omitempty"`
-	Fails     int        `json:"fails,omitempty"`
-	LastError string     `json:"last_error,omitempty"`
-	Banner    string     `json:"banner,omitempty"`
-	Failed    string     `json:"failed,omitempty"` // services: the sub-probe of the last failed check
-	Hist      []histSlot `json:"hist,omitempty"`
-	RTT       []rttSlot  `json:"rtt,omitempty"`   // ping only: round-trip times in five-minute slots
-	Value     float64    `json:"value,omitempty"` // disk, memory, load: the last reading
-	Vals      []valSlot  `json:"vals,omitempty"`  // disk, memory, load: readings in five-minute slots
+	Checked   bool            `json:"checked,omitempty"`
+	Up        bool            `json:"up,omitempty"`
+	Since     int64           `json:"since,omitempty"`
+	LastCheck int64           `json:"last_check,omitempty"`
+	LastOK    int64           `json:"last_ok,omitempty"`
+	RTTUs     int64           `json:"rtt_us,omitempty"`
+	Fails     int             `json:"fails,omitempty"`
+	LastError string          `json:"last_error,omitempty"`
+	Banner    string          `json:"banner,omitempty"`
+	Failed    string          `json:"failed,omitempty"` // services: the sub-probe of the last failed check
+	Hist      []histSlot      `json:"hist,omitempty"`
+	RTT       []rttSlot       `json:"rtt,omitempty"`   // ping only: round-trip times in five-minute slots
+	Value     float64         `json:"value,omitempty"` // disk, memory, load: the last reading
+	Vals      []valSlot       `json:"vals,omitempty"`  // disk, memory, load: readings in five-minute slots
+	Cert      *proto.CertInfo `json:"cert,omitempty"`  // certificate checks: what the last check saw
 }
 
 type devRun struct {
@@ -60,12 +63,13 @@ func (d *Checks) setRun(r runFields) {
 
 func (sv *Service) run() runFields {
 	return runFields{Checked: sv.Checked, Up: sv.Up, Since: sv.Since, LastCheck: sv.LastCheck, LastOK: sv.LastOK,
-		RTTUs: sv.RTTUs, Fails: sv.Fails, LastError: sv.LastError, Banner: sv.Banner, Failed: sv.Failed, Hist: sv.Hist, Value: sv.Value, Vals: sv.Vals}
+		RTTUs: sv.RTTUs, Fails: sv.Fails, LastError: sv.LastError, Banner: sv.Banner, Failed: sv.Failed, Hist: sv.Hist, Value: sv.Value, Vals: sv.Vals, Cert: sv.Cert}
 }
 
 func (sv *Service) setRun(r runFields) {
 	sv.Checked, sv.Up, sv.Since, sv.LastCheck, sv.LastOK, sv.RTTUs, sv.Fails, sv.LastError, sv.Banner, sv.Failed, sv.Hist, sv.Value, sv.Vals =
 		r.Checked, r.Up, r.Since, r.LastCheck, r.LastOK, r.RTTUs, r.Fails, r.LastError, r.Banner, r.Failed, r.Hist, r.Value, r.Vals
+	sv.Cert = cleanCert(r.Cert)
 }
 
 func (s *Server) checksPath() string { return filepath.Join(s.cfg.DataDir, checksFileName) }

@@ -29,8 +29,12 @@ as **agentless** devices: the master itself pings them and checks their services
   waiting for a greeting, or in reverse mode), HTTPS (hostname, path, accepted
   status codes, valid certificate, certificate valid for at least N days) or a
   DNS query to the device's own DNS server (A, AAAA, MX, TXT, CNAME or NS, an
-  optional expected value and a maximum response time). Each check shows which
-  step failed. With a 24-hour history and a graph of the
+  optional expected value and a maximum response time), or **Certificate
+  Validity**: the TLS certificate of a web address (name and optional port), on
+  the device's own address or wherever the name points in DNS, with a valid
+  chain, valid in time and not expiring within N days (default 10), checked
+  once an hour; "Show" lists the full certificate, its chain and every valid
+  name. Each check shows which step failed. With a 24-hour history and a graph of the
   ping's round-trip time. For a network
   the master cannot reach, an agent there can do the checks instead ("Checked by").
 * **Services of agent devices**: the same service checks (and optionally a ping)
