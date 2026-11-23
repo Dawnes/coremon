@@ -407,7 +407,6 @@ ul.plainlist { margin: 0; padding-left: 18px; line-height: 1.8; }
 .mappulse.live { opacity: 0.85; animation: map-pulse 5s linear infinite; }
 @keyframes map-pulse { from { stroke-dashoffset: 0; } to { stroke-dashoffset: 200; } }
 .mapline.bad { stroke: rgba(248, 113, 113, 0.6); }
-.mapping { fill: var(--muted); font-size: 9.5px; font-family: var(--mono); pointer-events: none; }
 /* Glows in the state colour; a device that is down pulses; maintenance is tinted blue. */
 .mapbox.ok rect { filter: drop-shadow(0 0 5px rgba(74, 222, 128, 0.28)); }
 .mapbox.bad rect { filter: drop-shadow(0 0 6px rgba(248, 113, 113, 0.4)); }
@@ -471,7 +470,7 @@ ul.plainlist { margin: 0; padding-left: 18px; line-height: 1.8; }
 /* Full map: lines from a remote probe to the devices it checks. */
 .mapline.check { stroke: rgba(34, 211, 238, 0.55); stroke-width: 1.2; stroke-dasharray: 2 4; }
 /* Hover on the full map: only the device's own lines stay. */
-.mapsvg.focus .mapline, .mapsvg.focus .mapcut, .mapsvg.focus .mapping { opacity: 0.12; }
+.mapsvg.focus .mapline, .mapsvg.focus .mapcut { opacity: 0.12; }
 .mapsvg.focus .mappulse { opacity: 0; }
 .mapsvg.focus .mapbox { opacity: 0.3; }
 .mapsvg.focus .hl { opacity: 1 !important; }

@@ -613,7 +613,11 @@ const devIP = (a) => {
 const isVirtual = (a) => a?.monitor === 'virtual';
 // The virtual devices (not Upstream) as list entries for the Overview and
 // the Device List: no checks and no agent data.
-const virtualDevs = (d) => (d.virtuals || []).filter((v) => !v.special).map((v) => ({ ...v, facts: {}, status: 'active' }));
+// withUp: also Upstream, while it is on (the Device List shows it, the Overview does not).
+const virtualDevs = (d, withUp = false) => (d.virtuals || []).filter((v) => !v.special || (withUp && d.upstream?.enabled))
+  .map((v) => ({ ...v, facts: {}, status: 'active', ...(v.special ? { upstream: d.upstream } : {}) }));
+// The last ping round of Upstream (for the Device List).
+const upLast = (u) => Math.max(0, ...(u?.addrs || []).map((x) => x.at || 0));
 function viaItems(ov, self) {
   const all = [...(ov?.agents || []), ...(ov?.virtuals || [])];
   const below = new Set([self]);
@@ -696,6 +700,10 @@ const checksDownShort = (x) => `${x.n} ${x.L.ping ? 'check' : 'service'}${x.n ==
 // What failed: the first service that is down and its step, or the ping.
 const checksFailText = (x) => (x.L.svc_fail ? `${x.L.svc_fail.name}${x.L.svc_fail.step && x.L.svc_fail.step !== 'connect' ? `: ${stepLabel(x.L.svc_fail.step).toLowerCase()}` : ''}` : x.ping ? 'ping: no answer' : '');
 function agentDot(a) {
+  if (a.special && a.upstream) {
+    const s = a.upstream.state;
+    return html`<span class="dot ${s === 'ok' ? 'on' : s === 'partial' ? 'pend' : s === 'down' ? 'off' : 'unk'}" title="${upWord[s] || s}"></span>`;
+  }
   if (isVirtual(a)) return a.unreach ? html`<span class="dot unr" title="${unrText(a)}"></span>` : html`<span class="dot virt" title="virtual device"></span>`;
   if (a.maint) return html`<span class="dot maint" title="${maintText(a.maint)}"></span>`;
   if (a.unreach) return html`<span class="dot unr" title="${unrText(a)}"></span>`;
@@ -1272,9 +1280,10 @@ function DeviceList() {
   lastDashSub = 'devices';
   const st = { filter: 'all', type: 'all', q: '', data: null, sort: 'name', dir: 1 };
   const byText = (x, y) => String(x).localeCompare(String(y), undefined, { numeric: true, sensitivity: 'base' });
-  const statusText = (a) => (isVirtual(a) ? (a.unreach ? 'unreachable' : '') : a.maint ? 'maintenance' : a.unreach ? 'unreachable' : isLocal(a) ? (probeOut(a) ? 'unknown' : !a.local.checked ? 'waiting' : a.local.up ? (a.local.svc_down ? `${a.local.svc_down} service${a.local.svc_down === 1 ? '' : 's'} down` : 'online') : 'down')
+  const statusText = (a) => (a.upstream ? { ok: 'online', partial: 'partly online', down: 'offline' }[a.upstream.state] || 'waiting'
+    : isVirtual(a) ? (a.unreach ? 'unreachable' : '') : a.maint ? 'maintenance' : a.unreach ? 'unreachable' : isLocal(a) ? (probeOut(a) ? 'unknown' : !a.local.checked ? 'waiting' : a.local.up ? (a.local.svc_down ? `${a.local.svc_down} service${a.local.svc_down === 1 ? '' : 's'} down` : 'online') : 'down')
     : a.status === 'pending' ? 'pending' : a.below_min ? 'update required' : !a.online ? 'offline' : agentChecksDown(a) ? checksDownShort(agentChecksDown(a)) : a.status === 'report_only' ? 'report only' : 'online');
-  const lastTs = (a) => (isLocal(a) ? a.local.last_check || 0 : a.online ? a.updates?.checked_at || 0 : a.last_seen || 0);
+  const lastTs = (a) => (a.upstream ? upLast(a.upstream) : isLocal(a) ? a.local.last_check || 0 : a.online ? a.updates?.checked_at || 0 : a.last_seen || 0);
   const healthN = (a) => (a.facts?.health?.failed_count > 0 ? 2 : 0) + (a.facts?.health?.auto_updates === 'on' ? 1 : 0);
   const COLS = [
     ['status', '●', (a) => statusText(a), 'dotcol'],
@@ -1300,6 +1309,7 @@ function DeviceList() {
   function last(a) {
     if (a.maint) return html`<span class="c-blue">maintenance</span><span class="dim">, ${maintUntil(a.maint)}</span>`;
     if (a.unreach) return html`<span class="c-unr">unreachable</span><span class="dim">, behind ${a.unreach.name}</span>`;
+    if (a.upstream) return upLast(a.upstream) ? when(upLast(a.upstream)) : html`<span class="dim">waiting for the first ping</span>`;
     if (isVirtual(a)) return html`<span class="dim">—</span>`;
     if (isLocal(a)) {
       const L = a.local, p = probeOut(a);
@@ -1315,11 +1325,11 @@ function DeviceList() {
   function row(a) {
     const u = a.updates, o = a.os_support, f = a.facts;
     return html`<tr>
-      <td class="nowrap" title="${statusText(a)}${a.below_min ? ` (agent ${a.core_version}, lowest allowed ${a.min_agent})` : ''}">${agentDot(a)}${statusText(a) === 'online' || statusText(a) === '' ? '' : html` <span class="small ${a.maint ? 'c-blue' : a.unreach ? 'c-unr' : statusText(a) === 'unknown' ? 'dim' : a.status === 'pending' || a.status === 'report_only' || a.below_min || statusText(a) === 'waiting' || / (service|check)s? down/.test(statusText(a)) ? 'c-amber' : 'c-red'}">${statusText(a)}</span>`}</td>
-      <td class="nowrap"><a href="#/device/${a.id}"><b>${a.name}</b></a></td>
+      <td class="nowrap" title="${statusText(a)}${a.below_min ? ` (agent ${a.core_version}, lowest allowed ${a.min_agent})` : ''}">${agentDot(a)}${statusText(a) === 'online' || statusText(a) === '' ? '' : html` <span class="small ${a.maint ? 'c-blue' : a.unreach ? 'c-unr' : statusText(a) === 'unknown' ? 'dim' : a.status === 'pending' || a.status === 'report_only' || a.below_min || statusText(a) === 'waiting' || statusText(a) === 'partly online' || / (service|check)s? down/.test(statusText(a)) ? 'c-amber' : 'c-red'}">${statusText(a)}</span>`}</td>
+      <td class="nowrap"><a href="${a.upstream ? '#/settings/upstream' : `#/device/${a.id}`}"><b>${a.name}</b></a></td>
       <td class="opt muted">${groupName(a.group_id)}</td>
       <td class="opt small nowrap">${(f.ips || [])[0] || (isVirtual(a) ? html`<span class="dim">—</span>` : '')}</td>
-      <td class="opt nowrap" title="${a.below_min || isLocal(a) || isVirtual(a) ? '' : osLabel(f)}">${isVirtual(a) ? html`<span class="dim" title="Virtual device: not checked">virtual</span>` : isLocal(a) ? html`<span class="dim" title="Monitored by the master with a ping; no agent">agentless</span>` : a.below_min ? html`<span class="dim">—</span>` : clipText(osShort(f), 14)}${o?.status === 'expired' ? html` <span class="badge sec xs" title="${osSupportText(o, f.os_id)}">EOL</span>` : o?.status === 'soon' ? html` <span class="badge upd xs" title="${osSupportText(o, f.os_id)}">EOL soon</span>` : ''}</td>
+      <td class="opt nowrap" title="${a.below_min || isLocal(a) || isVirtual(a) ? '' : osLabel(f)}">${a.upstream ? html`<span class="dim" title="The internet connection, pinged by the master (Settings → Upstream)">upstream</span>` : isVirtual(a) ? html`<span class="dim" title="Virtual device: not checked">virtual</span>` : isLocal(a) ? html`<span class="dim" title="Monitored by the master with a ping; no agent">agentless</span>` : a.below_min ? html`<span class="dim">—</span>` : clipText(osShort(f), 14)}${o?.status === 'expired' ? html` <span class="badge sec xs" title="${osSupportText(o, f.os_id)}">EOL</span>` : o?.status === 'soon' ? html` <span class="badge upd xs" title="${osSupportText(o, f.os_id)}">EOL soon</span>` : ''}</td>
       <td class="opt nowrap">${isVirtual(a) ? html`<span class="dim">—</span>` : statLetters(a)}</td>
       <td class="num"><b class="${u?.security ? 'c-red' : u?.total ? 'c-amber' : 'dim'}">${u ? u.total : '—'}</b></td>
       <td class="num">${!a.vulns ? html`<span class="dim">—</span>` : a.vulns.badge ? html`<b class="c-red" title="${CVE_RED}">${a.vulns.badge}</b>` : html`<span class="dim">0</span>`}</td>
@@ -1354,7 +1364,7 @@ function DeviceList() {
         <div id="l-table"></div>`);
       $('#l-q').addEventListener('input', (e) => { st.q = e.target.value; render(); });
     },
-    async refresh() { const d = await GET('overview'); d.groups ||= []; d.vdev = virtualDevs(d); st.data = d; render(); },
+    async refresh() { const d = await GET('overview'); d.groups ||= []; d.vdev = virtualDevs(d, true); st.data = d; render(); },
     acts: {
       filter: (t) => { st.filter = t.dataset.f; render(); },
       type: (t) => { st.type = t.dataset.t; render(); },
@@ -1477,16 +1487,10 @@ function MapPage() {
     const kh = health(k.a), nh = health(n.a), alive = (h) => ['ok', 'bad', 'part', 'virt'].includes(h[0]) && !h[2];
     return { cut, live: !cut && alive(kh) && alive(nh), bad: !cut && !!kh[2] };
   }
-  // The ping time of a device and where it is measured from: "4 ms via probe-1".
-  function pingLabel(a) {
-    const L = a && !isVirtual(a) && !a.maint && !a.unreach && !probeOut(a) ? chk(a) : null;
-    if (!L || !L.ping || !L.checked || !L.up || !L.rtt_us) return '';
-    return `${rttText(L.rtt_us)} via ${clipText(L.probe ? L.probe.name : 'master', 10)}`;
-  }
   // Tree lines: an S-curve from the parent's right edge to each child. In the
   // network views a line to an unreachable device is dashed, and where the
   // break starts (the parent is not unreachable itself) it gets a ✕. Each
-  // line has a pulse on top (shown while live) and the child's ping time.
+  // line has a pulse on top (shown while live). No ping times: they clutter.
   // The pulse runs from the child to the parent; alternating levels take
   // turns, so the wave flows on toward the master.
   function lines(all, mode) {
@@ -1498,8 +1502,6 @@ function MapPage() {
         const s = lineState(n, k, mode), d = `M${x1} ${y1} C${mx} ${y1} ${mx} ${y2} ${x2} ${y2}`, tk = `t:${n.id}:${k.id}`;
         out.push(html`<path class="mapline ${k.remote ? 'remote' : ''} ${s.cut ? 'cut' : ''} ${s.bad ? 'bad' : ''}" data-k="${tk}" d="${d}"/>`);
         out.push(html`<path class="mappulse ${s.live ? 'live' : ''}" data-p="${tk}" d="${d}" pathLength="100" style="animation-delay:${(k.depth % 2) * 2.5}s"/>`);
-        const pl = pingLabel(k.a);
-        if (pl) out.push(html`<text class="mapping" data-k="${tk}" id="mapping-${k.id}" x="${x2 - 6}" y="${y2 - 5}" text-anchor="end">${pl}</text>`);
         if (s.cut && !n.a?.unreach) {
           const cx = x1 + 16, cy = y1 + (y2 - y1) * 0.04;
           out.push(html`<path class="mapcut" data-k="${tk}" d="M${cx - 4} ${cy - 4} L${cx + 4} ${cy + 4} M${cx + 4} ${cy - 4} L${cx - 4} ${cy + 4}"/>`);
@@ -1590,7 +1592,7 @@ function MapPage() {
     const root = tree(d, mode);
     const { all, w, h } = place(root);
     st.nodes = new Map(all.map((n) => [n.id, n]));
-    const key = mode + '|' + all.map((n) => `${n.id}@${n.x},${n.y}${n.remote ? 'r' : ''}${n.a?.unreach ? 'u' : ''}${pingLabel(n.a) ? 'p' : ''}/${checker(n.a)?.id || ''}`).join('|') + '|' + all.map((n) => (n.a ? n.a.name + '/' + devIP(n.a) : '')).join(',');
+    const key = mode + '|' + all.map((n) => `${n.id}@${n.x},${n.y}${n.remote ? 'r' : ''}${n.a?.unreach ? 'u' : ''}/${checker(n.a)?.id || ''}`).join('|') + '|' + all.map((n) => (n.a ? n.a.name + '/' + devIP(n.a) : '')).join(',');
     if (key === st.key) {
       // Same tree: only colours, pulses, ping times and status texts change.
       for (const n of all) {
@@ -1608,8 +1610,6 @@ function MapPage() {
         const tk = `t:${n.parent.id}:${n.id}`, s = lineState(n.parent, n, mode);
         document.querySelector(`#map path.mapline[data-k="${CSS.escape(tk)}"]`)?.classList.toggle('bad', s.bad);
         document.querySelector(`#map path.mappulse[data-p="${CSS.escape(tk)}"]`)?.classList.toggle('live', s.live);
-        const pt = document.getElementById('mapping-' + n.id);
-        if (pt) pt.textContent = pingLabel(n.a);
       }
       return;
     }
@@ -1630,7 +1630,7 @@ function MapPage() {
       <svg class="mapsvg" width="100%" height="${st.hh || 320}" role="img" aria-label="${VIEWS.find((v) => v[0] === mode)[1]} map"><g id="map-vp">
       ${lines(all, mode)}${mode === 'full' ? checkLines(all) : ''}${all.map((n) => box(n, mode))}</g></svg></div>
       <div class="row dim small" style="margin-top:10px;gap:16px"><span><i class="lg ok"></i>up</span><span><i class="lg bad"></i>down or a service down</span>${mode === 'monitor' ? '' : html`<span><i class="lg unr"></i>unreachable</span>`}<span><i class="lg maint"></i>maintenance</span><span><i class="lg none"></i>unknown, waiting or pending</span>
-        ${legend}<span><b style="color:var(--muted);font-weight:500">4 ms via …</b> ping time, and who pings</span></div>
+        ${legend}</div>
       <div class="dim small" style="margin-top:6px">Scroll or pinch to zoom, drag to move.${mode === 'full' ? ' Point at a device to see only its own lines.' : ''}</div>${hint}`);
     const svg = $('#map svg');
     if (mode === 'full') {
