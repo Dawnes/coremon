@@ -88,6 +88,36 @@ func TestVirtualAndUpstream(t *testing.T) {
 	if u.State != "partial" || u.Answer != 2 || u.Total != 3 || u.RTTus != 14000 || u.Name != "Internet" {
 		t.Errorf("upstream: %+v", u)
 	}
+	// Ping interval: 30–3600 s, default 60; the next round counts from the last one.
+	if s.st.st.Upstream.IntervalSec != 60 {
+		t.Errorf("default interval %d", s.st.st.Upstream.IntervalSec)
+	}
+	for _, iv := range []string{"29", "3601"} {
+		if code, _ := c.do("POST", "/api/ui/upstream", `{"enabled":true,"name":"Internet","addrs":["9.9.9.9","86.54.11.100","1.1.1.1"],"show_tile":true,"interval_sec":`+iv+`}`); code != 400 {
+			t.Errorf("interval %s accepted", iv)
+		}
+	}
+	if code, b := c.do("POST", "/api/ui/upstream", `{"enabled":true,"name":"Internet","addrs":["9.9.9.9","86.54.11.100","1.1.1.1"],"show_tile":true,"interval_sec":120}`); code != 200 {
+		t.Fatalf("interval 120: %d %s", code, b)
+	}
+	s.st.mu.Lock()
+	next := s.upstreamNext(time.Now())
+	s.st.mu.Unlock()
+	s.up.mu.Lock()
+	last := s.up.last
+	s.up.mu.Unlock()
+	if last.IsZero() || !next.Equal(last.Add(120*time.Second)) {
+		t.Errorf("next round %v, last %v", next, last)
+	}
+	found := false
+	for _, x := range s.masterTasks(time.Now()) {
+		if x.Key == "upstream" && x.Title == "Internet ping" && x.Detail == "3 addresses · every 120 s" {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("no upstream row in upcoming tasks: %+v", s.masterTasks(time.Now()))
+	}
 	if code, b := c.do("POST", "/api/ui/locals/l_rt", `{"via":"`+upstreamID+`"}`); code != 200 {
 		t.Fatalf("router via upstream: %d %s", code, b)
 	}

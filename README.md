@@ -54,7 +54,8 @@ as **agentless** devices: the master itself pings them and checks their services
   check, such as an unmanaged switch: devices can be connected via it, it is
   drawn on the network map and it passes on the state of the devices above it.
 * **Upstream**: Settings → Upstream adds the internet connection as a special
-  virtual device. The master pings three addresses every minute (by default
+  virtual device. The master pings three addresses every minute or at your own
+  interval of 30 seconds to an hour (by default
   the public DNS servers 9.9.9.9, 86.54.11.100 and 1.1.1.1): online when all
   answer, partly online when some do, offline when none do. It has its own
   tile on the Overview and is the top of the network map. The device that is

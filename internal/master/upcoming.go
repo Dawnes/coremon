@@ -62,8 +62,17 @@ func (s *Server) masterTasks(now time.Time) []upcomingTask {
 		}
 	}
 	roundAt := time.Unix(s.st.st.CheckRoundAt, 0).Add(time.Duration(set.CheckIntervalHours) * time.Hour)
+	up := s.st.st.Upstream
+	upNext := s.upstreamNext(now)
 	s.st.mu.Unlock()
 	add("check_round", "Update check", plural(checked, "device")+" · every "+plural(set.CheckIntervalHours, "hour"), roundAt)
+	if !upNext.IsZero() {
+		n, addrs := len(nonEmpty(up.Addrs)), " addresses"
+		if n == 1 {
+			addrs = " address"
+		}
+		add("upstream", up.Name+" ping", itoa(n)+addrs+" · every "+itoa(up.IntervalSec)+" s", upNext)
+	}
 
 	if set.BackupSchedule != "off" {
 		s.bk.idxMu.Lock()
@@ -127,7 +136,7 @@ func (s *Server) nextChecks(now time.Time) []upcomingCheck {
 	defer s.st.mu.Unlock()
 	s.loc.mu.Lock()
 	defer s.loc.mu.Unlock()
-	var out []upcomingCheck
+	out := []upcomingCheck{} // never null: the website reads its length
 	for _, d := range s.checkDevs() {
 		if d.Probe != "" || d.Maint != nil {
 			continue // checked by a remote probe on its own schedule, or in maintenance

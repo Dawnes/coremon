@@ -17,10 +17,13 @@ import (
 )
 
 const (
-	upstreamAddrs    = 3
-	upstreamInterval = time.Minute
-	upstreamTimeout  = 3 * time.Second
-	defaultUpstream  = "Upstream"
+	upstreamAddrs   = 3
+	upstreamTimeout = 3 * time.Second
+	defaultUpstream = "Upstream"
+	// Ping interval in seconds: default, lowest and highest.
+	defaultUpInterval = 60
+	minUpInterval     = 30
+	maxUpInterval     = 3600
 )
 
 // Quad9 (Switzerland), DNS4EU unfiltered (EU), Cloudflare.
@@ -30,6 +33,8 @@ type UpstreamSettings struct {
 	Enabled bool     `json:"enabled,omitempty"`
 	Name    string   `json:"name,omitempty"`
 	Addrs   []string `json:"addrs,omitempty"`
+	// IntervalSec: seconds between ping rounds (minUpInterval–maxUpInterval).
+	IntervalSec int `json:"interval_sec,omitempty"`
 	// HideTile: the Overview tile is not shown (zero value: shown).
 	HideTile bool `json:"hide_tile,omitempty"`
 }
@@ -38,6 +43,10 @@ func (u *UpstreamSettings) normalize() {
 	if u.Name == "" {
 		u.Name = defaultUpstream
 	}
+	if u.IntervalSec == 0 {
+		u.IntervalSec = defaultUpInterval
+	}
+	u.IntervalSec = clamp(u.IntervalSec, minUpInterval, maxUpInterval)
 	if len(u.Addrs) != upstreamAddrs {
 		a := make([]string, upstreamAddrs)
 		copy(a, u.Addrs)
@@ -61,8 +70,10 @@ type upAddr struct {
 type upstreamState struct {
 	mu    sync.Mutex
 	addrs []upAddr
-	state string // wait, ok, partial, down
-	since int64  // when the state last changed
+	state string    // wait, ok, partial, down
+	since int64     // when the state last changed
+	last  time.Time // start of the last ping round
+	busy  bool      // a round is running
 	kick  chan struct{}
 }
 
@@ -79,6 +90,7 @@ type upstreamView struct {
 	RTTus    int64    `json:"rtt_us,omitempty"` // fastest answer
 	ShowTile bool     `json:"show_tile"`
 	Via      *devRef  `json:"via,omitempty"`
+	Interval int      `json:"interval_sec"`
 }
 
 func upstreamStateOf(addrs []upAddr) string {
@@ -110,7 +122,7 @@ func upstreamStateOf(addrs []upAddr) string {
 // upstreamView: caller holds s.st.mu.
 func (s *Server) upstreamView() upstreamView {
 	u := s.st.st.Upstream
-	v := upstreamView{Enabled: u.Enabled, Name: u.Name, ShowTile: !u.HideTile, State: "off", Addrs: []upAddr{}}
+	v := upstreamView{Enabled: u.Enabled, Name: u.Name, ShowTile: !u.HideTile, State: "off", Addrs: []upAddr{}, Interval: u.IntervalSec}
 	if !u.Enabled {
 		return v
 	}
@@ -153,7 +165,8 @@ func (s *Server) handleUpstreamGet(w http.ResponseWriter, r *http.Request) {
 	v := s.upstreamView()
 	addrs := append([]string(nil), s.st.st.Upstream.Addrs...)
 	s.st.mu.Unlock()
-	writeJSON(w, map[string]any{"upstream": v, "addrs": addrs, "defaults": defaultUpstreamAddrs, "default_name": defaultUpstream})
+	writeJSON(w, map[string]any{"upstream": v, "addrs": addrs, "defaults": defaultUpstreamAddrs, "default_name": defaultUpstream,
+		"interval": map[string]int{"default": defaultUpInterval, "min": minUpInterval, "max": maxUpInterval}})
 }
 
 func (s *Server) handleUpstreamSave(w http.ResponseWriter, r *http.Request) {
@@ -162,8 +175,16 @@ func (s *Server) handleUpstreamSave(w http.ResponseWriter, r *http.Request) {
 		Name     string   `json:"name"`
 		Addrs    []string `json:"addrs"`
 		ShowTile bool     `json:"show_tile"`
+		Interval int      `json:"interval_sec"`
 	}
 	if !readJSON(w, r, &req, 4096) {
+		return
+	}
+	if req.Interval == 0 {
+		req.Interval = defaultUpInterval
+	}
+	if req.Interval < minUpInterval || req.Interval > maxUpInterval {
+		http.Error(w, fmt.Sprintf("ping every %d to %d seconds", minUpInterval, maxUpInterval), http.StatusBadRequest)
 		return
 	}
 	name, err := checkName("name", req.Name, maxSystemName)
@@ -204,7 +225,7 @@ func (s *Server) handleUpstreamSave(w http.ResponseWriter, r *http.Request) {
 	s.st.mu.Lock()
 	defer s.st.mu.Unlock()
 	old := s.st.st.Upstream
-	nu := UpstreamSettings{Enabled: req.Enabled, Name: name, Addrs: addrs, HideTile: !req.ShowTile}
+	nu := UpstreamSettings{Enabled: req.Enabled, Name: name, Addrs: addrs, HideTile: !req.ShowTile, IntervalSec: req.Interval}
 	var changes []string
 	if nu.Enabled != old.Enabled {
 		changes = append(changes, map[bool]string{true: "switched on", false: "switched off"}[nu.Enabled])
@@ -214,6 +235,9 @@ func (s *Server) handleUpstreamSave(w http.ResponseWriter, r *http.Request) {
 	}
 	if strings.Join(nu.Addrs, ",") != strings.Join(old.Addrs, ",") {
 		changes = append(changes, "addresses "+strings.Join(nonEmpty(nu.Addrs), ", "))
+	}
+	if nu.IntervalSec != old.IntervalSec {
+		changes = append(changes, fmt.Sprintf("ping every %d s → %d s", old.IntervalSec, nu.IntervalSec))
 	}
 	if nu.HideTile != old.HideTile {
 		changes = append(changes, map[bool]string{true: "Overview tile hidden", false: "Overview tile shown"}[nu.HideTile])
@@ -235,7 +259,7 @@ func (s *Server) handleUpstreamSave(w http.ResponseWriter, r *http.Request) {
 	}
 	if strings.Join(nu.Addrs, ",") != strings.Join(old.Addrs, ",") || nu.Enabled != old.Enabled {
 		s.up.mu.Lock()
-		s.up.addrs, s.up.state, s.up.since = nil, "", 0
+		s.up.addrs, s.up.state, s.up.since, s.up.last = nil, "", 0, time.Time{}
 		s.up.mu.Unlock()
 	}
 	if nu.Enabled {
@@ -286,25 +310,46 @@ func (s *Server) handleUpstreamVia(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, map[string]any{"upstream": s.upstreamView()})
 }
 
-// upstreamLoop pings the Upstream addresses every minute while it is on.
+// upstreamNext: when the next ping round starts (zero: Upstream is off).
+// A changed interval counts from the last round. Caller holds s.st.mu.
+func (s *Server) upstreamNext(now time.Time) time.Time {
+	u := s.st.st.Upstream
+	if !u.Enabled || len(nonEmpty(u.Addrs)) == 0 {
+		return time.Time{}
+	}
+	s.up.mu.Lock()
+	defer s.up.mu.Unlock()
+	if s.up.last.IsZero() {
+		return now
+	}
+	return s.up.last.Add(time.Duration(u.IntervalSec) * time.Second)
+}
+
+// upstreamLoop pings the Upstream addresses while it is on, every
+// IntervalSec seconds; a new address list or switching it on pings at once.
 func (s *Server) upstreamLoop(stop <-chan struct{}) {
-	t := time.NewTimer(5 * time.Second)
+	t := time.NewTicker(time.Second)
 	defer t.Stop()
+	start := time.Now().Add(5 * time.Second) // first round shortly after start
 	for {
 		select {
 		case <-stop:
 			return
 		case <-t.C:
 		case <-s.up.kick:
-			if !t.Stop() {
-				select {
-				case <-t.C:
-				default:
-				}
-			}
+			start = time.Time{}
+		}
+		now := time.Now()
+		if now.Before(start) {
+			continue
+		}
+		s.st.mu.Lock()
+		next := s.upstreamNext(now)
+		s.st.mu.Unlock()
+		if next.IsZero() || now.Before(next) {
+			continue
 		}
 		s.upstreamRound()
-		t.Reset(upstreamInterval)
 	}
 }
 
@@ -316,6 +361,9 @@ func (s *Server) upstreamRound() {
 	if !u.Enabled || len(addrs) == 0 {
 		return
 	}
+	s.up.mu.Lock()
+	s.up.last, s.up.busy = time.Now(), true
+	s.up.mu.Unlock()
 	res := make([]upAddr, len(addrs))
 	var wg sync.WaitGroup
 	for i, a := range addrs {
@@ -328,7 +376,7 @@ func (s *Server) upstreamRound() {
 	wg.Wait()
 	st := upstreamStateOf(res)
 	s.up.mu.Lock()
-	s.up.addrs = res
+	s.up.addrs, s.up.busy = res, false
 	if st != s.up.state {
 		s.up.state, s.up.since = st, time.Now().Unix()
 	}

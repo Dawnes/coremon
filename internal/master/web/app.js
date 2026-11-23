@@ -1834,6 +1834,7 @@ function AgentPage([id, tab]) {
         <span class="spacer"></span>
         ${a.busy ? html`<span class="row muted"><span class="spin"></span>${a.busy} job(s) active</span>` : ''}
         ${!a.removing && !a.below_min ? html`<button class="btn sm" data-act="ping" title="Check the connection and keys with the agent now; nothing is done on the device">${icon('pulse')} Ping</button>` : ''}
+        ${a.status !== 'pending' && !a.removing && canChange() ? html`<button class="btn sm" data-act="agent-edit" title="Name, Connected via and group">${icon('edit')} Edit</button>` : ''}
         ${a.status === 'active' && !a.below_min && canChange() ? html`<button class="btn sm" data-act="report-only">${icon('pause')} Report only</button>` : ''}
         ${a.status === 'report_only' && !a.below_min && canChange() ? html`<button class="btn sm" data-act="allow-changes">${icon('play')} Allow changes</button>` : ''}
         ${a.status === 'active' && !a.below_min && canChange() ? html`<button class="btn warn sm" data-act="reboot" ${a.online ? '' : 'disabled'}
@@ -2100,6 +2101,7 @@ function AgentPage([id, tab]) {
         await POST('agents/' + id, { report_only: false }); toast('Changes allowed', 'ok'); refresh();
       },
       ping: () => pingModal(a()),
+      'agent-edit': async () => agentEditModal(await GET('overview'), a(), refresh),
       'probe-clear': async () => {
         const p = a().probe;
         if (!(await confirmBox(`Clear the probe checks of ${a().name}?`, html`The agent drops its whole check list and any results it has not sent yet, and then waits.
@@ -2167,6 +2169,21 @@ async function localEditModal(a, groups, done) {
         toast(isNew ? `${res.name} added` : 'Saved', 'ok');
         done?.(res);
       },
+    },
+  });
+}
+// Edit an agent device: display name, Connected via and group (ov: the overview).
+function agentEditModal(ov, ag, done) {
+  openModal(html`<h3>Edit ${ag.name}</h3><form class="form" data-submit="save">
+    <label class="field">Display name<input type="text" name="name" value="${ag.name}" maxlength="64" autofocus required></label>
+    <div class="dim small">Host name on the device: ${ag.facts?.hostname || '—'}. Only the name shown in Coremon changes.</div>
+    <div class="field">Connected via${pick('via', viaItems(ov, ag.id), ag.via?.id || '')}</div>
+    <div class="dim small">${VIA_HINT}</div>
+    <label class="field">Group<select name="group">${groupOptions(ov.groups || [], ag.group_id || '')}</select></label>
+    <div class="actions"><button type="button" class="btn ghost" data-act="cancel">Cancel</button><button class="btn primary">Save</button></div></form>`, {
+    acts: {
+      cancel: () => closeModal(),
+      save: async (f) => { await POST('agents/' + ag.id, { name: f.name.value, via: f.via.value, group_id: f.group.value }); closeModal(); toast('Saved', 'ok'); done?.(); },
     },
   });
 }
@@ -3000,20 +3017,7 @@ function Devices() {
         toast(`${agentBy(t.dataset.id).name} → ${t.value ? groupName(t.value) : 'Ungrouped'}`, 'ok');
         view.refresh();
       },
-      rename: (t) => {
-        const ag = agentBy(t.dataset.id);
-        openModal(html`<h3>Edit ${ag.name}</h3><form class="form" data-submit="save">
-          <label class="field">Display name<input type="text" name="name" value="${ag.name}" maxlength="64" autofocus required></label>
-          <div class="dim small">Host name on the device: ${ag.facts.hostname || '—'}. Only the name shown in Coremon changes.</div>
-          <div class="field">Connected via${pick('via', viaItems(st.data, ag.id), ag.via?.id || '')}</div>
-          <div class="dim small">${VIA_HINT}</div>
-          <div class="actions"><button type="button" class="btn ghost" data-act="cancel">Cancel</button><button class="btn primary">Save</button></div></form>`, {
-          acts: {
-            cancel: () => closeModal(),
-            save: async (f) => { await POST('agents/' + ag.id, { name: f.name.value, via: f.via.value }); closeModal(); toast('Saved', 'ok'); view.refresh(); },
-          },
-        });
-      },
+      rename: (t) => agentEditModal(st.data, agentBy(t.dataset.id), () => view.refresh()),
       remove: (t) => {
         const ag = agentBy(t.dataset.id);
         openModal(html`<h3>Remove ${ag.name}?</h3>
@@ -3568,7 +3572,9 @@ function SettingsUpstream() {
       <label class="field">Name<input type="text" name="name" value="${u.name}" maxlength="64" placeholder="${d.default_name}" style="max-width:320px"></label>
       <div class="dim small">Used for the cloud on the map, the Overview tile and the "Connected via" choice.</div>
       <div class="field">Addresses to ping<div class="stack" style="gap:6px;max-width:320px">${[0, 1, 2].map((i) => html`<input type="text" name="addr${i}" value="${addrs[i] || ''}" placeholder="${d.defaults[i]}" spellcheck="false" autocomplete="off">`)}</div></div>
-      <div class="dim small">IP addresses only, pinged by the master every minute. Online when all answer, partly online when some do, offline when none do. The defaults are public DNS servers: Quad9 (Switzerland), DNS4EU (EU) and Cloudflare. An empty field is skipped.</div>
+      <div class="dim small">IP addresses only, pinged by the master.</div>
+      <label class="field">Ping every<div class="row" style="gap:8px"><input type="number" name="interval" value="${u.interval_sec}" min="${d.interval.min}" max="${d.interval.max}" step="1" required style="width:110px"><span class="muted">seconds</span></div></label>
+      <div class="dim small">${d.interval.min} to ${d.interval.max} seconds, default ${d.interval.default}.</div>
       <label class="checkrow"><input type="checkbox" name="tile" ${u.show_tile ? 'checked' : ''}> Show the ${u.name} tile on the Overview</label>
       ${ifChange(html`<div class="row"><button class="btn primary">Save</button><button type="button" class="btn ghost" data-act="defaults">Default addresses</button></div>`)}
     </fieldset></form>`);
@@ -3592,7 +3598,7 @@ function SettingsUpstream() {
     acts: {
       defaults: () => { const f = $('#up-form form'); st.d.defaults.forEach((a, i) => { f[`addr${i}`].value = a; }); },
       save: async (f) => {
-        const body = { enabled: f.enabled.checked, name: f.name.value, addrs: [0, 1, 2].map((i) => f[`addr${i}`].value.trim()), show_tile: f.tile.checked };
+        const body = { enabled: f.enabled.checked, name: f.name.value, addrs: [0, 1, 2].map((i) => f[`addr${i}`].value.trim()), show_tile: f.tile.checked, interval_sec: +f.interval.value };
         const res = await POST('upstream', body);
         toast(res.upstream.enabled ? `${res.upstream.name} saved — the first ping follows within seconds` : 'Saved — switched off', 'ok');
         st.built = false;
