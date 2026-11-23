@@ -150,6 +150,7 @@ select.sm { height: 30px; padding: 0 8px; font-size: 12.5px; }
 .stat.c-red { --glow: rgba(248, 113, 113, 0.2); } .stat.c-red .value { color: var(--red); }
 .stat.c-violet { --glow: rgba(167, 139, 250, 0.2); } .stat.c-violet .value { color: var(--violet); }
 .stat.c-green { --glow: rgba(52, 211, 153, 0.18); }
+.stat .value.upv-ok { color: var(--green); }
 
 .toolbar { display: flex; gap: 10px; align-items: center; margin-bottom: 18px; flex-wrap: wrap; }
 .chips { display: flex; gap: 6px; flex-wrap: wrap; }
@@ -379,6 +380,9 @@ ul.plainlist { margin: 0; padding-left: 18px; line-height: 1.8; }
 .c-amber { color: var(--amber); font-weight: 600; }
 .c-blue { color: var(--blue); font-weight: 600; }
 .c-unr { color: var(--unr); font-weight: 600; }
+.c-green { color: var(--green); font-weight: 600; }
+.dot.virt { background: transparent; border: 1.5px dashed #94a3b8; }
+.tbl td > svg, .tbl td .nowrap > svg { width: 15px; height: 15px; vertical-align: -3px; color: var(--muted); }
 /* An offline device: a word that flashes red and yellow. */
 .flash-off { font-weight: 700; text-transform: uppercase; letter-spacing: 0.04em; color: var(--red); animation: flash-off 1s steps(1, end) infinite; }
 @keyframes flash-off { 50% { color: var(--amber); } }
@@ -426,6 +430,42 @@ ul.plainlist { margin: 0; padding-left: 18px; line-height: 1.8; }
 .mapbox.unr { opacity: 0.6; }
 .mapline.cut { stroke: rgba(129, 140, 248, 0.6); stroke-dasharray: 3 4; }
 .mapcut { stroke: var(--red); stroke-width: 2; stroke-linecap: round; }
+/* Virtual devices: a dashed, neutral box (not checked). */
+.mapbox.virt rect { stroke: rgba(148, 163, 184, 0.6); stroke-dasharray: 5 4; }
+.mapbox.virt circle { fill: none; stroke: #94a3b8; stroke-width: 1.5; stroke-dasharray: 2 2; }
+.mapbox.virt.unr { opacity: 0.6; }
+.mapbox.virt.unr rect { stroke: rgba(129, 140, 248, 0.75); }
+.lg.virt { background: transparent; border: 1.5px dashed #94a3b8; box-sizing: border-box; }
+/* Upstream: a layered cloud in its state colour. Green breathes, a highlight
+   drifts across it and its edge lights up as the line pulses arrive (every
+   5 s, in step with them); amber does so slower and dimmer; red stands
+   still and pulses red. */
+.mapcloud { --c: #94a3b8; }
+.mapcloud.ok { --c: #4ade80; } .mapcloud.part { --c: #fbbf24; } .mapcloud.bad { --c: #f87171; }
+.mapcloud.click { cursor: pointer; }
+.mapcloud .cl-glow { fill: var(--c); opacity: 0.2; filter: blur(12px); }
+.mapcloud .cl-back { fill: var(--c); opacity: 0.1; }
+.mapcloud .cl-base { fill: var(--panel-solid); stroke: var(--c); stroke-width: 1.6; stroke-opacity: 0.85; }
+.mapcloud.click:hover .cl-base { fill: #1b1e2d; }
+.mapcloud .cl-s1 { stop-color: var(--c); stop-opacity: 0.3; } .mapcloud .cl-s2 { stop-color: var(--c); stop-opacity: 0.05; }
+.mapcloud .cl-shine { opacity: 0; pointer-events: none; }
+.mapcloud .cl-flash { fill: none; stroke: var(--c); stroke-width: 2.6; opacity: 0; pointer-events: none; filter: drop-shadow(0 0 6px var(--c)); }
+.mapcloud text.cl-name { fill: var(--text); font-size: 14px; font-weight: 700; }
+.mapcloud text.cl-sub { fill: var(--muted); font-family: var(--mono); font-size: 10.5px; }
+.mapcloud.ok .cl-glow { animation: cl-breathe 6s ease-in-out infinite; }
+.mapcloud.ok .cl-shine { opacity: 1; animation: cl-drift 10s ease-in-out infinite; }
+.mapcloud.ok .cl-flash { animation: cl-flash 5s linear 2.5s infinite; }
+.mapcloud.part .cl-glow { animation: cl-breathe-dim 9s ease-in-out infinite; }
+.mapcloud.part .cl-shine { opacity: 0.5; animation: cl-drift 15s ease-in-out infinite; }
+.mapcloud.part .cl-flash { animation: cl-flash-dim 5s linear 2.5s infinite; }
+.mapcloud.bad .cl-glow { animation: cl-red 1.8s ease-in-out infinite; }
+@keyframes cl-breathe { 0%, 100% { opacity: 0.16; } 50% { opacity: 0.5; } }
+@keyframes cl-breathe-dim { 0%, 100% { opacity: 0.1; } 50% { opacity: 0.28; } }
+@keyframes cl-red { 0%, 100% { opacity: 0.2; } 50% { opacity: 0.7; } }
+@keyframes cl-drift { 0% { transform: translateX(0); } 60%, 100% { transform: translateX(270px); } }
+@keyframes cl-flash { 0% { opacity: 0.9; } 16%, 100% { opacity: 0; } }
+@keyframes cl-flash-dim { 0% { opacity: 0.45; } 16%, 100% { opacity: 0; } }
+@media (prefers-reduced-motion: reduce) { .mapcloud .cl-glow, .mapcloud .cl-shine, .mapcloud .cl-flash { animation: none !important; } .mapcloud .cl-shine, .mapcloud .cl-flash { opacity: 0 !important; } }
 /* Full map: lines from a remote probe to the devices it checks. */
 .mapline.check { stroke: rgba(34, 211, 238, 0.55); stroke-width: 1.2; stroke-dasharray: 2 4; }
 /* Hover on the full map: only the device's own lines stay. */

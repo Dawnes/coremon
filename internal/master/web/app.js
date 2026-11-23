@@ -51,6 +51,7 @@ const ICONS = {
   clock: '<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>',
   pulse: '<path d="M3 12h4l3-8 4 16 3-8h4"/>',
   info: '<circle cx="12" cy="12" r="9"/><path d="M12 11v6M12 7.5v.01"/>',
+  globe: '<circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3a14 14 0 0 1 0 18M12 3a14 14 0 0 0 0 18"/>',
 };
 const icon = (n) => raw(`<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">${ICONS[n] || ''}</svg>`);
 
@@ -466,7 +467,7 @@ const SUBNAV = {
   dashboard: () => [['overview', 'Overview'], ['devices', 'Device List'], ['apps', 'Application List'], ['map', 'Map']],
   about: () => [['about', 'About'], ['license', 'License']],
   activity: () => [['jobs', 'Jobs'], ['probes', 'Remote Probes'], ['audit', 'Audit log']],
-  settings: () => [['general', 'General'], ['devices', 'Devices'], ['releases', 'Releases'], ...(canChange() ? [['users', 'Users']] : []), ['account', 'My Account'], ['identity', 'Identity'], ...(canChange() ? [['backups', 'Backups']] : [])],
+  settings: () => [['general', 'General'], ['devices', 'Devices'], ['upstream', 'Upstream'], ['releases', 'Releases'], ...(canChange() ? [['users', 'Users']] : []), ['account', 'My Account'], ['identity', 'Identity'], ...(canChange() ? [['backups', 'Backups']] : [])],
 };
 function currentRoute() {
   const p = location.hash.replace(/^#\/?/, '').split('/');
@@ -526,7 +527,7 @@ function route() {
   const parts = location.hash.replace(/^#\/?/, '').split('/');
   const [section, sub] = currentRoute();
   const subViews = {
-    settings: { general: SettingsGeneral, devices: Devices, releases: Releases, users: SettingsUsers, backups: SettingsBackups, account: SettingsAccount, identity: SettingsIdentity },
+    settings: { general: SettingsGeneral, devices: Devices, upstream: SettingsUpstream, releases: Releases, users: SettingsUsers, backups: SettingsBackups, account: SettingsAccount, identity: SettingsIdentity },
     activity: { jobs: Jobs, probes: RemoteProbes, audit: Audit },
     dashboard: { overview: Dashboard, devices: DeviceList, apps: AppList, map: MapPage },
     about: { about: AboutPage, license: LicensePage },
@@ -605,17 +606,26 @@ const devIP = (a) => {
   const ips = a.facts?.ips || [];
   return ips.find((ip) => ip.includes('.') && !ip.startsWith('127.')) || ips.find((ip) => ip !== '::1') || '';
 };
-// "Connected via" choices: every approved device except the device itself
-// and the devices below it (no loops).
-function viaItems(all, self) {
+// "Connected via" choices (ov: the overview): Upstream first, then every
+// approved and virtual device except the device itself and the devices
+// below it (no loops). The device that is the default gateway of most
+// agents is marked: probably the internet router.
+const isVirtual = (a) => a?.monitor === 'virtual';
+function viaItems(ov, self) {
+  const all = [...(ov?.agents || []), ...(ov?.virtuals || [])];
   const below = new Set([self]);
   for (let grew = true; grew;) {
     grew = false;
     for (const a of all) if (a.via && below.has(a.via.id) && !below.has(a.id)) { below.add(a.id); grew = true; }
   }
-  const list = all.filter((a) => a.status !== 'pending' && !below.has(a.id)).sort(byName);
-  return [{ v: '', label: 'None', sub: "directly on the master's network" },
-    ...list.map((a) => ({ v: a.id, label: a.name, sub: `${devIP(a)} · ${isLocal(a) ? 'agentless' : 'agent'}`, find: (a.facts?.ips || []).join(' ') }))];
+  const gw = ov?.gateway;
+  const list = all.filter((a) => a.status !== 'pending' && !a.special && !below.has(a.id)).sort(byName);
+  const up = (ov?.virtuals || []).find((v) => v.special === 'upstream');
+  return [...(up && !below.has(up.id) ? [{ v: up.id, label: up.name, sub: 'the internet connection (Settings → Upstream)' }] : []),
+    { v: '', label: 'None', sub: "directly on the master's network" },
+    ...list.map((a) => ({ v: a.id, label: a.name,
+      sub: isVirtual(a) ? 'virtual device' : `${devIP(a)} · ${isLocal(a) ? 'agentless' : 'agent'}${gw?.id === a.id ? ` · default gateway of ${gw.count} device${gw.count === 1 ? '' : 's'}` : ''}`,
+      find: (a.facts?.ips || []).join(' ') }))];
 }
 // "Checked by" choices: the master, and the agents with Remote probe on.
 function probeItems(pa, cur, curName, skip = '') {
@@ -1042,7 +1052,7 @@ function Dashboard() {
       <div class="panel stat c-amber"><div class="label">Pending updates</div><div class="value">${totUpd}</div>
         ${totSec ? html`<div class="statnote"><span class="c-red">${totSec} security</span></div>` : ''}</div>
       <div class="panel stat c-violet"><div class="label">Reboot required</div><div class="value">${reboot}</div></div>
-      <div class="panel stat c-cyan"><div class="label">Active jobs</div><div class="value">${d.active_jobs}</div></div>
+      ${upTile(d.upstream)}
       <div class="panel stat ${oc} ${oldest ? 'click' : ''}" ${oldest ? raw(`data-act="open-agent" data-id="${esc(oldest.a.id)}"`) : ''} title="${oldest ? 'Oldest information shown on this dashboard: ' + fmtDate(oldest.ts, true) : ''}">
         <div class="label">Oldest information</div>
         ${oldest ? html`<div class="value datev">${fmtDate(oldest.ts)}</div><div class="statnote">${ago(oldest.ts)} · ${oldest.a.name} (${oldest.a.online ? 'last update check' : 'offline'})</div>`
@@ -1346,6 +1356,13 @@ function MapPage() {
   // itself (its dot flashes).
   function health(a) {
     if (!a) return ['ok', 'the master'];
+    if (isVirtual(a)) {
+      if (a.special) {
+        const u = st.data?.upstream || {}, txt = `${upWord[u.state] || 'waiting'}${u.total ? ` · ${u.answering} of ${u.total} answering` : ''}${u.rtt_us ? ` · ${fmtMs(u.rtt_us)}` : ''}`;
+        return u.state === 'ok' ? ['ok', txt] : u.state === 'partial' ? ['part', txt] : u.state === 'down' ? ['bad', txt, true] : ['unk', 'waiting for the first ping'];
+      }
+      return a.unreach ? ['unr', unrText(a)] : ['virt', 'virtual device, not checked'];
+    }
     if (a.maint) return ['unk', maintText(a.maint)];
     if (a.unreach) return ['unr', unrText(a)];
     if (isLocal(a)) {
@@ -1365,59 +1382,73 @@ function MapPage() {
   // The remote probe that checks a device (agentless, or an agent device's services), or null.
   const checker = (a) => (a ? (isLocal(a) ? a.local.probe : a.checks?.probe) || null : null);
   // The tree of a view. Each node: { id, a, depth, kids, remote }.
+  // The network views also show the virtual devices and, with Upstream on,
+  // start at the cloud: the master hangs under its own "Connected via" (or
+  // the cloud), the devices without one under the master.
   function tree(d, mode) {
-    const A = d.agents, groups = d.groups || [];
+    const net = mode !== 'monitor';
+    const cloud = net && d.upstream?.enabled ? (d.virtuals || []).find((v) => v.special === 'upstream') || null : null;
+    const A = [...d.agents, ...(net ? (d.virtuals || []).filter((v) => !v.special) : [])], groups = d.groups || [];
     const gi = (a) => { const i = groups.findIndex((g) => g.id === a.group_id); return i < 0 ? groups.length : i; };
     const rootA = A.find((a) => a.is_master && a.status !== 'pending' && !isLocal(a)) || null;
-    const rootID = rootA ? rootA.id : 'root';
+    const masterID = rootA ? rootA.id : 'root';
     const byID = new Map(A.map((a) => [a.id, a]));
+    // The devices above the master: they hang under the cloud, not under the master.
+    const aboveMaster = new Set();
+    if (cloud) for (let x = rootA?.via && byID.get(rootA.via.id); x && !aboveMaster.has(x.id); x = x.via && byID.get(x.via.id)) aboveMaster.add(x.id);
     const kids = new Map();
-    const add = (pid, a, remote) => { if (!kids.has(pid)) kids.set(pid, []); kids.get(pid).push({ a, remote }); };
+    const add = (pid, id, a, remote) => { if (!kids.has(pid)) kids.set(pid, []); kids.get(pid).push({ id, a, remote }); };
     for (const a of A) {
       if (a === rootA) continue;
-      let pid = rootID, remote = false;
+      let pid = aboveMaster.has(a.id) ? cloud.id : masterID, remote = false;
       if (mode === 'monitor') {
         const p = isLocal(a) ? a.local.probe : null;
-        if (p && byID.has(p.id) && p.id !== rootID && !isLocal(byID.get(p.id))) { pid = p.id; remote = true; }
-      } else if (a.via && byID.has(a.via.id)) pid = a.via.id;
-      add(pid, a, remote);
+        if (p && byID.has(p.id) && p.id !== masterID && !isLocal(byID.get(p.id))) { pid = p.id; remote = true; }
+      } else if (a.via && (byID.has(a.via.id) || a.via.id === cloud?.id)) pid = a.via.id;
+      add(pid, a.id, a, remote);
     }
-    for (const l of kids.values()) l.sort((x, y) => gi(x.a) - gi(y.a) || byText(x.a.name, y.a.name));
+    if (cloud) add(rootA?.via && (byID.has(rootA.via.id) || rootA.via.id === cloud.id) ? rootA.via.id : cloud.id, masterID, rootA, false);
+    const nm = (k) => (k.a ? k.a.name : '');
+    for (const l of kids.values()) l.sort((x, y) => (x.id === masterID) - (y.id === masterID) || (x.a ? gi(x.a) : 0) - (y.a ? gi(y.a) : 0) || byText(nm(x), nm(y)));
     const seen = new Set();
     const node = (id, a, remote, depth) => {
       seen.add(id);
-      return { id, a, remote, depth, kids: (kids.get(id) || []).filter((k) => !seen.has(k.a.id)).map((k) => node(k.a.id, k.a, k.remote, depth + 1)) };
+      return { id, a, remote, depth, kids: (kids.get(id) || []).filter((k) => !seen.has(k.id)).map((k) => node(k.id, k.a, k.remote, depth + 1)) };
     };
-    const root = node(rootID, rootA, false, 0);
-    // Anything left (a loop in old data): under the master.
+    const root = cloud ? node(cloud.id, cloud, false, 0) : node(masterID, rootA, false, 0);
+    // Anything left (a loop in old data): under the top.
+    if (cloud && !seen.has(masterID)) root.kids.push(node(masterID, rootA, false, 1));
     for (const a of A) if (a !== rootA && !seen.has(a.id)) root.kids.push(node(a.id, a, false, 1));
     return root;
   }
   // Positions: leaves take the next free row; a parent is centred on its children.
   function place(root) {
     let row = 0;
+    // The cloud reaches above and below its row.
+    const top = isVirtual(root.a) ? 20 : 0, bottom = isVirtual(root.a) ? 22 : 0;
     const all = [];
     (function walk(n, parent) {
       n.parent = parent;
       n.x = PAD + n.depth * (W + GAP);
-      if (!n.kids.length) { n.y = PAD + row * ROW; row++; }
+      if (!n.kids.length) { n.y = PAD + top + row * ROW; row++; }
       else { n.kids.forEach((k) => walk(k, n)); n.y = (n.kids[0].y + n.kids[n.kids.length - 1].y) / 2; }
       all.push(n);
     })(root, null);
     const depth = Math.max(...all.map((n) => n.depth));
-    return { all, w: PAD * 2 + (depth + 1) * W + depth * GAP, h: PAD * 2 + Math.max(1, row) * ROW - (ROW - H) };
+    if (top && root.y < PAD + top) { const dy = PAD + top - root.y; all.forEach((n) => { n.y += dy; }); row += dy / ROW; }
+    return { all, w: PAD * 2 + (depth + 1) * W + depth * GAP, h: PAD * 2 + top + bottom + Math.max(1, row) * ROW - (ROW - H) };
   }
   // The state of the tree line to device k (under n): live (both ends answer:
   // a slow pulse runs toward the master; a service down does not stop it),
   // bad (k itself is down: red, still) or neither (unknown, maintenance, cut).
   function lineState(n, k, mode) {
     const cut = mode !== 'monitor' && !!k.a?.unreach;
-    const kh = health(k.a), nh = health(n.a), alive = (h) => (h[0] === 'ok' || h[0] === 'bad') && !h[2];
+    const kh = health(k.a), nh = health(n.a), alive = (h) => ['ok', 'bad', 'part', 'virt'].includes(h[0]) && !h[2];
     return { cut, live: !cut && alive(kh) && alive(nh), bad: !cut && !!kh[2] };
   }
   // The ping time of a device and where it is measured from: "4 ms via probe-1".
   function pingLabel(a) {
-    const L = a && !a.maint && !a.unreach && !probeOut(a) ? chk(a) : null;
+    const L = a && !isVirtual(a) && !a.maint && !a.unreach && !probeOut(a) ? chk(a) : null;
     if (!L || !L.ping || !L.checked || !L.up || !L.rtt_us) return '';
     return `${rttText(L.rtt_us)} via ${clipText(L.probe ? L.probe.name : 'master', 10)}`;
   }
@@ -1430,7 +1461,7 @@ function MapPage() {
   function lines(all, mode) {
     const out = [];
     for (const n of all) {
-      const x1 = n.x + W, y1 = n.y + H / 2;
+      const x1 = n.x + W - (isVirtual(n.a) && n.a.special ? 20 : 0), y1 = n.y + H / 2;
       for (const k of n.kids) {
         const x2 = k.x, y2 = k.y + H / 2, mx = (x1 + x2) / 2;
         const s = lineState(n, k, mode), d = `M${x1} ${y1} C${mx} ${y1} ${mx} ${y2} ${x2} ${y2}`, tk = `t:${n.id}:${k.id}`;
@@ -1462,8 +1493,38 @@ function MapPage() {
     const a = n.a, p = checker(a);
     return `${a ? a.name : 'Master'}: ${health(a)[1]}${p ? ` · checked by ${p.name}` : ''}${a?.via ? ` · connected via ${a.via.name}` : ''}`;
   }
+  // Upstream: a layered cloud in its state colour that breathes, with a
+  // highlight drifting across and an edge that lights up as the pulses of
+  // its lines arrive (every 5 s, in step with them).
+  const CLOUD = 'M30 58 A20 20 0 0 1 26 18 A26 26 0 0 1 72 -2 A32 32 0 0 1 128 6 A22 22 0 0 1 156 30 A16 16 0 0 1 150 58 Z';
+  function cloudSub(u) {
+    if (!u || u.state === 'wait') return 'waiting';
+    if (u.state === 'down') return 'offline';
+    return `${u.rtt_us ? fmtMs(u.rtt_us) : ''}${u.state === 'partial' ? ` · ${u.answering} of ${u.total}` : ''}`;
+  }
+  function cloudBox(n) {
+    const [cls] = health(n.a);
+    return html`<g class="mapcloud ${cls} ${canChange() ? 'click' : ''}" id="map-${n.id}" data-id="${n.id}" ${canChange() ? raw('data-act="open-up"') : ''} transform="translate(${n.x} ${n.y})">
+      <title>${tip(n)}</title>
+      <defs><clipPath id="cloudclip"><path d="${CLOUD}"/></clipPath>
+        <linearGradient id="cloudfill" x1="0" y1="0" x2="0" y2="1"><stop offset="0" class="cl-s1"/><stop offset="1" class="cl-s2"/></linearGradient>
+        <linearGradient id="cloudshine" x1="0" y1="0" x2="1" y2="0"><stop offset="0" stop-color="#fff" stop-opacity="0"/><stop offset="0.5" stop-color="#fff" stop-opacity="0.22"/><stop offset="1" stop-color="#fff" stop-opacity="0"/></linearGradient></defs>
+      <path class="cl-glow" d="${CLOUD}"/>
+      <path class="cl-back" d="${CLOUD}" transform="translate(14 -9) scale(0.9)"/>
+      <path class="cl-base" d="${CLOUD}"/><path class="cl-tint" d="${CLOUD}" fill="url(#cloudfill)"/>
+      <g clip-path="url(#cloudclip)"><rect class="cl-shine" x="-70" y="-30" width="56" height="100" fill="url(#cloudshine)"/></g>
+      <path class="cl-flash" d="${CLOUD}"/>
+      <text class="cl-name" x="90" y="27" text-anchor="middle">${clipText(n.a.name, 16)}</text>
+      <text class="cl-sub" id="cloudsub" x="90" y="44" text-anchor="middle">${cloudSub(st.data?.upstream)}</text></g>`;
+  }
   function box(n, mode) {
+    if (isVirtual(n.a) && n.a.special) return cloudBox(n);
     const a = n.a, [cls, , down] = health(a), name = a ? a.name : 'Master';
+    if (isVirtual(a)) {
+      return html`<g class="mapbox virt ${cls === 'unr' ? 'unr' : ''}" id="map-${n.id}" data-id="${n.id}" transform="translate(${n.x} ${n.y})">
+        <title>${tip(n)}</title><rect width="${W}" height="${H}" rx="8"/><circle cx="16" cy="${H / 2}" r="4.5"/>
+        <text x="30" y="${H / 2 - 2}">${clipText(name, 20)}</text><text class="ip" x="30" y="${H / 2 + 11}">virtual</text></g>`;
+    }
     const ip = a && !isLocal(a) ? devIP(a) : '';
     const p = mode !== 'monitor' ? checker(a) : null;
     return html`<g class="mapbox ${cls} ${down ? 'down' : ''} ${a?.maint ? 'maint' : ''} ${a ? 'click' : ''}" id="map-${n.id}" data-id="${n.id}" ${a ? raw(`data-act="open"`) : ''} transform="translate(${n.x} ${n.y})">
@@ -1505,8 +1566,9 @@ function MapPage() {
         const g = document.getElementById('map-' + n.id);
         if (!g) continue;
         const [cls, , down] = health(n.a);
-        g.classList.remove('ok', 'bad', 'unk', 'unr', 'down', 'maint');
-        g.classList.add(cls);
+        g.classList.remove('ok', 'bad', 'unk', 'unr', 'down', 'maint', 'part');
+        if (cls !== 'virt') g.classList.add(cls);
+        if (isVirtual(n.a) && n.a.special) { const cs = document.getElementById('cloudsub'); if (cs) cs.textContent = cloudSub(d.upstream); }
         if (down) g.classList.add('down');
         if (n.a?.maint) g.classList.add('maint');
         const t = g.querySelector('title');
@@ -1526,13 +1588,19 @@ function MapPage() {
     const legend = mode === 'monitor'
       ? html`<span><svg width="28" height="8"><path class="mapline" d="M0 4 H28"/></svg> monitored by the master</span><span><svg width="28" height="8"><path class="mapline remote" d="M0 4 H28"/></svg> checked by a remote probe</span>`
       : html`<span><svg width="28" height="8"><path class="mapline" d="M0 4 H28"/></svg> connected via</span><span><svg width="28" height="8"><path class="mapline cut" d="M0 4 H28"/></svg> cut off</span>
-        ${mode === 'full' ? html`<span><svg width="28" height="8"><path class="mapline check" d="M0 4 H28"/></svg> checked by a remote probe</span>` : html`<span><b style="color:var(--cyan);font-weight:500">by …</b> checked by a remote probe</span>`}`;
+        ${mode === 'full' ? html`<span><svg width="28" height="8"><path class="mapline check" d="M0 4 H28"/></svg> checked by a remote probe</span>` : html`<span><b style="color:var(--cyan);font-weight:500">by …</b> checked by a remote probe</span>`}
+        ${(d.virtuals || []).some((v) => !v.special) ? html`<span><i class="lg virt"></i>virtual device</span>` : ''}${d.upstream?.enabled ? html`<span><i class="lg part"></i>${d.upstream.name}: partly answering</span>` : ''}`;
+    const gw = d.gateway;
+    const hint = mode !== 'monitor' && gw && !gw.done
+      ? html`<div class="notice small" style="margin-top:10px">${icon('globe')} <b>${gw.name}</b> (${gw.ip}) is the default gateway of ${gw.count} device${gw.count === 1 ? '' : 's'}: probably your internet router.
+          ${d.upstream?.enabled ? html`Set its Connected via to <b>${d.upstream.name}</b> to draw it under the cloud.` : html`Switch on ${canChange() ? html`<a href="#/settings/upstream">Settings → Upstream</a>` : 'Settings → Upstream'} and set its Connected via to it, to show your internet connection on the map.`}</div>`
+      : '';
     setHTML($('#map'), html`<div class="panel mapwrap"><div class="mapctl"><button class="btn ghost sm iconbtn" data-act="zoom" data-f="1.25" title="Zoom in">+</button><button class="btn ghost sm iconbtn" data-act="zoom" data-f="0.8" title="Zoom out">−</button><button class="btn ghost sm" data-act="fit" title="Show the whole map">Fit</button></div>
       <svg class="mapsvg" width="100%" height="${st.hh || 320}" role="img" aria-label="${VIEWS.find((v) => v[0] === mode)[1]} map"><g id="map-vp">
       ${lines(all, mode)}${mode === 'full' ? checkLines(all) : ''}${all.map((n) => box(n, mode))}</g></svg></div>
       <div class="row dim small" style="margin-top:10px;gap:16px"><span><i class="lg ok"></i>up</span><span><i class="lg bad"></i>down or a service down</span>${mode === 'monitor' ? '' : html`<span><i class="lg unr"></i>unreachable</span>`}<span><i class="lg maint"></i>maintenance</span><span><i class="lg none"></i>unknown, waiting or pending</span>
         ${legend}<span><b style="color:var(--muted);font-weight:500">4 ms via …</b> ping time, and who pings</span></div>
-      <div class="dim small" style="margin-top:6px">Scroll or pinch to zoom, drag to move.${mode === 'full' ? ' Point at a device to see only its own lines.' : ''}</div>`);
+      <div class="dim small" style="margin-top:6px">Scroll or pinch to zoom, drag to move.${mode === 'full' ? ' Point at a device to see only its own lines.' : ''}</div>${hint}`);
     const svg = $('#map svg');
     if (mode === 'full') {
       svg.addEventListener('mouseover', (e) => { const g = e.target.closest('.mapbox'); focus(g ? g.dataset.id : ''); });
@@ -1611,6 +1679,7 @@ function MapPage() {
     async refresh() { const d = await GET('overview'); d.groups ||= []; st.data = d; render(); },
     acts: {
       open: (t) => { location.hash = '#/device/' + t.dataset.id; },
+      'open-up': () => { location.hash = '#/settings/upstream'; },
       mode: (t) => { st.mode = t.dataset.m; st.key = ''; render(); },
       zoom: (t) => { const svg = $('#map svg'); if (svg) zoomAt(svg.clientWidth / 2, svg.clientHeight / 2, +t.dataset.f); },
       fit: () => fit(),
@@ -2084,7 +2153,7 @@ async function localEditModal(a, groups, done) {
       <div class="field">Checked by${pick('probe', probeItems(pa, cur, a?.local.probe?.name), cur)}</div>
       <div class="dim small">Master: the master checks the device itself. An agent: that agent checks it, for a network the master cannot reach; its results come in with the agent's contact. ${isNew ? '' : 'The history is kept when this changes.'}
         Only agents with Remote probe switched on are listed; switch it on on the agent's device page.</div>
-      <div class="field">Connected via${pick('via', viaItems(ov.agents, a?.id), a?.via?.id || '')}</div>
+      <div class="field">Connected via${pick('via', viaItems(ov, a?.id), a?.via?.id || '')}</div>
       <div class="dim small">${VIA_HINT}</div>
       <label class="field">Group<select name="group">${groupOptions(groups, a?.group_id || '')}</select></label>
       <div class="actions"><button type="button" class="btn ghost" data-act="cancel">Cancel</button><button class="btn primary">${isNew ? html`${icon('plus')} Add device` : 'Save'}</button></div>
@@ -2101,6 +2170,44 @@ async function localEditModal(a, groups, done) {
     },
   });
 }
+function virtualEditModal(ov, v, done) {
+  openModal(html`<h3>Edit ${v.name}</h3><form class="form" data-submit="save">
+    <label class="field">Name<input type="text" name="name" value="${v.name}" maxlength="64" autofocus required></label>
+    <div class="field">Connected via${pick('via', viaItems(ov, v.id), v.via?.id || '')}</div>
+    <div class="dim small">A virtual device is not checked: it passes on the state of the devices above it.</div>
+    <label class="field">Group<select name="group">${groupOptions(ov.groups, v.group_id || '')}</select></label>
+    <div class="actions"><button type="button" class="btn ghost" data-act="cancel">Cancel</button><button class="btn primary">Save</button></div></form>`, {
+    acts: {
+      cancel: () => closeModal(),
+      save: async (f) => { await POST(`virtuals/${v.id}`, { name: f.name.value, via: f.via.value, group_id: f.group.value }); closeModal(); toast('Saved', 'ok'); done?.(); },
+    },
+  });
+}
+// Upstream state in words: "Online · 3 of 3 answering · 14 ms".
+const upWord = { ok: 'Online', partial: 'Partly online', down: 'Offline', wait: 'Waiting for the first ping', off: 'Not set up' };
+const upClass = { ok: 'c-green', partial: 'c-amber', down: 'c-red', wait: 'dim', off: 'dim' };
+function upText(u) {
+  if (!u) return '';
+  const ms = u.rtt_us ? ` · ${fmtMs(u.rtt_us)}` : '';
+  return html`<span class="${upClass[u.state] || 'dim'}">${upWord[u.state] || u.state}</span>${u.state === 'ok' || u.state === 'partial' || u.state === 'down' ? html`<span class="dim"> · ${u.answering} of ${u.total} answering${ms}</span>` : ''}`;
+}
+// The Upstream tile of the Overview (Settings → Upstream).
+function upTile(u) {
+  if (!u || !u.show_tile) return '';
+  if (!u.enabled) {
+    return html`<a class="panel stat c-cyan click" href="#/settings/upstream" style="text-decoration:none;color:inherit"><div class="label">${u.name}</div><div class="value dim" style="font-size:20px">Not set up</div>
+      <div class="statnote">Monitor the internet connection: Settings → Upstream</div></a>`;
+  }
+  const cls = { ok: 'c-green', partial: 'c-amber', down: 'c-red' }[u.state] || 'c-cyan';
+  const big = { ok: 'Online', partial: 'Partly online', down: 'Offline' }[u.state] || 'Waiting';
+  const ms = u.rtt_us ? ` · ${fmtMs(u.rtt_us)}` : '';
+  return html`<div class="panel stat ${cls}" title="${u.addrs.map((a) => `${a.addr}: ${!a.at ? 'waiting' : a.ok ? fmtMs(a.rtt_us) : 'no answer'}`).join('\n')}"><div class="label">${u.name}</div>
+    <div class="value ${u.state === 'ok' ? 'upv-ok' : ''}">${big}</div>
+    <div class="statnote">${u.state === 'wait' ? 'first ping within a minute' : `${u.answering} of ${u.total} answering${ms}`}</div>
+    ${u.state === 'down' && u.since ? html`<div class="statnote"><span class="c-red">offline for ${dur(now() - u.since)}</span></div>` : ''}
+    ${u.state === 'partial' && u.since ? html`<div class="statnote"><span class="c-amber">since ${dur(now() - u.since)}</span></div>` : ''}</div>`;
+}
+const fmtMs = (us) => (us >= 10000 ? `${Math.round(us / 1000)} ms` : `${(us / 1000).toFixed(1)} ms`);
 async function localDelete(a, done) {
   if (!(await confirmBox(`Delete ${a.name}?`, 'It is no longer checked, and its history is removed. This cannot be undone.', { okText: 'Delete device', danger: true }))) return false;
   await POST(`locals/${a.id}/delete`);
@@ -2760,6 +2867,15 @@ function Devices() {
         ${ifChange(html`<td class="w1"><div class="row" style="flex-wrap:nowrap;justify-content:flex-start">${isLocal(a)
     ? html`<button class="btn ghost sm" style="min-width:104px;justify-content:flex-start" data-act="l-edit" data-id="${a.id}">${icon('edit')} Edit</button><button class="btn danger sm" data-act="l-delete" data-id="${a.id}" title="Delete">${icon('trash')}</button>`
     : html`<button class="btn ghost sm" style="min-width:104px;justify-content:flex-start" data-act="rename" data-id="${a.id}">${icon('edit')} Edit</button><button class="btn danger sm" data-act="remove" data-id="${a.id}" title="Remove">${icon('trash')}</button>`}</div></td>`)}</tr>`)}</tbody></table></div>` : html`<div class="panel empty">No devices yet.</div>`);
+    const virt = (d.virtuals || []);
+    setHTML($('#s-virt'), virt.length ? html`<h2 style="font-size:15px;margin:6px 0 12px">Virtual devices</h2><div class="panel scrollx"><table class="tbl"><thead><tr><th>Device</th><th>Connected via</th><th>Group</th><th>State</th><th class="w1"></th></tr></thead>
+      <tbody>${virt.map((v) => html`<tr><td class="nowrap">${v.special ? icon('globe') : html`<span class="dot virt"></span>`} <b>${v.name}</b>${v.special ? html` <span class="badge info xs">upstream</span>` : ''}</td>
+        <td class="muted">${v.via?.name || html`<span class="dim">—</span>`}</td>
+        <td class="muted">${v.special ? html`<span class="dim">—</span>` : d.groups.find((g) => g.id === v.group_id)?.name || 'Ungrouped'}</td>
+        <td class="muted nowrap">${v.special ? upText(d.upstream) : v.unreach ? html`<span class="c-unr">unreachable</span>, behind ${v.unreach.name}` : html`<span class="dim">not checked</span>`}</td>
+        ${ifChange(html`<td class="w1"><div class="row" style="flex-wrap:nowrap;justify-content:flex-start">${v.special
+    ? html`<a class="btn ghost sm" style="min-width:104px;justify-content:flex-start" href="#/settings/upstream">${icon('cog')} Settings</a>`
+    : html`<button class="btn ghost sm" style="min-width:104px;justify-content:flex-start" data-act="v-edit" data-id="${v.id}">${icon('edit')} Edit</button><button class="btn danger sm" data-act="v-delete" data-id="${v.id}" title="Delete">${icon('trash')}</button>`}</div></td>`)}</tr>`)}</tbody></table></div>` : '');
     if (!st.addShown) { st.addShown = true; addPanel(); }
   }
   function addPanel() {
@@ -2767,8 +2883,15 @@ function Devices() {
     if (!box || !canChange()) return;
     const groups = st.data?.groups || [];
     setHTML(box, html`
-      <div class="tabs" style="margin:12px 0 4px"><button type="button" class="${st.type === 'agent' ? 'on' : ''}" data-act="add-type" data-t="agent">Agent</button><button type="button" class="${st.type === 'local' ? 'on' : ''}" data-act="add-type" data-t="local">Agentless</button></div>
-      ${st.type === 'agent' ? html`
+      <div class="tabs" style="margin:12px 0 4px"><button type="button" class="${st.type === 'agent' ? 'on' : ''}" data-act="add-type" data-t="agent">Agent</button><button type="button" class="${st.type === 'local' ? 'on' : ''}" data-act="add-type" data-t="local">Agentless</button><button type="button" class="${st.type === 'virtual' ? 'on' : ''}" data-act="add-type" data-t="virtual">Virtual</button></div>
+      ${st.type === 'virtual' ? html`
+        <div class="muted small">A place in the network that Coremon cannot check, such as an unmanaged switch: it has no address and no services. Other devices can be connected via it, and it is shown on the network map. It passes on the state of the devices above it.</div>
+        <form class="row" style="margin-top:14px" data-submit="v-add">
+          <input type="text" name="name" placeholder="Name, e.g. switch-attic" maxlength="64" style="width:220px" required>
+          <select name="group" title="Group">${groupOptions(groups, '')}</select>
+          <span title="Connected via: the device it sits behind on the network">${pick('via', viaItems(st.data, '').map((x) => ({ ...x, label: `Connected via: ${x.label}`, find: `${x.find || ''} ${x.label}` })), '', { style: 'width:250px' })}</span>
+          <button class="btn primary">${icon('plus')} Add device</button>
+        </form>` : st.type === 'agent' ? html`
         <div class="muted small">An agent on the device does all checks: updates, applications, CVEs and system details. Generates a single-use install command. Run it as <b>root</b> on the device (VM, container, bare metal — including this master container). The agent connects out to the master; no SSH or open ports needed.</div>
         <form class="row" style="margin-top:14px" data-submit="gen">
           <input type="text" name="note" placeholder="Note (optional), e.g. web-01" maxlength="64" style="width:240px">
@@ -2783,7 +2906,7 @@ function Devices() {
           <input type="text" name="address" placeholder="IP address, e.g. 192.168.5.20" style="width:220px" required spellcheck="false" autocomplete="off">
           <select name="group" title="Group">${groupOptions(groups, '')}</select>
           <span title="Checked by: the master itself, or an agent for a network the master cannot reach">${pick('probe', probeItems(st.probes || { agents: [], max: 200 }, '').map((x) => ({ ...x, label: `Checked by: ${x.label}` })), '', { style: 'width:230px' })}</span>
-          <span title="Connected via: the device it sits behind on the network">${pick('via', viaItems(st.data?.agents || [], '').map((x) => ({ ...x, label: `Connected via: ${x.label}`, find: `${x.find || ''} ${x.label}` })), '', { style: 'width:250px' })}</span>
+          <span title="Connected via: the device it sits behind on the network">${pick('via', viaItems(st.data, '').map((x) => ({ ...x, label: `Connected via: ${x.label}`, find: `${x.find || ''} ${x.label}` })), '', { style: 'width:250px' })}</span>
           <button class="btn primary">${icon('plus')} Add device</button>
         </form>
         <div class="dim small" style="margin-top:8px">IPv4 or IPv6 only, no host names. An address can belong to one device only, whether agent or agentless; devices checked by different agents may share an address (separate networks). Only agents with Remote probe switched on (on the agent's device page) can check devices.
@@ -2820,6 +2943,7 @@ function Devices() {
             <div id="s-groups"></div>
           </div>
           <div><h2 style="font-size:15px;margin:6px 0 12px">All devices</h2><div id="s-all"></div></div>
+          <div id="s-virt"></div>
         </div>`);
     },
     async refresh() {
@@ -2857,6 +2981,18 @@ function Devices() {
         st.addShown = false; // the new device can now be chosen as "Connected via"
         view.refresh();
       },
+      'v-add': async (f) => {
+        const res = await POST('virtuals', { name: f.name.value, group_id: f.group.value, via: f.via.value });
+        toast(`${res.name} added`, 'ok');
+        st.addShown = false;
+        view.refresh();
+      },
+      'v-edit': (t) => virtualEditModal(st.data, st.data.virtuals.find((v) => v.id === t.dataset.id), () => view.refresh()),
+      'v-delete': async (t) => {
+        const v = st.data.virtuals.find((x) => x.id === t.dataset.id);
+        if (!(await confirmBox(`Delete ${v.name}?`, 'Devices connected via it are then connected via nothing. This cannot be undone.', { okText: 'Delete device', danger: true }))) return;
+        await POST(`virtuals/${v.id}/delete`); toast(`${v.name} deleted`, 'ok'); st.addShown = false; view.refresh();
+      },
       'l-edit': (t) => localEditModal(agentBy(t.dataset.id), st.data.groups, () => view.refresh()),
       'l-delete': (t) => localDelete(agentBy(t.dataset.id), () => view.refresh()),
       'set-group': async (t) => {
@@ -2869,7 +3005,7 @@ function Devices() {
         openModal(html`<h3>Edit ${ag.name}</h3><form class="form" data-submit="save">
           <label class="field">Display name<input type="text" name="name" value="${ag.name}" maxlength="64" autofocus required></label>
           <div class="dim small">Host name on the device: ${ag.facts.hostname || '—'}. Only the name shown in Coremon changes.</div>
-          <div class="field">Connected via${pick('via', viaItems(st.data.agents, ag.id), ag.via?.id || '')}</div>
+          <div class="field">Connected via${pick('via', viaItems(st.data, ag.id), ag.via?.id || '')}</div>
           <div class="dim small">${VIA_HINT}</div>
           <div class="actions"><button type="button" class="btn ghost" data-act="cancel">Cancel</button><button class="btn primary">Save</button></div></form>`, {
           acts: {
@@ -3405,6 +3541,66 @@ function Audit() {
 function settingsHead(sub, title, desc) {
   return html`${settingsTabs(sub)}<div class="page-head"><div><h1>${title}</h1><div class="sub">${desc}</div></div></div>
     ${session.initial_password && sub !== 'account' ? html`<div class="notice">You are still using the generated initial password — <a href="#/settings/account">change it under My Account</a>.</div>` : ''}`;
+}
+
+// Settings → Upstream: the internet connection as a virtual device, pinged
+// by the master every minute.
+function SettingsUpstream() {
+  const st = { d: null, built: false };
+  const DNS = { '9.9.9.9': 'Quad9, Switzerland', '86.54.11.100': 'DNS4EU unfiltered, EU', '1.1.1.1': 'Cloudflare' };
+  function results() {
+    const u = st.d?.upstream;
+    const box = $('#up-live');
+    if (!box || !u) return;
+    if (!u.enabled) { setHTML(box, html`<div class="dim small">Switched off: nothing is pinged.</div>`); return; }
+    setHTML(box, html`<div class="row" style="gap:10px;align-items:baseline"><b>${u.name}</b> ${upText(u)}${u.since && u.state !== 'wait' ? html`<span class="dim small">since ${fmtDate(u.since)}</span>` : ''}</div>
+      <table class="tbl" style="margin-top:8px;max-width:680px"><tbody>${u.addrs.map((a) => html`<tr><td class="w1"><span class="dot ${!a.at ? 'unk' : a.ok ? 'on' : 'off'}"></span></td>
+        <td class="mono">${a.addr}</td><td class="muted small">${DNS[a.addr] || ''}</td>
+        <td class="nowrap">${!a.at ? html`<span class="dim">waiting</span>` : a.ok ? html`<span class="c-green">${fmtMs(a.rtt_us)}</span>` : html`<span class="c-red">no answer</span> <span class="dim small">${a.error || ''}</span>`}</td>
+        <td class="dim small nowrap">${a.at ? when(a.at) : ''}</td></tr>`)}</tbody></table>`);
+  }
+  function build() {
+    const d = st.d, u = d.upstream, addrs = d.addrs || [];
+    setHTML($('#up-form'), html`<form class="form" data-submit="save"><fieldset class="plain" ${canChange() ? '' : 'disabled'}>
+      <label class="checkrow"><input type="checkbox" name="enabled" ${u.enabled ? 'checked' : ''}> Monitor the internet connection as a virtual device</label>
+      <div class="dim small">Adds a special virtual device that other devices can be connected via, usually your internet router. It is the top of the network map, drawn as a cloud.
+        It is only created and removed here; switching it off also clears every "Connected via" to it. It is never the cause of "unreachable" for the devices below it.</div>
+      <label class="field">Name<input type="text" name="name" value="${u.name}" maxlength="64" placeholder="${d.default_name}" style="max-width:320px"></label>
+      <div class="dim small">Used for the cloud on the map, the Overview tile and the "Connected via" choice.</div>
+      <div class="field">Addresses to ping<div class="stack" style="gap:6px;max-width:320px">${[0, 1, 2].map((i) => html`<input type="text" name="addr${i}" value="${addrs[i] || ''}" placeholder="${d.defaults[i]}" spellcheck="false" autocomplete="off">`)}</div></div>
+      <div class="dim small">IP addresses only, pinged by the master every minute. Online when all answer, partly online when some do, offline when none do. The defaults are public DNS servers: Quad9 (Switzerland), DNS4EU (EU) and Cloudflare. An empty field is skipped.</div>
+      <label class="checkrow"><input type="checkbox" name="tile" ${u.show_tile ? 'checked' : ''}> Show the ${u.name} tile on the Overview</label>
+      ${ifChange(html`<div class="row"><button class="btn primary">Save</button><button type="button" class="btn ghost" data-act="defaults">Default addresses</button></div>`)}
+    </fieldset></form>`);
+    st.built = true;
+  }
+  return {
+    interval: 5000,
+    mount(el) {
+      el.innerHTML = r(html`${settingsTabs('upstream')}
+        <div class="page-head"><div><h1>Upstream</h1><div class="sub">The internet connection, as a virtual device on the network map</div></div></div>
+        <div class="stack">
+          <div class="panel panel-pad"><h2 style="margin:0 0 8px">Settings</h2><div id="up-form"></div></div>
+          <div class="panel panel-pad"><h2 style="margin:0 0 8px">Live result</h2><div id="up-live"></div></div>
+        </div>`);
+    },
+    async refresh() {
+      st.d = await GET('upstream');
+      if (!st.built) build();
+      results();
+    },
+    acts: {
+      defaults: () => { const f = $('#up-form form'); st.d.defaults.forEach((a, i) => { f[`addr${i}`].value = a; }); },
+      save: async (f) => {
+        const body = { enabled: f.enabled.checked, name: f.name.value, addrs: [0, 1, 2].map((i) => f[`addr${i}`].value.trim()), show_tile: f.tile.checked };
+        const res = await POST('upstream', body);
+        toast(res.upstream.enabled ? `${res.upstream.name} saved — the first ping follows within seconds` : 'Saved — switched off', 'ok');
+        st.built = false;
+        setTimeout(() => view.refresh(), 2500);
+        view.refresh();
+      },
+    },
+  };
 }
 
 function SettingsGeneral() {

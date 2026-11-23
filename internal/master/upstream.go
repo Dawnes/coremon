@@ -27,6 +27,9 @@ func (s *Server) viaOf(id string) string {
 	if a := s.st.st.Agents[id]; a != nil {
 		return a.Via
 	}
+	if v := s.st.st.Virtuals[id]; v != nil {
+		return v.Via
+	}
 	return ""
 }
 
@@ -38,6 +41,9 @@ func (s *Server) devRefOf(id string) *devRef {
 	}
 	if a := s.st.st.Agents[id]; a != nil && a.Status != StatusPending {
 		return &devRef{ID: a.ID, Name: a.Name}
+	}
+	if v := s.st.st.Virtuals[id]; v != nil {
+		return &devRef{ID: v.ID, Name: v.Name}
 	}
 	return nil
 }
@@ -106,6 +112,11 @@ func (s *Server) dropVia(id string) {
 			a.Via = ""
 		}
 	}
+	for _, v := range s.st.st.Virtuals {
+		if v.Via == id {
+			v.Via = ""
+		}
+	}
 }
 
 // failing: the device itself is down, not in maintenance: an agent that
@@ -139,12 +150,21 @@ func (s *Server) inMaint(id string) bool {
 // blockedBy: the device that cuts id off: walking up from its "Connected
 // via", the highest device of the unbroken run of devices that are down
 // or in maintenance. nil when the device right above it is fine (or there
-// is none). Caller holds s.st.mu.
+// is none). Virtual devices cannot be checked: they pass on the state of
+// the devices above them and are never the cause themselves. Upstream (the
+// internet) is never a cause either: the network map shows its state.
+// Caller holds s.st.mu.
 func (s *Server) blockedBy(id string, now int64) *devRef {
 	var cause string
 	seen := map[string]bool{id: true}
 	for x := s.viaOf(id); x != "" && !seen[x]; x = s.viaOf(x) {
 		seen[x] = true
+		if v := s.st.st.Virtuals[x]; v != nil {
+			if v.Special != "" {
+				break
+			}
+			continue
+		}
 		if !s.inMaint(x) && !s.failing(x, now) {
 			break
 		}

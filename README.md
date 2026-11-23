@@ -49,10 +49,20 @@ as **agentless** devices: the master itself pings them and checks their services
 * **Network dependencies**: each device can be **connected via** another device,
   such as a switch or the host of a VM. When that device is down or in
   maintenance, the devices behind it show as unreachable instead of down: the
-  cause is shown once, and their checks keep running.
+  cause is shown once, and their checks keep running. A **virtual** device (only
+  a name, a group and a Connected via) stands for something Coremon cannot
+  check, such as an unmanaged switch: devices can be connected via it, it is
+  drawn on the network map and it passes on the state of the devices above it.
+* **Upstream**: Settings → Upstream adds the internet connection as a special
+  virtual device. The master pings three addresses every minute (by default
+  the public DNS servers 9.9.9.9, 86.54.11.100 and 1.1.1.1): online when all
+  answer, partly online when some do, offline when none do. It has its own
+  tile on the Overview and is the top of the network map. The device that is
+  the default gateway of most agents is suggested as the router to connect via it.
 * **Map**: a live drawing of every device, as the network (who is connected via
   whom, with the break where a device is down), as monitoring (the master or a
   remote probe) or both together, coloured green, red, unreachable or grey.
+  With Upstream on, the network views start at a cloud in its state colour.
   Healthy lines carry a slow pulse toward the master, lines show the ping time
   and who measures it, and the map zooms and pans (it opens fitted to the screen).
 * **Maintenance**: pause all checks of a device for 5 minutes up to 4 hours, or

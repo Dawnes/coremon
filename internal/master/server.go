@@ -78,6 +78,7 @@ type Server struct {
 	osi           osInfo
 	vul           vulnStore
 	loc           localState
+	up            upstreamState
 	pinger        pingFunc
 	svcCheck      svcCheckFunc
 	checksDirty   bool              // check results changed; guarded by st.mu
@@ -198,6 +199,7 @@ func New(cfg Config) (*Server, error) {
 		audit: &auditLog{path: filepath.Join(cfg.DataDir, "audit.jsonl")}, wakes: map[string]chan struct{}{},
 		hashSem: make(chan struct{}, hashAtOnce), pinger: icmpPing, svcCheck: serviceCheck}
 	s.loc.next, s.loc.busy = map[string]time.Time{}, map[string]bool{}
+	s.up.kick = make(chan struct{}, 1)
 	s.loadChecks()
 
 	pubPath := cfg.SigningKeyPath
@@ -375,6 +377,12 @@ func (s *Server) routes() http.Handler {
 	change("POST /api/ui/agents/{id}/probe/resend", s.handleProbeResend)
 	change("GET /api/ui/probe-agents", s.handleProbeChoices)
 	change("POST /api/ui/actions", s.handleActions)
+	change("POST /api/ui/virtuals", s.handleVirtualCreate)
+	change("POST /api/ui/virtuals/{id}", s.handleVirtualUpdate)
+	change("POST /api/ui/virtuals/{id}/delete", s.handleVirtualDelete)
+	view("GET /api/ui/upstream", s.handleUpstreamGet)
+	change("POST /api/ui/upstream", s.handleUpstreamSave)
+	change("POST /api/ui/upstream/via", s.handleUpstreamVia)
 	change("POST /api/ui/locals", s.handleLocalCreate)
 	change("POST /api/ui/locals/{id}", s.handleLocalUpdate)
 	change("POST /api/ui/locals/{id}/delete", s.handleLocalDelete)
@@ -498,6 +506,7 @@ func (s *Server) Run(ctx context.Context) error {
 	go s.nvdLoop(stop)
 	go s.backupLoop(stop)
 	go s.localLoop(stop)
+	go s.upstreamLoop(stop)
 	go s.checksLoop(stop)
 	handler := s.routes()
 	s.handler = handler

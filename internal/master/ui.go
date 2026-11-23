@@ -182,6 +182,7 @@ func (s *Server) handleOverview(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, map[string]any{
 		"agents": agents, "groups": s.st.st.Groups, "active_jobs": active, "server_time": time.Now().Unix(),
 		"settings": s.st.st.Settings, "repo": s.repo.summary(),
+		"virtuals": s.virtualViews(), "upstream": s.upstreamView(), "gateway": s.gateway(),
 	})
 }
 
@@ -785,6 +786,9 @@ func (s *Server) handleAudit(w http.ResponseWriter, r *http.Request) {
 	for _, d := range s.st.st.Locals {
 		names[d.ID] = d.Name
 	}
+	for _, v := range s.st.st.Virtuals {
+		names[v.ID] = v.Name
+	}
 	users := []string{}
 	for _, u := range s.st.st.Users {
 		users = append(users, u.Name)
@@ -880,6 +884,13 @@ func (s *Server) handleGroupDelete(w http.ResponseWriter, r *http.Request) {
 	for _, d := range s.st.st.Locals {
 		if d.GroupID == id {
 			d.GroupID, d.Order = "", next
+			next++
+			moved++
+		}
+	}
+	for _, v := range s.st.st.Virtuals {
+		if v.GroupID == id {
+			v.GroupID, v.Order = "", next
 			next++
 			moved++
 		}

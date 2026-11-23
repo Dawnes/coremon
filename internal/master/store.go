@@ -281,15 +281,17 @@ func (s *store) lastActiveAdmin(u *User) bool {
 }
 
 type State struct {
-	Users       []*User                 `json:"users"`
-	InitialUser string                  `json:"initial_user,omitempty"`
-	Settings    Settings                `json:"settings"`
-	Groups      []*Group                `json:"groups"`
-	Agents      map[string]*Agent       `json:"agents"`
-	Locals      map[string]*LocalDevice `json:"locals,omitempty"`
-	Local       LocalSettings           `json:"local"`
-	Tokens      map[string]*EnrollToken `json:"tokens"`
-	Jobs        []*Job                  `json:"-"` // jobs.dat
+	Users       []*User                   `json:"users"`
+	InitialUser string                    `json:"initial_user,omitempty"`
+	Settings    Settings                  `json:"settings"`
+	Groups      []*Group                  `json:"groups"`
+	Agents      map[string]*Agent         `json:"agents"`
+	Locals      map[string]*LocalDevice   `json:"locals,omitempty"`
+	Local       LocalSettings             `json:"local"`
+	Virtuals    map[string]*VirtualDevice `json:"virtuals,omitempty"`
+	Upstream    UpstreamSettings          `json:"upstream"`
+	Tokens      map[string]*EnrollToken   `json:"tokens"`
+	Jobs        []*Job                    `json:"-"` // jobs.dat
 
 	NVDKey string `json:"nvd_key,omitempty"`
 
@@ -348,6 +350,15 @@ func openStore(dir string) (*store, error) {
 			d.GroupID = ""
 		}
 	}
+	if s.st.Virtuals == nil {
+		s.st.Virtuals = map[string]*VirtualDevice{}
+	}
+	for _, v := range s.st.Virtuals {
+		if v.GroupID != "" && s.group(v.GroupID) == nil {
+			v.GroupID = ""
+		}
+	}
+	s.st.Upstream.normalize()
 	s.st.Settings.normalize()
 	s.loadAgents()
 	s.loadJobs()
@@ -385,6 +396,11 @@ func (s *store) nextOrder(groupID string) int {
 	for _, d := range s.st.Locals {
 		if d.GroupID == groupID && d.Order >= n {
 			n = d.Order + 1
+		}
+	}
+	for _, v := range s.st.Virtuals {
+		if v.GroupID == groupID && v.Order >= n {
+			n = v.Order + 1
 		}
 	}
 	return n
