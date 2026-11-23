@@ -283,6 +283,8 @@ ul.plainlist { margin: 0; padding-left: 18px; line-height: 1.8; }
 .card.a-unr { --accent-bar: repeating-linear-gradient(90deg, var(--unr) 0 10px, transparent 10px 16px); }
 .big.maint { color: var(--blue); display: flex; align-items: center; }
 .card .big.unr { color: var(--unr); }
+/* A virtual device: dashed, neutral, not checked. */
+.card.virt { border-style: dashed; border-color: rgba(148, 163, 184, 0.35); background: transparent; box-shadow: none; }
 .card .svcline.unr { color: var(--unr); }
 .big.maint svg { width: 32px; height: 32px; }
 .card .top { display: flex; align-items: center; gap: 9px; }
@@ -401,7 +403,7 @@ ul.plainlist { margin: 0; padding-left: 18px; line-height: 1.8; }
 .mapctl { position: absolute; top: 10px; right: 10px; z-index: 2; display: flex; gap: 4px; }
 .mapctl .iconbtn { font-size: 16px; line-height: 1; }
 /* Healthy lines: a slow pulse toward the master; a line to a down device: red and still. */
-.mappulse { fill: none; stroke: var(--cyan); stroke-width: 2.2; stroke-linecap: round; stroke-dasharray: 5 195; opacity: 0; pointer-events: none; }
+.mappulse { fill: none; stroke: var(--cyan); stroke-width: 2.2; stroke-linecap: round; stroke-dasharray: 5 95; opacity: 0; pointer-events: none; }
 .mappulse.live { opacity: 0.85; animation: map-pulse 5s linear infinite; }
 @keyframes map-pulse { from { stroke-dashoffset: 0; } to { stroke-dashoffset: 200; } }
 .mapline.bad { stroke: rgba(248, 113, 113, 0.6); }
@@ -438,7 +440,7 @@ ul.plainlist { margin: 0; padding-left: 18px; line-height: 1.8; }
 .lg.virt { background: transparent; border: 1.5px dashed #94a3b8; box-sizing: border-box; }
 /* Upstream: a layered cloud in its state colour. Green breathes, a highlight
    drifts across it and its edge lights up as the line pulses arrive (every
-   5 s, in step with them); amber does so slower and dimmer; red stands
+   2.5 s, in step with them); amber does so slower and dimmer; red stands
    still and pulses red. */
 .mapcloud { --c: #94a3b8; }
 .mapcloud.ok { --c: #4ade80; } .mapcloud.part { --c: #fbbf24; } .mapcloud.bad { --c: #f87171; }
@@ -454,10 +456,10 @@ ul.plainlist { margin: 0; padding-left: 18px; line-height: 1.8; }
 .mapcloud text.cl-sub { fill: var(--muted); font-family: var(--mono); font-size: 10.5px; }
 .mapcloud.ok .cl-glow { animation: cl-breathe 6s ease-in-out infinite; }
 .mapcloud.ok .cl-shine { opacity: 1; animation: cl-drift 10s ease-in-out infinite; }
-.mapcloud.ok .cl-flash { animation: cl-flash 5s linear 2.5s infinite; }
+.mapcloud.ok .cl-flash { animation: cl-flash 2.5s linear infinite; }
 .mapcloud.part .cl-glow { animation: cl-breathe-dim 9s ease-in-out infinite; }
 .mapcloud.part .cl-shine { opacity: 0.5; animation: cl-drift 15s ease-in-out infinite; }
-.mapcloud.part .cl-flash { animation: cl-flash-dim 5s linear 2.5s infinite; }
+.mapcloud.part .cl-flash { animation: cl-flash-dim 2.5s linear infinite; }
 .mapcloud.bad .cl-glow { animation: cl-red 1.8s ease-in-out infinite; }
 @keyframes cl-breathe { 0%, 100% { opacity: 0.16; } 50% { opacity: 0.5; } }
 @keyframes cl-breathe-dim { 0%, 100% { opacity: 0.1; } 50% { opacity: 0.28; } }

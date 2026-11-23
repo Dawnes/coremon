@@ -56,6 +56,15 @@ func TestVirtualAndUpstream(t *testing.T) {
 	if code, _ := c.do("POST", "/api/ui/virtuals/"+v.ID, `{"via":"l_pc"}`); code != 400 {
 		t.Error("loop accepted")
 	}
+	// Virtual devices are arranged on the Overview like other devices.
+	c.do("POST", "/api/ui/groups", `{"name":"Net"}`)
+	gid := s.st.st.Groups[0].ID
+	if code, b := c.do("POST", "/api/ui/layout", `{"groups":[{"id":"`+gid+`","agents":["`+v.ID+`","l_rt"]},{"id":"","agents":["l_pc"]}]}`); code != 200 {
+		t.Fatalf("layout: %d %s", code, b)
+	}
+	if x := s.st.st.Virtuals[v.ID]; x.GroupID != gid || x.Order != 0 {
+		t.Errorf("virtual after layout: %+v", x)
+	}
 
 	s.st.mu.Lock()
 	rt, pc := s.st.st.Locals["l_rt"], s.st.st.Locals["l_pc"]

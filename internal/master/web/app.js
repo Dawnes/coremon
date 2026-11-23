@@ -532,8 +532,8 @@ function route() {
     dashboard: { overview: Dashboard, devices: DeviceList, apps: AppList, map: MapPage },
     about: { about: AboutPage, license: LicensePage },
   };
-  const views = { device: (p) => (/^l_/.test(p[0]) ? LocalPage(p) : AgentPage(p)) };
-  if (parts[0] === 'device' && !/^[al]_[0-9a-f]{16}$/.test(parts[1] || '')) {
+  const views = { device: (p) => (/^l_/.test(p[0]) ? LocalPage(p) : /^v_/.test(p[0]) ? VirtualPage(p) : AgentPage(p)) };
+  if (parts[0] === 'device' && !/^[alv]_[0-9a-f]{16}$/.test(parts[1] || '')) {
     location.hash = '#/';
     return;
   }
@@ -597,7 +597,7 @@ const isLocal = (a) => a.monitor === 'local';
 // Down: an agent device that stopped reporting, or a local device that stopped answering.
 // Unreachable (a.unreach): down, but cut off behind a device above it that
 // is down or in maintenance; not a failure of its own.
-const isDown = (a) => !a.maint && !a.unreach && (isLocal(a) ? a.local.checked && !a.local.up : !a.online && a.status !== 'pending');
+const isDown = (a) => !isVirtual(a) && !a.maint && !a.unreach && (isLocal(a) ? a.local.checked && !a.local.up : !a.online && a.status !== 'pending');
 const unrText = (a) => `unreachable · behind ${a.unreach.name}`;
 // The address a device is known by: an agentless device's own, or an agent's first IPv4 (not loopback).
 const devIP = (a) => {
@@ -611,6 +611,9 @@ const devIP = (a) => {
 // below it (no loops). The device that is the default gateway of most
 // agents is marked: probably the internet router.
 const isVirtual = (a) => a?.monitor === 'virtual';
+// The virtual devices (not Upstream) as list entries for the Overview and
+// the Device List: no checks and no agent data.
+const virtualDevs = (d) => (d.virtuals || []).filter((v) => !v.special).map((v) => ({ ...v, facts: {}, status: 'active' }));
 function viaItems(ov, self) {
   const all = [...(ov?.agents || []), ...(ov?.virtuals || [])];
   const below = new Set([self]);
@@ -693,6 +696,7 @@ const checksDownShort = (x) => `${x.n} ${x.L.ping ? 'check' : 'service'}${x.n ==
 // What failed: the first service that is down and its step, or the ping.
 const checksFailText = (x) => (x.L.svc_fail ? `${x.L.svc_fail.name}${x.L.svc_fail.step && x.L.svc_fail.step !== 'connect' ? `: ${stepLabel(x.L.svc_fail.step).toLowerCase()}` : ''}` : x.ping ? 'ping: no answer' : '');
 function agentDot(a) {
+  if (isVirtual(a)) return a.unreach ? html`<span class="dot unr" title="${unrText(a)}"></span>` : html`<span class="dot virt" title="virtual device"></span>`;
   if (a.maint) return html`<span class="dot maint" title="${maintText(a.maint)}"></span>`;
   if (a.unreach) return html`<span class="dot unr" title="${unrText(a)}"></span>`;
   if (isLocal(a)) {
@@ -842,7 +846,8 @@ function approveModal(a, groups) {
 function layoutOf(data) {
   const lists = new Map(data.groups.map((g) => [g.id, []]));
   lists.set('', []);
-  for (const a of data.agents) (lists.get(a.group_id) || lists.get('')).push(a.id);
+  const all = [...data.agents, ...(data.vdev || virtualDevs(data))].sort((x, y) => (x.order ?? 0) - (y.order ?? 0));
+  for (const a of all) (lists.get(a.group_id) || lists.get('')).push(a.id);
   return lists;
 }
 async function saveLayout(groupsOrder, lists) {
@@ -851,12 +856,14 @@ async function saveLayout(groupsOrder, lists) {
 }
 
 const FILTER_CHIPS = [['all', 'No filter'], ['updates', 'Updates'], ['reboot', 'Reboot'], ['offline', 'Offline'], ['agent', 'Agent outdated']];
-const TYPE_TABS = [['all', 'All'], ['agent', 'Agents'], ['local', 'Agentless']];
+const TYPE_TABS = [['all', 'All'], ['agent', 'Agents'], ['local', 'Agentless'], ['virtual', 'Virtual']];
 // The device type switch next to the filter chips (never remembered).
 const typeTabs = (cur) => TYPE_TABS.map(([k, l]) => html`<button class="${cur === k ? 'on' : ''}" data-act="type" data-t="${k}">${l}</button>`);
 function agentMatches(a, f, q, groups, type) {
   const u = a.updates || {};
-  if (type === 'agent' && isLocal(a)) return false;
+  // Virtual devices: only under All and Virtual, and never in a filter chip.
+  if (isVirtual(a) ? (type !== 'all' && type !== 'virtual') || f !== 'all' : type === 'virtual') return false;
+  if (type === 'agent' && (isLocal(a) || isVirtual(a))) return false;
   if (type === 'local' && !isLocal(a)) return false;
   if (f === 'updates' && !(u.total > 0)) return false;
   if (f === 'reboot' && !u.reboot_required) return false;
@@ -864,7 +871,7 @@ function agentMatches(a, f, q, groups, type) {
   if (f === 'agent' && (a.core_is_latest || !a.core_version)) return false;
   if (q) {
     const g = groups.find((x) => x.id === a.group_id);
-    const hay = `${a.name} ${isLocal(a) ? 'agentless ping' : osLabel(a.facts)} ${(a.facts.ips || []).join(' ')} ${g ? g.name : ''} ${a.core_version}`.toLowerCase();
+    const hay = `${a.name} ${isVirtual(a) ? 'virtual' : isLocal(a) ? 'agentless ping' : osLabel(a.facts)} ${(a.facts.ips || []).join(' ')} ${g ? g.name : ''} ${a.core_version || ''}`.toLowerCase();
     if (!hay.includes(q.toLowerCase())) return false;
   }
   return true;
@@ -902,7 +909,7 @@ function Dashboard() {
           <div style="min-width:0"><div class="name">${a.name}</div><div class="os">Agentless${L.probe ? html` · via ${L.probe.name}` : ''}</div><div class="os"><span class="ip">${L.address}</span></div></div></div>
         <div class="mid">${big}<div class="badges">${uptime}</div></div>
         <div class="inforow"><span class="uptime">${icon('clock')}${state === 'maint' ? 'no checks now' : state === 'unk' ? 'no results now' : state === 'wait' ? (L.fails ? 'not decided yet' : 'not checked yet') : `${L.up ? 'up' : state === 'unr' ? 'no answer' : 'down'} ${dur(now() - L.since)}`}</span><span class="spacer"></span>${state === 'up' && L.ping && L.rtt_us ? html`<span class="tag mono">${rttText(L.rtt_us)}</span>` : ''}</div>
-        <div class="foot"><span>${L.last_check ? when(L.last_check, 'Services checked ') : 'waiting'}</span></div>
+        <div class="foot"><span>${L.last_check ? html`${when(L.last_check, 'Services checked ')}.` : 'waiting'}</span></div>
       </div>`;
   }
   // Footer of an online agent tile: when its updates and its services were
@@ -913,9 +920,20 @@ function Dashboard() {
     if (a.updates?.checked_at) parts.push(when(a.updates.checked_at, 'Updates checked '));
     const svc = Math.max(a.last_seen || 0, a.checks?.last_check || 0);
     if (svc) parts.push(when(svc, 'Services checked '));
-    return parts.length ? parts.map((p, i) => html`${i ? '. ' : ''}${p}`) : 'online';
+    return parts.length ? html`${parts.map((p, i) => html`${i ? '. ' : ''}${p}`)}.` : 'online';
+  }
+  // A virtual device: dashed and neutral, a dash in the middle; only its
+  // unreachable state is shown (it is not checked itself).
+  function virtualCard(a) {
+    return html`
+      <div class="card virt ${a.unreach ? 'a-unr' : ''}" data-act="open-agent" data-id="${a.id}" ${arranging() ? raw('data-drag="agent" draggable="true"') : ''}>
+        <div class="top">${arranging() ? html`<span class="grip" title="Drag to reorder or move to another group">${icon('grip')}</span>` : ''}${agentDot(a)}
+          <div style="min-width:0"><div class="name">${a.name}</div><div class="os">Virtual</div><div class="os">${a.via ? `Connected via ${a.via.name}` : ''}</div></div></div>
+        <div class="mid">${a.unreach ? html`<div class="big unr">?</div><div class="biglbl">unreachable<br>behind ${a.unreach.name}</div>` : html`<div class="big dim">—</div>`}</div>
+      </div>`;
   }
   function card(a) {
+    if (isVirtual(a)) return virtualCard(a);
     if (isLocal(a)) return localCard(a);
     const u = a.updates;
     const f = a.facts;
@@ -974,7 +992,7 @@ function Dashboard() {
     const sec = active.reduce((s, a) => s + (a.updates?.security || 0), 0);
     const off = active.filter(isDown).length;
     const unr = active.filter((a) => a.unreach && !a.maint).length;
-    const selectable = list.filter((a) => a.status === 'active' && !isLocal(a));
+    const selectable = list.filter((a) => a.status === 'active' && !isLocal(a) && !isVirtual(a));
     const allSel = selectable.length && selectable.every((a) => st.sel.has(a.id));
     const head = showHead ? html`
       <div class="ghead" data-gid="${g.id}" ${g.id && arranging() ? raw('data-drag="group" draggable="true"') : ''}>
@@ -1068,19 +1086,21 @@ function Dashboard() {
         ${oldest ? html`<div class="value datev">${fmtDate(oldest.ts)}</div><div class="statnote">${ago(oldest.ts)} · ${oldest.a.name} (${oldest.a.online ? 'last update check' : 'offline'})</div>`
           : allCurrent ? html`<div class="value datev">All current</div><div class="statnote">all checked within ${hours} h</div>`
           : html`<div class="value">—</div><div class="statnote">nothing to report</div>`}</div>`);
-    setHTML($('#d-chips'), filterChips(A, st.filter, (a, f) => agentMatches(a, f, st.q, d.groups, st.type)));
+    // The tiles below also show the virtual devices; the counts above do not.
+    const D = [...A, ...d.vdev].sort((x, y) => (x.order ?? 0) - (y.order ?? 0));
+    setHTML($('#d-chips'), filterChips(D, st.filter, (a, f) => agentMatches(a, f, st.q, d.groups, st.type)));
     setHTML($('#d-type'), typeTabs(st.type));
-    if (!A.length) {
+    if (!D.length) {
       setHTML($('#d-cards'), html`<div class="panel empty"><div class="big">🛰️</div><div>No devices yet.</div>${ifChange(html`<div style="margin-top:14px"><a class="btn primary" href="#/settings/devices">${icon('plus')} Add your first device</a></div>`)}</div>`);
     } else {
       const groups = d.groups;
       const showHead = groups.length > 0;
       const secs = [...groups, { id: '', name: 'Ungrouped' }].map((g) => {
-        const members = A.filter((a) => (a.group_id || '') === g.id || (g.id === '' && !groups.some((x) => x.id === a.group_id)));
+        const members = D.filter((a) => (a.group_id || '') === g.id || (g.id === '' && !groups.some((x) => x.id === a.group_id)));
         if (!g.id && showHead && !members.length) return section(g, members, showHead, true);
         return section(g, members, showHead);
       });
-      const any = A.some(matches);
+      const any = D.some(matches);
       setHTML($('#d-cards'), any ? secs : html`<div class="panel empty">No devices match this filter.</div>`);
     }
     for (const id of [...st.sel]) if (!A.some((a) => a.id === id && a.status === 'active' && !isLocal(a))) st.sel.delete(id);
@@ -1147,14 +1167,14 @@ function Dashboard() {
     if (drag.type === 'agent') {
       for (const l of lists.values()) { const i = l.indexOf(drag.id); if (i >= 0) l.splice(i, 1); }
       if (t.kind === 'card') {
-        const ta = d.agents.find((a) => a.id === t.id);
+        const ta = [...d.agents, ...d.vdev].find((a) => a.id === t.id);
         const l = lists.get(ta.group_id) || lists.get('');
         const i = l.indexOf(t.id);
         l.splice(t.after ? i + 1 : i, 0, drag.id);
       } else {
         (lists.get(t.gid) || lists.get('')).push(drag.id);
       }
-      for (const [gid, l] of lists) l.forEach((id, i) => { const a = d.agents.find((x) => x.id === id); a.group_id = gid; a.order = i; });
+      for (const [gid, l] of lists) l.forEach((id, i) => { const a = [...d.agents, ...d.vdev].find((x) => x.id === id); a.group_id = gid; a.order = i; });
       const pos = new Map(); [...lists.values()].flat().forEach((id, i) => pos.set(id, i));
       d.agents.sort((a, b) => pos.get(a.id) - pos.get(b.id));
     } else {
@@ -1189,7 +1209,7 @@ function Dashboard() {
       c.addEventListener('dragend', onDragEnd);
       if (session.initial_password) setHTML($('#d-notice'), html`<div class="notice">You are using the generated initial password. <a href="#/settings">Change it in Settings</a>.</div>`);
     },
-    async refresh() { const d = await GET('overview'); d.groups ||= []; if (!st.drag) { st.data = d; render(); } },
+    async refresh() { const d = await GET('overview'); d.groups ||= []; d.vdev = virtualDevs(d); if (!st.drag) { st.data = d; render(); } },
     acts: {
       arrange: () => { st.arrange = !st.arrange; render(); },
       filter: (t) => { st.filter = t.dataset.f; render(); },
@@ -1252,7 +1272,7 @@ function DeviceList() {
   lastDashSub = 'devices';
   const st = { filter: 'all', type: 'all', q: '', data: null, sort: 'name', dir: 1 };
   const byText = (x, y) => String(x).localeCompare(String(y), undefined, { numeric: true, sensitivity: 'base' });
-  const statusText = (a) => (a.maint ? 'maintenance' : a.unreach ? 'unreachable' : isLocal(a) ? (probeOut(a) ? 'unknown' : !a.local.checked ? 'waiting' : a.local.up ? (a.local.svc_down ? `${a.local.svc_down} service${a.local.svc_down === 1 ? '' : 's'} down` : 'online') : 'down')
+  const statusText = (a) => (isVirtual(a) ? (a.unreach ? 'unreachable' : '') : a.maint ? 'maintenance' : a.unreach ? 'unreachable' : isLocal(a) ? (probeOut(a) ? 'unknown' : !a.local.checked ? 'waiting' : a.local.up ? (a.local.svc_down ? `${a.local.svc_down} service${a.local.svc_down === 1 ? '' : 's'} down` : 'online') : 'down')
     : a.status === 'pending' ? 'pending' : a.below_min ? 'update required' : !a.online ? 'offline' : agentChecksDown(a) ? checksDownShort(agentChecksDown(a)) : a.status === 'report_only' ? 'report only' : 'online');
   const lastTs = (a) => (isLocal(a) ? a.local.last_check || 0 : a.online ? a.updates?.checked_at || 0 : a.last_seen || 0);
   const healthN = (a) => (a.facts?.health?.failed_count > 0 ? 2 : 0) + (a.facts?.health?.auto_updates === 'on' ? 1 : 0);
@@ -1261,8 +1281,8 @@ function DeviceList() {
     ['name', 'Name', (a) => a.name, ''],
     ['group', 'Group', (a) => groupName(a.group_id), 'opt'],
     ['ip', 'IP', (a) => (a.facts.ips || [])[0] || '', 'opt'],
-    ['os', 'OS', (a) => (isLocal(a) ? '~local' : osShort(a.facts)), 'opt'],
-    ['stats', 'Stats', (a) => (isLocal(a) ? -1 : (a.checks?.stats || []).reduce((n, x) => n + (x.s === 'down' ? 10 : 1), 0)), 'opt'],
+    ['os', 'OS', (a) => (isVirtual(a) ? '~virtual' : isLocal(a) ? '~local' : osShort(a.facts)), 'opt'],
+    ['stats', 'Stats', (a) => (isLocal(a) || isVirtual(a) ? -1 : (a.checks?.stats || []).reduce((n, x) => n + (x.s === 'down' ? 10 : 1), 0)), 'opt'],
     ['updates', 'Updates', (a) => a.updates?.total ?? -1, 'num'],
     ['cve', 'CVE', (a) => a.vulns?.badge ?? -1, 'num'],
     ['reboot', 'Reboot', (a) => (a.updates?.reboot_required ? 1 : 0), ''],
@@ -1280,6 +1300,7 @@ function DeviceList() {
   function last(a) {
     if (a.maint) return html`<span class="c-blue">maintenance</span><span class="dim">, ${maintUntil(a.maint)}</span>`;
     if (a.unreach) return html`<span class="c-unr">unreachable</span><span class="dim">, behind ${a.unreach.name}</span>`;
+    if (isVirtual(a)) return html`<span class="dim">—</span>`;
     if (isLocal(a)) {
       const L = a.local, p = probeOut(a);
       if (p) return html`<span class="dim">${unknownText(p)}</span>`;
@@ -1294,12 +1315,12 @@ function DeviceList() {
   function row(a) {
     const u = a.updates, o = a.os_support, f = a.facts;
     return html`<tr>
-      <td class="nowrap" title="${statusText(a)}${a.below_min ? ` (agent ${a.core_version}, lowest allowed ${a.min_agent})` : ''}">${agentDot(a)}${statusText(a) === 'online' ? '' : html` <span class="small ${a.maint ? 'c-blue' : a.unreach ? 'c-unr' : statusText(a) === 'unknown' ? 'dim' : a.status === 'pending' || a.status === 'report_only' || a.below_min || statusText(a) === 'waiting' || / (service|check)s? down/.test(statusText(a)) ? 'c-amber' : 'c-red'}">${statusText(a)}</span>`}</td>
+      <td class="nowrap" title="${statusText(a)}${a.below_min ? ` (agent ${a.core_version}, lowest allowed ${a.min_agent})` : ''}">${agentDot(a)}${statusText(a) === 'online' || statusText(a) === '' ? '' : html` <span class="small ${a.maint ? 'c-blue' : a.unreach ? 'c-unr' : statusText(a) === 'unknown' ? 'dim' : a.status === 'pending' || a.status === 'report_only' || a.below_min || statusText(a) === 'waiting' || / (service|check)s? down/.test(statusText(a)) ? 'c-amber' : 'c-red'}">${statusText(a)}</span>`}</td>
       <td class="nowrap"><a href="#/device/${a.id}"><b>${a.name}</b></a></td>
       <td class="opt muted">${groupName(a.group_id)}</td>
-      <td class="opt small nowrap">${(f.ips || [])[0] || ''}</td>
-      <td class="opt nowrap" title="${a.below_min || isLocal(a) ? '' : osLabel(f)}">${isLocal(a) ? html`<span class="dim" title="Monitored by the master with a ping; no agent">agentless</span>` : a.below_min ? html`<span class="dim">—</span>` : clipText(osShort(f), 14)}${o?.status === 'expired' ? html` <span class="badge sec xs" title="${osSupportText(o, f.os_id)}">EOL</span>` : o?.status === 'soon' ? html` <span class="badge upd xs" title="${osSupportText(o, f.os_id)}">EOL soon</span>` : ''}</td>
-      <td class="opt nowrap">${statLetters(a)}</td>
+      <td class="opt small nowrap">${(f.ips || [])[0] || (isVirtual(a) ? html`<span class="dim">—</span>` : '')}</td>
+      <td class="opt nowrap" title="${a.below_min || isLocal(a) || isVirtual(a) ? '' : osLabel(f)}">${isVirtual(a) ? html`<span class="dim" title="Virtual device: not checked">virtual</span>` : isLocal(a) ? html`<span class="dim" title="Monitored by the master with a ping; no agent">agentless</span>` : a.below_min ? html`<span class="dim">—</span>` : clipText(osShort(f), 14)}${o?.status === 'expired' ? html` <span class="badge sec xs" title="${osSupportText(o, f.os_id)}">EOL</span>` : o?.status === 'soon' ? html` <span class="badge upd xs" title="${osSupportText(o, f.os_id)}">EOL soon</span>` : ''}</td>
+      <td class="opt nowrap">${isVirtual(a) ? html`<span class="dim">—</span>` : statLetters(a)}</td>
       <td class="num"><b class="${u?.security ? 'c-red' : u?.total ? 'c-amber' : 'dim'}">${u ? u.total : '—'}</b></td>
       <td class="num">${!a.vulns ? html`<span class="dim">—</span>` : a.vulns.badge ? html`<b class="c-red" title="${CVE_RED}">${a.vulns.badge}</b>` : html`<span class="dim">0</span>`}</td>
       <td>${!u ? html`<span class="dim">—</span>` : u.reboot_required ? html`<span class="badge reboot xs">required</span>` : html`<span class="badge ok xs">no</span>`}</td>
@@ -1310,7 +1331,7 @@ function DeviceList() {
   function render() {
     const d = st.data;
     if (!d) return;
-    const A = d.agents;
+    const A = [...d.agents, ...d.vdev];
     setHTML($('#l-chips'), filterChips(A, st.filter, (a, f) => agentMatches(a, f, st.q, d.groups, st.type)));
     setHTML($('#l-type'), typeTabs(st.type));
     const shown = A.filter((a) => agentMatches(a, st.filter, st.q, d.groups, st.type));
@@ -1333,7 +1354,7 @@ function DeviceList() {
         <div id="l-table"></div>`);
       $('#l-q').addEventListener('input', (e) => { st.q = e.target.value; render(); });
     },
-    async refresh() { const d = await GET('overview'); d.groups ||= []; st.data = d; render(); },
+    async refresh() { const d = await GET('overview'); d.groups ||= []; d.vdev = virtualDevs(d); st.data = d; render(); },
     acts: {
       filter: (t) => { st.filter = t.dataset.f; render(); },
       type: (t) => { st.type = t.dataset.t; render(); },
@@ -1505,7 +1526,7 @@ function MapPage() {
   }
   // Upstream: a layered cloud in its state colour that breathes, with a
   // highlight drifting across and an edge that lights up as the pulses of
-  // its lines arrive (every 5 s, in step with them).
+  // its lines arrive (every 2.5 s, in step with them).
   const CLOUD = 'M30 58 A20 20 0 0 1 26 18 A26 26 0 0 1 72 -2 A32 32 0 0 1 128 6 A22 22 0 0 1 156 30 A16 16 0 0 1 150 58 Z';
   function cloudSub(u) {
     if (!u || u.state === 'wait') return 'waiting';
@@ -1531,7 +1552,7 @@ function MapPage() {
     if (isVirtual(n.a) && n.a.special) return cloudBox(n);
     const a = n.a, [cls, , down] = health(a), name = a ? a.name : 'Master';
     if (isVirtual(a)) {
-      return html`<g class="mapbox virt ${cls === 'unr' ? 'unr' : ''}" id="map-${n.id}" data-id="${n.id}" transform="translate(${n.x} ${n.y})">
+      return html`<g class="mapbox virt click ${cls === 'unr' ? 'unr' : ''}" id="map-${n.id}" data-id="${n.id}" data-act="open" transform="translate(${n.x} ${n.y})">
         <title>${tip(n)}</title><rect width="${W}" height="${H}" rx="8"/><circle cx="16" cy="${H / 2}" r="4.5"/>
         <text x="30" y="${H / 2 - 2}">${clipText(name, 20)}</text><text class="ip" x="30" y="${H / 2 + 11}">virtual</text></g>`;
     }
@@ -2602,6 +2623,48 @@ async function checksModal(a, done) {
     },
   });
 }
+// A virtual device: its place in the network and the devices connected via
+// it. Not checked, so no tabs, history or maintenance.
+function VirtualPage([id]) {
+  const st = { d: null };
+  function render() {
+    const d = st.d, v = (d.virtuals || []).find((x) => x.id === id);
+    if (!v) { location.hash = '#/dashboard/' + lastDashSub; return; }
+    if (v.special) { location.hash = '#/settings/upstream'; return; }
+    const g = d.groups.find((x) => x.id === v.group_id);
+    const below = [...d.agents, ...virtualDevs(d)].filter((a) => a.via?.id === id).sort(byName);
+    const kind = (a) => (isVirtual(a) ? 'virtual' : isLocal(a) ? 'agentless' : 'agent');
+    setHTML($('#v-page'), html`
+      <div class="page-head syshead">
+        <div class="headinfo"><div class="row"><a href="#/dashboard/${lastDashSub}" class="btn ghost sm iconbtn" title="Back">${icon('back')}</a>${agentDot(v)}<h1>${v.name}</h1>
+          <span class="tag">${icon('folder')} ${g ? g.name : 'Ungrouped'}</span><span class="verpill loc" title="Not checked: it passes on the state of the devices above it">virtual</span></div>
+          ${viaLine(v)}</div>
+        <span class="spacer"></span>
+        ${ifChange(html`<button class="btn sm" data-act="edit">${icon('edit')} Edit</button><button class="btn danger sm" data-act="delete" title="Delete">${icon('trash')}</button>`)}
+      </div>
+      ${v.unreach ? html`<div class="notice unr"><b>Unreachable</b> — <a href="#/device/${v.unreach.id}"><b>${v.unreach.name}</b></a>, which it is connected via, is down or in maintenance. The devices connected via this one are cut off too.</div>` : ''}
+      <div class="panel panel-pad"><h2 style="margin:0 0 8px">Connected via this device</h2>
+        ${below.length ? html`<table class="tbl"><tbody>${below.map((a) => html`<tr><td class="nowrap">${agentDot(a)} <a href="#/device/${a.id}"><b>${a.name}</b></a></td><td class="muted">${kind(a)}</td><td class="mono small">${devIP(a) || html`<span class="dim">—</span>`}</td></tr>`)}</tbody></table>`
+          : html`<div class="dim small">No devices are connected via it.</div>`}</div>`);
+  }
+  const refresh = () => view?.refresh?.();
+  return {
+    interval: 5000,
+    mount(el) { el.innerHTML = '<div id="v-page"></div>'; },
+    async refresh() { const d = await GET('overview'); d.groups ||= []; st.d = d; render(); },
+    acts: {
+      edit: () => virtualEditModal(st.d, st.d.virtuals.find((x) => x.id === id), refresh),
+      delete: async () => {
+        const v = st.d.virtuals.find((x) => x.id === id);
+        if (!(await confirmBox(`Delete ${v.name}?`, 'Devices connected via it are then connected via nothing. This cannot be undone.', { okText: 'Delete device', danger: true }))) return;
+        await POST(`virtuals/${id}/delete`);
+        toast(`${v.name} deleted`, 'ok');
+        location.hash = '#/dashboard/' + lastDashSub;
+      },
+    },
+  };
+}
+
 function LocalPage([id, tab]) {
   const st = { data: null, pinging: false, tab: tab === 'services' ? 'services' : 'system', checking: new Set() };
   const pingNote = (L) => (L.ping_mode === 'paused' ? 'Ping is paused for this device.' : 'This device is not pinged.');

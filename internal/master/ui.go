@@ -937,7 +937,7 @@ func (s *Server) handleLayout(w http.ResponseWriter, r *http.Request) {
 			order = append(order, g)
 		}
 		for _, id := range gl.Agents {
-			if (s.st.st.Agents[id] == nil && s.st.st.Locals[id] == nil) || seenA[id] {
+			if (s.st.st.Agents[id] == nil && s.st.st.Locals[id] == nil && !s.isPlainVirtual(id)) || seenA[id] {
 				http.Error(w, "unknown or duplicate device "+cleanText(id, 32), http.StatusBadRequest)
 				return
 			}
@@ -957,6 +957,8 @@ func (s *Server) handleLayout(w http.ResponseWriter, r *http.Request) {
 				a.GroupID, a.Order = gl.ID, i
 			} else if d := s.st.st.Locals[id]; d != nil {
 				d.GroupID, d.Order = gl.ID, i
+			} else if v := s.st.st.Virtuals[id]; v != nil {
+				v.GroupID, v.Order = gl.ID, i
 			}
 		}
 	}
@@ -969,6 +971,11 @@ func (s *Server) handleLayout(w http.ResponseWriter, r *http.Request) {
 	for _, d := range s.st.st.Locals {
 		if !seenA[d.ID] {
 			d.Order += 100000
+		}
+	}
+	for _, v := range s.st.st.Virtuals {
+		if !seenA[v.ID] && v.Special == "" {
+			v.Order += 100000
 		}
 	}
 	s.st.markDirty()

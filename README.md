@@ -52,7 +52,9 @@ as **agentless** devices: the master itself pings them and checks their services
   cause is shown once, and their checks keep running. A **virtual** device (only
   a name, a group and a Connected via) stands for something Coremon cannot
   check, such as an unmanaged switch: devices can be connected via it, it is
-  drawn on the network map and it passes on the state of the devices above it.
+  drawn on the network map, shown on the dashboard and in the Device List, and
+  it passes on the state of the devices above it. Its own page lists the
+  devices connected via it.
 * **Upstream**: Settings → Upstream adds the internet connection as a special
   virtual device. The master pings three addresses every minute or at your own
   interval of 30 seconds to an hour (by default

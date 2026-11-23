@@ -42,9 +42,11 @@ type virtualView struct {
 	GroupID string  `json:"group_id"`
 	Order   int     `json:"order"`
 	Via     *devRef `json:"via,omitempty"`
-	Special string  `json:"special,omitempty"`
-	Unreach *devRef `json:"unreach,omitempty"` // a device above it is down or in maintenance
-	Monitor string  `json:"monitor"`           // always "virtual"
+	// ViaChain: the devices above it, nearest first.
+	ViaChain []devRef `json:"via_chain,omitempty"`
+	Special  string   `json:"special,omitempty"`
+	Unreach  *devRef  `json:"unreach,omitempty"` // a device above it is down or in maintenance
+	Monitor  string   `json:"monitor"`           // always "virtual"
 }
 
 // virtualViews: every virtual device. Caller holds s.st.mu.
@@ -55,6 +57,7 @@ func (s *Server) virtualViews() []virtualView {
 		x := virtualView{ID: v.ID, Name: v.Name, GroupID: v.GroupID, Order: v.Order, Special: v.Special, Monitor: "virtual"}
 		if v.Via != "" {
 			x.Via = s.devRefOf(v.Via)
+			x.ViaChain = s.viaChain(v.ID)
 		}
 		if v.Special == "" {
 			x.Unreach = s.blockedBy(v.ID, now)
@@ -63,6 +66,12 @@ func (s *Server) virtualViews() []virtualView {
 	}
 	sortByName(out, func(v virtualView) string { return v.Name })
 	return out
+}
+
+// isPlainVirtual: id is a virtual device other than Upstream. Caller holds s.st.mu.
+func (s *Server) isPlainVirtual(id string) bool {
+	v := s.st.st.Virtuals[id]
+	return v != nil && v.Special == ""
 }
 
 func sortByName[T any](xs []T, name func(T) string) {
