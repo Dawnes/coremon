@@ -902,8 +902,18 @@ function Dashboard() {
           <div style="min-width:0"><div class="name">${a.name}</div><div class="os">Agentless${L.probe ? html` · via ${L.probe.name}` : ''}</div><div class="os"><span class="ip">${L.address}</span></div></div></div>
         <div class="mid">${big}<div class="badges">${uptime}</div></div>
         <div class="inforow"><span class="uptime">${icon('clock')}${state === 'maint' ? 'no checks now' : state === 'unk' ? 'no results now' : state === 'wait' ? (L.fails ? 'not decided yet' : 'not checked yet') : `${L.up ? 'up' : state === 'unr' ? 'no answer' : 'down'} ${dur(now() - L.since)}`}</span><span class="spacer"></span>${state === 'up' && L.ping && L.rtt_us ? html`<span class="tag mono">${rttText(L.rtt_us)}</span>` : ''}</div>
-        <div class="foot"><span>${L.last_check ? when(L.last_check, 'checked ') : 'waiting'}</span></div>
+        <div class="foot"><span>${L.last_check ? when(L.last_check, 'Services checked ') : 'waiting'}</span></div>
       </div>`;
+  }
+  // Footer of an online agent tile: when its updates and its services were
+  // last checked. Services: the agent's last contact (it is a service itself
+  // and brings the disk, memory and CPU readings), or a later outside check.
+  function checkedLine(a) {
+    const parts = [];
+    if (a.updates?.checked_at) parts.push(when(a.updates.checked_at, 'Updates checked '));
+    const svc = Math.max(a.last_seen || 0, a.checks?.last_check || 0);
+    if (svc) parts.push(when(svc, 'Services checked '));
+    return parts.length ? parts.map((p, i) => html`${i ? '. ' : ''}${p}`) : 'online';
   }
   function card(a) {
     if (isLocal(a)) return localCard(a);
@@ -947,7 +957,7 @@ function Dashboard() {
         ${cdown ? html`<div class="svcline" title="${cdown.L.svc_fail ? `${cdown.L.svc_fail.name}: ${cdown.L.svc_fail.error || 'down'}` : ''}">${checksDownText(cdown)}${checksFailText(cdown) ? ` · ${checksFailText(cdown)}` : ''}</div>` : ''}
         ${a.status !== 'pending' ? html`<div class="inforow"><span class="uptime" title="${a.below_min ? '' : lastReboot(a)}">${icon('clock')}${!a.online ? (a.maint ? 'not connected' : a.unreach ? 'unreachable' : 'offline') :a.below_min ? 'online' : 'up ' + dur(f.uptime_sec)}</span>${a.maint ? '' : healthBadges(a)}<span class="spacer"></span>${verPill(a)}</div>` : ''}
         <div class="foot">
-          ${a.busy ? html`<span class="spin"></span><span>${a.busy} job${a.busy > 1 ? 's' : ''}</span>` : html`<span>${a.online ? (u ? when(u.checked_at, 'checked ') : 'online') : a.status === 'pending' ? '' : when(a.last_seen, 'seen ')}</span>`}
+          ${a.busy ? html`<span class="spin"></span><span>${a.busy} job${a.busy > 1 ? 's' : ''}</span>` : html`<span>${a.online ? checkedLine(a) : a.status === 'pending' ? '' : when(a.last_seen, 'seen ')}</span>`}
         </div>
       </div>`;
   }
