@@ -18,12 +18,18 @@ as **agentless** devices: the master itself pings them and checks their services
 
 * **Dashboard**: all devices at a glance, in your own groups, with filters.
 * **Updates**: check, install selected packages or upgrade all, with live output.
-* **Applications**: 41 common applications (Apache, ClamAV, Docker, Dovecot,
-  HAProxy, MariaDB, Nginx, OpenSSL, PostgreSQL, the SSH server and more) with
-  version, status and ports,
+* **Applications**: 43 common applications (Apache, ClamAV, Docker, Dovecot,
+  HAProxy, MariaDB, Nginx, OpenSSL, PostgreSQL, Proxmox VE, Proxmox Backup
+  Server, the SSH server and more) with version, status and ports,
   per device and as one list for the whole environment.
 * **Vulnerabilities**: known CVEs of those applications, with severity, fixes
-  and actively exploited ones highlighted.
+  and actively exploited ones highlighted. Proxmox VE and Proxmox Backup Server
+  are checked against NVD, the others against the distribution's own data.
+* **System and network**: per device the OS, platform (such as "Proxmox VE
+  9.0.11"), uptime and health, and a Network box with the main network card
+  and its MAC address (a bridge, bond or VLAN is followed to the physical card),
+  every IP address marked static, DHCP or SLAAC, the gateway and DNS servers.
+  A Proxmox VE host gets its own Proxmox tab.
 * **Agentless devices**: devices without an agent, checked by the master with a
   ping and per-service checks (heartbeat, retries, timeout): TCP (optionally
   waiting for a greeting, or in reverse mode), HTTPS (hostname, path, accepted
@@ -66,8 +72,8 @@ as **agentless** devices: the master itself pings them and checks their services
   whom, with the break where a device is down), as monitoring (the master or a
   remote probe) or both together, coloured green, red, unreachable or grey.
   With Upstream on, the network views start at a cloud in its state colour.
-  Healthy lines carry a slow pulse toward the master, lines show the ping time
-  and who measures it, and the map zooms and pans (it opens fitted to the screen).
+  Healthy lines carry a slow pulse toward the master, and the map zooms and
+  pans (it opens fitted to the screen).
 * **Maintenance**: pause all checks of a device for 5 minutes up to 4 hours, or
   until ended by hand; no automatic jobs run and no failures are shown meanwhile.
 * **Releases**: update the master and the agents from the website.

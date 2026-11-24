@@ -70,6 +70,46 @@ func sanitizeFacts(f proto.Facts) proto.Facts {
 	if f.DNSVia != "systemd-resolved" {
 		f.DNSVia = ""
 	}
+	if p := f.Platform; p != nil {
+		c := proto.Platform{ID: p.ID, Version: cleanText(p.Version, 64)}
+		switch c.ID {
+		case "pve":
+			c.Name = "Proxmox VE"
+		case "pbs":
+			c.Name = "Proxmox Backup Server"
+		}
+		f.Platform = nil
+		if c.Name != "" {
+			f.Platform = &c
+		}
+	}
+	if n := f.NIC; n != nil {
+		c := proto.NIC{Iface: cleanText(n.Iface, 32), Phys: cleanText(n.Phys, 32), Virtual: n.Virtual}
+		if hw, err := net.ParseMAC(n.MAC); err == nil && len(hw) == 6 {
+			c.MAC = hw.String()
+		}
+		f.NIC = nil
+		if c.MAC != "" && c.Iface != "" {
+			f.NIC = &c
+		}
+	}
+	var addrs []proto.AddrInfo
+	for _, a := range f.Addrs {
+		ip := net.ParseIP(a.IP)
+		if ip == nil || len(addrs) >= maxIPs {
+			continue
+		}
+		c := proto.AddrInfo{IP: ip.String(), Prefix: a.Prefix, Iface: cleanText(a.Iface, 32)}
+		if bits := map[bool]int{true: 32, false: 128}[ip.To4() != nil]; c.Prefix < 0 || c.Prefix > bits {
+			c.Prefix = 0
+		}
+		switch a.Origin {
+		case "static", "dhcp", "slaac":
+			c.Origin = a.Origin
+		}
+		addrs = append(addrs, c)
+	}
+	f.Addrs = addrs
 	if h := f.Health; h != nil {
 		c := *h
 		c.At = notFuture(c.At)

@@ -60,7 +60,7 @@ func TestScan(t *testing.T) {
 	for _, a := range rows {
 		names[strings.SplitN(a.Name, " ", 2)[0]] = true
 	}
-	if len(scan(strings.NewReader(""), nil, nil)) != 41 {
-		t.Fatalf("empty system: %d rows, want 41", len(scan(strings.NewReader(""), nil, nil)))
+	if len(scan(strings.NewReader(""), nil, nil)) != 43 {
+		t.Fatalf("empty system: %d rows, want 43", len(scan(strings.NewReader(""), nil, nil)))
 	}
 }

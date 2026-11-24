@@ -10,6 +10,7 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"coremon/internal/feature"
@@ -103,6 +104,59 @@ var defs = []def{
 	{"InfluxDB 1", regexp.MustCompile(`^influxdb$`), false, []string{"influxdb.service"}},
 	{"InfluxDB 2", regexp.MustCompile(`^influxdb2$`), false, []string{"influxdb.service"}},
 	{"Webmin", regexp.MustCompile(`^webmin$`), false, []string{"webmin.service"}},
+	// Proxmox: not in the Debian security data; the master looks them up in NVD.
+	{"Proxmox VE", regexp.MustCompile(`^pve-manager$`), false, []string{"pveproxy.service"}},
+	{"Proxmox Backup Server", regexp.MustCompile(`^proxmox-backup-server$`), false, []string{"proxmox-backup-proxy.service"}},
+}
+
+// platforms: packages that make a device a platform, the first found wins.
+var platforms = []struct{ pkg, id, name string }{
+	{"pve-manager", "pve", "Proxmox VE"},
+	{"proxmox-backup-server", "pbs", "Proxmox Backup Server"},
+}
+
+// PlatformOf: the platform the dpkg status describes, or nil.
+func PlatformOf(r io.Reader) *proto.Platform {
+	info := installed(r)
+	for _, p := range platforms {
+		if i, ok := info[p.pkg]; ok {
+			return &proto.Platform{ID: p.id, Name: p.name, Version: Readable(i.ver)}
+		}
+	}
+	return nil
+}
+
+var platformCache struct {
+	mu    sync.Mutex
+	mtime time.Time
+	size  int64
+	p     *proto.Platform
+}
+
+// Platform: the platform of this device, read again only when the dpkg
+// status file changes.
+func Platform() *proto.Platform {
+	fi, err := os.Stat(statusFile)
+	if err != nil {
+		return nil
+	}
+	c := &platformCache
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if !fi.ModTime().Equal(c.mtime) || fi.Size() != c.size {
+		f, err := os.Open(statusFile)
+		if err != nil {
+			return nil
+		}
+		c.p = PlatformOf(f)
+		f.Close()
+		c.mtime, c.size = fi.ModTime(), fi.Size()
+	}
+	if c.p == nil {
+		return nil
+	}
+	p := *c.p
+	return &p
 }
 
 func UnitPatterns() []string {
@@ -425,10 +479,17 @@ func Scan() *State {
 	f, err := os.Open(statusFile)
 	if err != nil {
 		if os.Getenv("COREMON_FAKE") == "1" {
-			st.Apps = scan(strings.NewReader(fakeStatus), fakeSystem(), func(p []string) map[string]string {
+			status := fakeStatus
+			if v := os.Getenv("COREMON_FAKE_PVE"); v != "" {
+				status += "\nPackage: pve-manager\nStatus: install ok installed\nVersion: " + v + "\n"
+			}
+			st.Apps = scan(strings.NewReader(status), fakeSystem(), func(p []string) map[string]string {
 				m := map[string]string{}
 				for _, n := range p {
 					m[n] = "Debian"
+					if n == "pve-manager" {
+						m[n] = "Proxmox"
+					}
 				}
 				return m
 			})

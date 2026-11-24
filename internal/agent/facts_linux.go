@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"strings"
 
+	"coremon/internal/feature/apps"
 	"coremon/internal/proto"
 )
 
@@ -59,6 +60,9 @@ func collectFacts() proto.Facts {
 	read := func(p string) string { b, _ := os.ReadFile(p); return string(b) }
 	f.Gateway, f.GatewayIf = defaultGateway(read("/proc/net/route"))
 	f.DNS, f.DNSVia = dnsServers(read)
+	f.Addrs = netAddrs(read)
+	f.NIC = mainNIC(f.GatewayIf, f.Virt, f.Addrs)
+	f.Platform = apps.Platform()
 	f.Health = currentHealth()
 	return f
 }

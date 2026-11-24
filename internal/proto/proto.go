@@ -24,7 +24,37 @@ type Facts struct {
 	DNS       []string `json:"dns,omitempty"`
 	DNSVia    string   `json:"dns_via,omitempty"`
 
+	// Agent 0.3.16 and later: the platform the device runs (Proxmox VE or
+	// Backup Server), its main network card and every address with its origin.
+	Platform *Platform  `json:"platform,omitempty"`
+	NIC      *NIC       `json:"nic,omitempty"`
+	Addrs    []AddrInfo `json:"addrs,omitempty"`
+
 	Health *Health `json:"health,omitempty"`
+}
+
+// Platform: what the device is besides its operating system.
+type Platform struct {
+	ID      string `json:"id"`   // "pve" (Proxmox VE) or "pbs" (Proxmox Backup Server)
+	Name    string `json:"name"` // e.g. "Proxmox VE"
+	Version string `json:"version"`
+}
+
+// NIC: the network card the default route goes through. A bridge, bond or
+// VLAN is followed to the physical card below it (Phys).
+type NIC struct {
+	Iface   string `json:"iface"`          // the interface of the default route, e.g. "vmbr0"
+	Phys    string `json:"phys,omitempty"` // the physical card below it, e.g. "enp3s0"
+	MAC     string `json:"mac"`
+	Virtual bool   `json:"virtual,omitempty"` // a virtual card (VM, container)
+}
+
+// AddrInfo: one address of the device and how it was set.
+type AddrInfo struct {
+	IP     string `json:"ip"`
+	Prefix int    `json:"prefix"`
+	Iface  string `json:"iface"`
+	Origin string `json:"origin"` // "static", "dhcp", "slaac" or "" (unknown)
 }
 
 type Health struct {

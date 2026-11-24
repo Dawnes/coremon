@@ -55,7 +55,7 @@ Version: 1.17.1-2+deb12u2
 		Ports:   map[string][]Port{"tailscaled.service": {{Port: 41641, Proto: "udp", Addr: "0.0.0.0"}}},
 	}
 	rows := scan(strings.NewReader(status), sys, nil)
-	if len(rows) != 42 { // 41 applications, Tomcat twice
+	if len(rows) != 44 { // 43 applications, Tomcat twice
 		t.Fatalf("%d rows", len(rows))
 	}
 	by := map[string]App{}

@@ -104,6 +104,8 @@ type vulnData struct {
 	LastTry int64                 `json:"last_try"`
 	Error   string                `json:"error"`
 	NVDErr  string                `json:"nvd_error"`
+	// Products: the CVEs NVD lists for a product (Proxmox; see nvdproduct.go).
+	Products map[string]*prodData `json:"products,omitempty"`
 }
 
 type vulnStore struct {
@@ -118,10 +120,11 @@ type vulnStore struct {
 	nvdNow    string
 	nvdNextAt time.Time
 	nvdErr    bool
+	prodTry   map[string]time.Time // last NVD product question, per product
 }
 
 func newVulnData() vulnData {
-	return vulnData{Records: map[string]*vulnRec{}, Queries: map[string]*vulnQuery{}, CVEs: map[string]*cveMeta{}, Ecos: map[string]bool{}, KEV: map[string]bool{}}
+	return vulnData{Records: map[string]*vulnRec{}, Queries: map[string]*vulnQuery{}, CVEs: map[string]*cveMeta{}, Ecos: map[string]bool{}, KEV: map[string]bool{}, Products: map[string]*prodData{}}
 }
 
 func (s *Server) vulnPath() string { return filepath.Join(s.cfg.DataDir, "vulns.json") }
@@ -149,7 +152,13 @@ func (s *Server) loadVulns() {
 	if d.KEV == nil {
 		d.KEV = nd.KEV
 	}
+	if d.Products == nil {
+		d.Products = nd.Products
+	}
 	s.vul.mu.Lock()
+	if s.vul.prodTry == nil {
+		s.vul.prodTry = map[string]time.Time{}
+	}
 	s.vul.d = d
 	s.vul.mu.Unlock()
 }
@@ -170,6 +179,7 @@ func (s *Server) kickVulns() {
 	case s.vul.kick <- struct{}{}:
 	default:
 	}
+	s.kickNVD()
 }
 
 func (s *Server) kickNVD() {
@@ -479,6 +489,11 @@ func (s *Server) pruneLocked(keys, ecos map[string]bool) []string {
 			continue
 		}
 		cves[r.CVE] = true
+	}
+	for _, p := range d.Products {
+		for _, c := range p.CVEs {
+			cves[c.ID] = true
+		}
 	}
 	for c := range d.CVEs {
 		if !cves[c] {
@@ -820,6 +835,10 @@ func (s *Server) refreshEPSS(ctx context.Context, cves []string) error {
 func (s *Server) nvdLoop(stop <-chan struct{}) {
 	for {
 		id, key := s.nextNVD(time.Now())
+		prod := s.nextProduct(time.Now())
+		if prod != "" {
+			id = "product:" + prod
+		}
 		if id == "" {
 			select {
 			case <-stop:
@@ -836,7 +855,12 @@ func (s *Server) nvdLoop(stop <-chan struct{}) {
 		s.vul.mu.Lock()
 		s.vul.nvdNow = id
 		s.vul.mu.Unlock()
-		err := s.lookupNVD(id, key)
+		var err error
+		if prod != "" {
+			err = s.lookupProduct(prod, key)
+		} else {
+			err = s.lookupNVD(id, key)
+		}
 		if err != nil {
 			wait = 2 * time.Minute
 		}
@@ -1018,66 +1042,31 @@ func (s *Server) vulnsFor(a *Agent, full bool) *vulnView {
 		}
 		av := &appVulns{Origin: ap.Origin}
 		v.Apps[ap.Name] = av
-		switch {
-		case ap.Source == "" || ap.SourceVersion == "":
-			av.Status, anyOld = "old_agent", true
-			continue
-		case ap.Origin == "":
-			av.Status = "manual"
-			continue
-		case !fromDistro(a.Facts.OSID, ap.Origin):
-			av.Status = "not_distro"
-			continue
-		}
-		q := d.Queries[vulnKey(eco, ap.Source, ap.SourceVersion)]
-		if q == nil {
-			av.Status, anyPending = "pending", true
-			continue
-		}
-		if q.At > v.CheckedAt {
-			v.CheckedAt = q.At
-		}
-		seen := map[string]bool{}
-		for _, id := range q.IDs {
-			r := d.Records[id]
-			if r == nil || seen[r.CVE] {
+		var list []cveView
+		if p := productOf(ap.Name); p != nil {
+			// From NVD (nvdproduct.go), not from the distribution's data.
+			pd := d.Products[p.ID]
+			if pd == nil || ap.Version == "" {
+				av.Status, anyPending = "pending", true
 				continue
 			}
-			seen[r.CVE] = true
-			c := cveView{ID: r.CVE, Link: osvLink + url.PathEscape(id), KEV: d.KEV[r.CVE], Word: r.Word}
-			for _, af := range r.Aff {
-				if af.Eco != eco || af.Pkg != ap.Source {
-					continue
-				}
-				if af.Word != "" {
-					c.Word = af.Word
-				}
-				for _, ev := range af.Events {
-					if ev[0] == "fixed" && debVerCmp(ev[1], ap.SourceVersion) > 0 && (c.Fixed == "" || debVerCmp(ev[1], c.Fixed) < 0) {
-						c.Fixed = ev[1]
-					}
-				}
+			if pd.At > v.CheckedAt {
+				v.CheckedAt = pd.At
 			}
-			c.Minor = minorWord(c.Word)
-			if m := d.CVEs[r.CVE]; m != nil {
-				c.EPSS, c.Pct = m.EPSS, m.Pct
-				if m.Scored {
-					c.Score, c.Scored, c.Src = m.Score, true, m.Src
-					c.Level = scoreLevel(m.Score)
+			list = s.productCVEs(pd, ap.Version, upd[ap.Package])
+		} else {
+			var ok bool
+			if list, ok = s.distroCVEs(ap, eco, a.Facts.OSID, upd, av, &v.CheckedAt); !ok {
+				switch av.Status {
+				case "old_agent":
+					anyOld = true
+				case "pending":
+					anyPending = true
 				}
+				continue
 			}
-			if !c.Scored {
-				for _, w := range []string{c.Word, r.Word} {
-					if l := wordLevel(w); l > c.Level {
-						c.Level, c.Src = l, "distro"
-					}
-				}
-			}
-			if c.Fixed != "" && upd != nil {
-				if nv := upd[ap.Package]; nv != "" && debVerCmp(nv, c.Fixed) >= 0 {
-					c.ByUpdate = true
-				}
-			}
+		}
+		for _, c := range list {
 			switch {
 			case c.Minor:
 				av.Minor++
@@ -1143,6 +1132,78 @@ func (s *Server) vulnsFor(a *Agent, full bool) *vulnView {
 		v.Apps = nil
 	}
 	return v
+}
+
+// distroCVEs: the CVEs of an application from the distribution's security
+// data (OSV). false: none can be given; av.Status says why. Caller holds s.vul.mu.
+func (s *Server) distroCVEs(ap apps.App, eco, osID string, upd map[string]string, av *appVulns, checkedAt *int64) ([]cveView, bool) {
+	d := &s.vul.d
+	switch {
+	case ap.Source == "" || ap.SourceVersion == "":
+		av.Status = "old_agent"
+		return nil, false
+	case ap.Origin == "":
+		av.Status = "manual"
+		return nil, false
+	case !fromDistro(osID, ap.Origin):
+		av.Status = "not_distro"
+		return nil, false
+	}
+	q := d.Queries[vulnKey(eco, ap.Source, ap.SourceVersion)]
+	if q == nil {
+		av.Status = "pending"
+		return nil, false
+	}
+	if q.At > *checkedAt {
+		*checkedAt = q.At
+	}
+	var out []cveView
+	{
+		seen := map[string]bool{}
+		for _, id := range q.IDs {
+			r := d.Records[id]
+			if r == nil || seen[r.CVE] {
+				continue
+			}
+			seen[r.CVE] = true
+			c := cveView{ID: r.CVE, Link: osvLink + url.PathEscape(id), KEV: d.KEV[r.CVE], Word: r.Word}
+			for _, af := range r.Aff {
+				if af.Eco != eco || af.Pkg != ap.Source {
+					continue
+				}
+				if af.Word != "" {
+					c.Word = af.Word
+				}
+				for _, ev := range af.Events {
+					if ev[0] == "fixed" && debVerCmp(ev[1], ap.SourceVersion) > 0 && (c.Fixed == "" || debVerCmp(ev[1], c.Fixed) < 0) {
+						c.Fixed = ev[1]
+					}
+				}
+			}
+			c.Minor = minorWord(c.Word)
+			if m := d.CVEs[r.CVE]; m != nil {
+				c.EPSS, c.Pct = m.EPSS, m.Pct
+				if m.Scored {
+					c.Score, c.Scored, c.Src = m.Score, true, m.Src
+					c.Level = scoreLevel(m.Score)
+				}
+			}
+			if !c.Scored {
+				for _, w := range []string{c.Word, r.Word} {
+					if l := wordLevel(w); l > c.Level {
+						c.Level, c.Src = l, "distro"
+					}
+				}
+			}
+			if c.Fixed != "" && upd != nil {
+				if nv := upd[ap.Package]; nv != "" && debVerCmp(nv, c.Fixed) >= 0 {
+					c.ByUpdate = true
+				}
+			}
+			out = append(out, c)
+		}
+	}
+	return out, true
 }
 
 func (s *Server) vulnStatus(days int) map[string]any {

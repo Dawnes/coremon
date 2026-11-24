@@ -718,6 +718,8 @@ function agentDot(a) {
   return html`<span class="dot ${a.online ? 'on' : 'off'}" title="${a.online ? 'online' : 'offline since ' + fmtDate(a.last_seen)}"></span>`;
 }
 function osLabel(f) { return f.os_name || [f.os_id, f.os_version].filter(Boolean).join(' ') || 'unknown OS'; }
+// Platform: what the device is besides its OS (agent 0.3.16 and later), e.g. "Proxmox VE 9.0.11".
+function platformLabel(f) { return f?.platform ? [f.platform.name, f.platform.version].filter(Boolean).join(' ') : '—'; }
 const hasUpdates = (a) => !a.below_min && !isLocal(a);
 const ymd = (s) => (s ? s.split('-').reverse().join('-') : '');
 function osSupportText(o, osID) {
@@ -797,7 +799,8 @@ function openCves(appName, v) {
         <td class="mono small">${c.fixed ? html`${c.fixed}${c.by_update ? html` <span class="badge ok xs" title="The waiting update installs this version or newer">in waiting update</span>` : ''}` : html`<span class="dim">no fix yet</span>`}</td>
         <td class="small">${c.epss ? html`<span title="Higher than ${Math.round(c.pct * 100)}% of all CVEs">${pct(c.epss)}</span>` : html`<span class="dim">—</span>`}</td></tr>`)}</tbody></table></div>
     <div class="dim small" style="margin-top:12px">Severity: the CVSS score from OSV or NVD, otherwise the distribution's own rating. Dimmed: the distribution considers it minor.
-      Data: OSV.dev (Debian's and Ubuntu's advisories), NVD, CISA (actively exploited), FIRST (EPSS). The CVE numbers link to OSV.dev.</div>
+      ${/^Proxmox/.test(appName) ? 'Data: NVD (the CVEs listed for the product and the versions they affect), CISA (actively exploited), FIRST (EPSS). The CVE numbers link to NVD.'
+        : 'Data: OSV.dev (Debian\'s and Ubuntu\'s advisories), NVD, CISA (actively exploited), FIRST (EPSS). The CVE numbers link to OSV.dev.'}</div>
     <div class="actions"><button class="btn" data-act="cancel">Close</button></div>`, { wide: true, acts: { cancel: () => closeModal() } });
 }
 function groupOptions(groups, sel) {
@@ -1849,7 +1852,7 @@ async function maintEnd(a, done) {
 }
 
 function AgentPage([id, tab]) {
-  const st = { tab: ['updates', 'jobs', 'system', 'apps', 'services'].includes(tab) ? tab : 'system', sel: new Set(), data: null, appsAll: false, pinging: false, checking: new Set() };
+  const st = { tab: ['updates', 'jobs', 'system', 'apps', 'services', 'proxmox'].includes(tab) ? tab : 'system', sel: new Set(), data: null, appsAll: false, pinging: false, checking: new Set() };
   const upd = () => st.data?.agent?.state?.updates || null;
   function header(a, groups) {
     const f = a.facts, cdown = agentChecksDown(a);
@@ -2019,17 +2022,35 @@ function AgentPage([id, tab]) {
     const f = a.facts, h = f.health;
     const kv = [
       ['Hostname', f.hostname], ['Operating system', osLabel(f)], ['Kernel', f.kernel], ['Architecture', `${f.os}/${f.arch}`],
-      ['Virtualization', f.virt], ['Uptime', a.online ? dur(f.uptime_sec) : a.maint ? html`<span class="c-blue">not connected (maintenance)</span>` : html`<span class="flash-off">offline</span>`], ['CPUs', f.cpus], ['Memory (assigned)', bytes(f.mem_total)],
-      ['IP addresses', (f.ips || []).join(', ')],
-      ['IPv4 gateway', f.gateway ? f.gateway + (f.gateway_if ? ` (${f.gateway_if})` : '') : '—'],
-      ['DNS servers', f.dns?.length ? f.dns.join(', ') + (f.dns_via ? ` (via ${f.dns_via})` : '') : '—'],
+      ['Virtualization', f.virt], ['Platform', platformLabel(f)], ['Uptime', a.online ? dur(f.uptime_sec) : a.maint ? html`<span class="c-blue">not connected (maintenance)</span>` : html`<span class="flash-off">offline</span>`], ['CPUs', f.cpus], ['Memory (assigned)', bytes(f.mem_total)],
       ['OS support', a.os_support ? html`${a.os_support.status === 'expired' ? html`<span class="badge sec xs">EOL</span> ` : a.os_support.status === 'soon' ? html`<span class="badge upd xs">EOL soon</span> ` : ''}${osSupportText(a.os_support, f.os_id)}` : '—'],
       ['Failed services', !h || h.failed_count < 0 ? '—' : h.failed_count === 0 ? 'none'
         : html`<span class="badge sec xs">${h.failed_count} failed</span> ${(h.failed || []).join(', ')}${h.failed_count > (h.failed || []).length ? ', …' : ''}`],
       ['Automatic updates', ({ on: html`<span class="badge info xs">on</span> unattended-upgrades`, off: 'off', not_installed: 'not installed' })[h?.auto_updates] || '—'],
       ['Last upgrade', h?.last_upgrade ? `${fmtDate(h.last_upgrade.time)} (${ago(h.last_upgrade.time)}, ${h.last_upgrade.packages} package${h.last_upgrade.packages === 1 ? '' : 's'}) · by ${upgradedBy(h.last_upgrade.by)}` : h ? 'none recorded' : '—'],
     ];
-    return html`<div class="panel panel-pad" style="margin-bottom:16px"><div class="facts">${kv.map(([k, v]) => html`<div><div class="k">${k}</div><div class="v">${v ?? '—'}</div></div>`)}</div></div>${metricGraphs(a)}${agentPanel(a)}${probePanel(a)}`;
+    return html`<div class="panel panel-pad" style="margin-bottom:16px"><div class="facts">${kv.map(([k, v]) => html`<div><div class="k">${k}</div><div class="v">${v ?? '—'}</div></div>`)}</div></div>${networkPanel(f)}${metricGraphs(a)}${agentPanel(a)}${probePanel(a)}`;
+  }
+  // Network: the main card, every address and how it was set, gateway and DNS.
+  function networkPanel(f) {
+    const n = f.nic;
+    const card = n ? html`<span class="mono">${n.iface}</span>${n.phys ? html` on <span class="mono">${n.phys}</span>` : ''}${n.virtual ? html` <span class="dim small">(virtual card)</span>` : ''}` : null;
+    const origin = { static: 'static', dhcp: 'DHCP', slaac: 'SLAAC' };
+    const addrs = f.addrs?.length
+      ? html`${f.addrs.map((x) => html`<div><span class="mono">${x.ip}${x.prefix ? '/' + x.prefix : ''}</span> <span class="badge ${x.origin === 'static' ? 'mute' : 'info'} xs">${origin[x.origin] || 'unknown'}</span>${x.iface && (!n || x.iface !== n.iface) ? html` <span class="dim small">${x.iface}</span>` : ''}</div>`)}`
+      : (f.ips || []).length ? html`${f.ips.map((ip) => html`<div class="mono">${ip}</div>`)}` : null;
+    const kv = [
+      ['Network card', card], ['MAC address', n ? html`<span class="mono">${n.mac}</span>` : null],
+      ['IP addresses', addrs],
+      ['IPv4 gateway', f.gateway ? f.gateway + (f.gateway_if ? ` (${f.gateway_if})` : '') : null],
+      ['DNS servers', f.dns?.length ? f.dns.join(', ') + (f.dns_via ? ` (via ${f.dns_via})` : '') : null],
+    ];
+    return html`<div class="panel panel-pad" style="margin-bottom:16px"><h2 style="margin:0 0 12px">Network</h2><div class="facts">${kv.map(([k, v]) => html`<div><div class="k">${k}</div><div class="v">${v ?? '—'}</div></div>`)}</div>
+      ${!n && !f.addrs ? html`<div class="dim small" style="margin-top:10px">The network card and how the addresses were set are shown from agent 0.3.16 on.</div>` : ''}</div>`;
+  }
+  function proxmoxTab(a) {
+    return html`<div class="panel panel-pad"><div class="facts"><div><div class="k">Platform</div><div class="v">${platformLabel(a.facts)}</div></div></div>
+      <div class="dim small" style="margin-top:14px">More Proxmox information will be shown here.</div></div>`;
   }
   // Remote probe: the agentless devices this agent checks for the master.
   function probePanel(a) {
@@ -2072,10 +2093,11 @@ function AgentPage([id, tab]) {
     setHTML($('#a-head'), header(a, d.groups));
     const tabs = a.below_min ? [['system', 'System']] : [['system', 'System'], ['updates', 'Updates'], ['jobs', 'Jobs'], ['apps', 'Applications']];
     if (a.status !== 'pending') tabs.push(['services', 'Services']);
+    if (!a.below_min && a.facts?.platform?.id === 'pve') tabs.push(['proxmox', 'Proxmox']);
     if (!tabs.some(([k]) => k === st.tab)) st.tab = tabs[0][0];
     const C = a.checks, cdown = agentChecksDown(a), ctotal = C ? (C.services || []).length + (C.ping_info ? 1 : 0) : 0;
     setHTML($('#a-tabs'), tabs.map(([k, l]) => html`<button class="${st.tab === k ? 'on' : ''}" data-act="tab" data-t="${k}">${l}${k === 'updates' && a.updates?.total ? html` <span class="badge upd">${a.updates.total}</span>` : ''}${k === 'system' && !a.core_is_latest && a.core_latest ? html` <span class="badge upd" title="A newer agent version is available">↑</span>` : ''}${k === 'services' ? (cdown ? html` <span class="badge sec">${cdown.n}</span>` : ctotal ? html` <span class="dim small">${ctotal}</span>` : '') : ''}</button>`));
-    const body = st.tab === 'services' ? servicesTab(a) : a.below_min ? agentPanel(a) : { updates: updatesTab, jobs: jobsTab, system: systemTab, apps: appsTab }[st.tab](a);
+    const body = st.tab === 'services' ? servicesTab(a) : a.below_min ? agentPanel(a) : { updates: updatesTab, jobs: jobsTab, system: systemTab, apps: appsTab, proxmox: proxmoxTab }[st.tab](a);
     setHTML($('#a-body'), body);
   }
   const a = () => st.data.agent;
@@ -3717,7 +3739,8 @@ function SettingsGeneral() {
     const mins = Math.ceil((v.nvd_pending * (v.nvd_key_set ? 0.8 : 6.5)) / 60);
     setHTML($('#vuln-box'), html`<div class="dim small">The installed versions of the tracked applications are looked up at OSV.dev, which uses Debian's and Ubuntu's own security data.
       Sent: the OS release (e.g. Debian:12) and source package names with their versions — no host names or addresses.
-      Severity comes from the OSV record, otherwise from NVD (only CVE numbers are sent there); CISA lists the actively exploited ones and FIRST (EPSS) the chance of exploitation.</div>
+      Severity comes from the OSV record, otherwise from NVD (only CVE numbers are sent there); CISA lists the actively exploited ones and FIRST (EPSS) the chance of exploitation.
+      Proxmox VE and Proxmox Backup Server come from Proxmox's own package source: their CVEs come from NVD (only the product name is sent).</div>
       <div class="dim small" style="margin-top:6px">${v.last_run ? html`Last check ${fmtDate(v.last_run)}` : 'Not checked yet'}${v.next_at ? html` · next ${fmtDate(v.next_at)}` : ''} · ${v.cves} CVE${v.cves === 1 ? '' : 's'} known for ${v.systems} device${v.systems === 1 ? '' : 's'}${v.kev_count ? html` · CISA list: ${v.kev_count} exploited CVEs` : ''}.
         ${v.nvd_pending ? html`${v.nvd_pending} severity lookup${v.nvd_pending === 1 ? '' : 's'} at NVD waiting (about ${mins} min).` : ''}
         ${ifChange(html`<button type="button" class="btn ghost sm" data-act="vuln-check" ${st.vulnChecking ? 'disabled' : ''}>${st.vulnChecking ? html`<span class="spin"></span>` : icon('refresh')} Check now</button>`)}</div>
