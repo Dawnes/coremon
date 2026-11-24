@@ -189,9 +189,6 @@ func TestVulnCheck(t *testing.T) {
 	if nv := view("a_new", true); nv.Status != "unsupported" {
 		t.Errorf("release without OSV data: %+v", nv)
 	}
-	if ol := view("a_old", true); ol.Status != "old_agent" {
-		t.Errorf("agent before 0.3.6: %+v", ol)
-	}
 	if u := fmt.Sprint(s.vulnStatus(1)["unsupported"]); u != "[{Ubuntu:26.04:LTS ubuntu 26.04 false}]" {
 		t.Errorf("unsupported releases: %v", u)
 	}

@@ -50,15 +50,15 @@ as **agentless** devices: the master itself pings them and checks their services
   its own agent every minute: disk space per mount point (% used or GB free),
   memory in use and the 1-minute load per core, each down after a set number of
   readings in a row past its limit. Each one has a 24-hour graph on the
-  device's System tab, and a D, M or C letter on its dashboard tile and in the
-  Device List (green, red, or grey when unknown).
+  device's System tab, and a D, M or C letter on its dashboard tile and on the
+  Devices page (green, red, or grey when unknown).
 * **Network dependencies**: each device can be **connected via** another device,
   such as a switch or the host of a VM. When that device is down or in
   maintenance, the devices behind it show as unreachable instead of down: the
   cause is shown once, and their checks keep running. A **virtual** device (only
   a name, a group and a Connected via) stands for something Coremon cannot
   check, such as an unmanaged switch: devices can be connected via it, it is
-  drawn on the network map, shown on the dashboard and in the Device List, and
+  drawn on the network map, shown on the dashboard and on the Devices page, and
   it passes on the state of the devices above it. Its own page lists the
   devices connected via it.
 * **Upstream**: Settings → Upstream adds the internet connection as a special
@@ -111,9 +111,14 @@ and OSV.dev, NVD, CISA and FIRST (vulnerability data).
 
 ## Add a device
 
-1. **Settings → Devices → Add a device → Agent → Generate install command.**
+1. **Dashboard → Devices → Add device → Agent → Generate install command.**
 2. Run the command as root on the device (it needs `curl`).
-3. **Approve** the new device in the website and pick its group.
+3. **Approve** the new device and pick its group: the Overview shows a bar with
+   **Review** while a device is waiting, and the Devices page lists them at the top.
+
+Groups are made, renamed and ordered with **Groups** on the Devices page. A
+device's name, group and Connected via are changed with **More → Edit** on its
+own page, where **More** also has Maintenance and Remove.
 
 For a device without an agent choose **Agentless** instead and enter its name and IP
 address. Settings → General → Ping sets how often it is pinged; its services are added

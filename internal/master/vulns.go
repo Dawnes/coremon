@@ -1035,7 +1035,7 @@ func (s *Server) vulnsFor(a *Agent, full bool) *vulnView {
 		return v
 	}
 	red := map[string]bool{}
-	anyOld, anyPending := false, false
+	anyPending := false
 	for _, ap := range st.Apps {
 		if !ap.Installed {
 			continue
@@ -1057,10 +1057,7 @@ func (s *Server) vulnsFor(a *Agent, full bool) *vulnView {
 		} else {
 			var ok bool
 			if list, ok = s.distroCVEs(ap, eco, a.Facts.OSID, upd, av, &v.CheckedAt); !ok {
-				switch av.Status {
-				case "old_agent":
-					anyOld = true
-				case "pending":
+				if av.Status == "pending" {
 					anyPending = true
 				}
 				continue
@@ -1122,10 +1119,7 @@ func (s *Server) vulnsFor(a *Agent, full bool) *vulnView {
 		}
 	}
 	v.Badge = len(red)
-	switch {
-	case len(v.Apps) > 0 && anyOld:
-		v.Status = "old_agent"
-	case anyPending && v.CheckedAt == 0:
+	if anyPending && v.CheckedAt == 0 {
 		v.Status = "pending"
 	}
 	if !full {
@@ -1139,9 +1133,6 @@ func (s *Server) vulnsFor(a *Agent, full bool) *vulnView {
 func (s *Server) distroCVEs(ap apps.App, eco, osID string, upd map[string]string, av *appVulns, checkedAt *int64) ([]cveView, bool) {
 	d := &s.vul.d
 	switch {
-	case ap.Source == "" || ap.SourceVersion == "":
-		av.Status = "old_agent"
-		return nil, false
 	case ap.Origin == "":
 		av.Status = "manual"
 		return nil, false
