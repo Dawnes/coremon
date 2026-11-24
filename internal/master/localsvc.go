@@ -8,7 +8,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"net"
 	"net/http"
 	"strings"
 	"time"
@@ -40,10 +39,10 @@ type Service struct {
 
 	// cert (Certificate Validity): Host and Port are the web address;
 	// CertValid is the valid chain (trusted and issued for Host), CertTime
-	// valid at this time, CertDays the warning before it expires. Remote:
-	// connect to where Host points (DNS) instead of the device's address.
+	// valid at this time, CertDays the warning before it expires. It
+	// connects to the device's address (for a device known by a name:
+	// where the name points).
 	CertTime bool `json:"cert_time,omitempty"`
-	Remote   bool `json:"remote,omitempty"`
 
 	// dns: the name to resolve is Host; record type, expected value (an
 	// answer must contain it, "" = not checked), maximum response time in ms
@@ -81,7 +80,7 @@ type Service struct {
 // spec: what the check needs.
 func (sv *Service) spec() probe.Service {
 	return probe.Service{Method: sv.Method, Port: sv.Port, Greeting: sv.Greeting, Host: sv.Host, Path: sv.Path, Codes: sv.Codes,
-		CertValid: sv.CertValid, CertDays: sv.CertDays, RType: sv.RType, Expect: sv.Expect, MaxMs: sv.MaxMs, CertTime: sv.CertTime, Remote: sv.Remote}
+		CertValid: sv.CertValid, CertDays: sv.CertDays, RType: sv.RType, Expect: sv.Expect, MaxMs: sv.MaxMs, CertTime: sv.CertTime}
 }
 
 // kind: the check method's name in a remote probe's list.
@@ -249,9 +248,6 @@ var svcMethods = []svcMethod{
 		Fields: []svcField{
 			{Key: "host", Label: "Web address", Type: "text", Placeholder: "www.example.com or www.example.com:8443",
 				Hint: "A name, optionally with a port (443 when none). A full https:// address works too; a path is ignored."},
-			{Key: "target", Label: "Connect to", Type: "switch", Default: certTargetHost,
-				Choices: [][2]string{{certTargetHost, "This device's address"}, {certTargetDNS, "Where the name points (DNS)"}},
-				Hint:    "This device's address: tests the certificate this device serves, with the name presented to it. Where the name points: looks the name up in DNS and tests whatever answers there, for example an outside website."},
 			{Key: "cert_valid", Label: "Valid chain", Type: "bool", Default: true,
 				Hint: "Trusted by the standard roots of the system that checks, and issued for this name. A self-signed certificate fails."},
 			{Key: "cert_time", Label: "Valid in time", Type: "bool", Default: true,
@@ -297,7 +293,6 @@ type serviceView struct {
 	Expect    string          `json:"expect,omitempty"`
 	MaxMs     int             `json:"max_ms"`
 	CertTime  bool            `json:"cert_time"`
-	Target    string          `json:"target,omitempty"` // cert: "device" or "dns"
 	Cert      *proto.CertInfo `json:"cert,omitempty"`   // cert: what the last check saw (device page only)
 	Steps     []string        `json:"steps"`            // the sub-probes, in order
 	Failed    string          `json:"failed,omitempty"` // the sub-probe of the last failed check
@@ -344,7 +339,7 @@ func (s *Server) serviceView(sv *Service, now int64, full bool) serviceView {
 	} else {
 		v.Steps = probe.Steps(sv.spec())
 	}
-	v.CertTime, v.Target = sv.CertTime, sv.certTarget()
+	v.CertTime = sv.CertTime
 	if full {
 		v.Hist = h
 		v.Cert = sv.Cert
@@ -481,6 +476,7 @@ func (s *Server) checkService(devID, svcID string) {
 	now := time.Now()
 	s.recordService(sv, o, now)
 	s.loc.mu.Unlock()
+	d.noteIP(o.IP)
 	s.noteBehind(d.ID, o.Err != nil && !sv.Reverse, sv.Hist, now)
 }
 
@@ -506,7 +502,6 @@ type serviceReq struct {
 	Expect    *string `json:"expect"`
 	MaxMs     *int    `json:"max_ms"`
 	CertTime  *bool   `json:"cert_time"`
-	Target    *string `json:"target"` // cert: "device" or "dns"
 
 	metricReq
 }
@@ -530,7 +525,7 @@ func (sv *Service) setMethod(m string, certValid bool) {
 	}
 	sv.Method = m
 	sv.Host, sv.Path, sv.Codes, sv.CertValid, sv.CertDays, sv.RType, sv.Expect, sv.MaxMs = "", "", "", false, 0, "", "", 0
-	sv.CertTime, sv.Remote, sv.Cert = false, false, nil
+	sv.CertTime, sv.Cert = false, nil
 	switch m {
 	case probe.MethodCert:
 		sv.Greeting, sv.Reverse = false, false
@@ -654,19 +649,6 @@ func (req *serviceReq) apply(sv *Service) error {
 		if req.CertDays != nil {
 			sv.CertDays = *req.CertDays
 		}
-		if req.Target != nil {
-			switch *req.Target {
-			case certTargetHost:
-				sv.Remote = false
-			case certTargetDNS:
-				sv.Remote = true
-			default:
-				return errors.New(`connect to must be "device" or "dns"`)
-			}
-		}
-		if sv.Remote && net.ParseIP(sv.Host) != nil {
-			return errors.New("an IP address is not looked up in DNS: choose This device's address, or enter a name")
-		}
 	}
 	if sv.Method == probe.MethodDNS {
 		sv.Greeting = false // a DNS check does not wait for a greeting
@@ -725,9 +707,6 @@ func (sv *Service) describe() string {
 	}
 	if sv.Method == probe.MethodCert {
 		d = fmt.Sprintf("%s certificate %s:%d, every %ds, %d retries, timeout %ds", sv.Name, sv.Host, sv.Port, sv.Interval, sv.Retries, sv.Timeout)
-		if sv.Remote {
-			d += ", where the name points (DNS)"
-		}
 		if sv.CertValid {
 			d += ", valid chain"
 		}

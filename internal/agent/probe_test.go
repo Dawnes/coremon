@@ -17,7 +17,7 @@ func TestProberSchedule(t *testing.T) {
 	ping := proto.ProbeCheck{ID: "l_1", Kind: "ping", Address: "10.0.0.5", Interval: 60, Timeout: 2, DownAfter: 2}
 	ssh := proto.ProbeCheck{ID: "s_1", Kind: "tcp", Address: "10.0.0.5", Port: 22, Greeting: true, Interval: 300, Timeout: 5, Retries: 1}
 	bad := []proto.ProbeList{
-		{Version: "x", Checks: []proto.ProbeCheck{{ID: "a", Kind: "ping", Address: "host.lan", Interval: 60, Timeout: 2}}},
+		{Version: "x", Checks: []proto.ProbeCheck{{ID: "a", Kind: "ping", Address: "bad name.lan", Interval: 60, Timeout: 2}}},
 		{Version: "x", Checks: []proto.ProbeCheck{{ID: "a", Kind: "tcp", Address: "10.0.0.1", Port: 0, Interval: 60, Timeout: 2}}},
 		{Version: "x", Checks: []proto.ProbeCheck{{ID: "a", Kind: "ping", Address: "10.0.0.1", Interval: 1, Timeout: 2}}},
 		{Version: "x", Checks: []proto.ProbeCheck{ping, ping}},
@@ -26,6 +26,10 @@ func TestProberSchedule(t *testing.T) {
 		if p.setList(l, now) == nil {
 			t.Errorf("bad list %d accepted", i)
 		}
+	}
+	// A name is accepted: the agent looks it up before every check.
+	if err := p.setList(proto.ProbeList{Version: "n", Checks: []proto.ProbeCheck{{ID: "a", Kind: "ping", Address: "nas.lan", Interval: 60, Timeout: 2}}}, now); err != nil {
+		t.Fatalf("name: %v", err)
 	}
 	if err := p.setList(proto.ProbeList{Version: "v1", Checks: []proto.ProbeCheck{ping, ssh}}, now); err != nil {
 		t.Fatal(err)

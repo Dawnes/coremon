@@ -4,18 +4,13 @@ package master
 // (Service.Cert, in checks.dat) for the website's "Show" view. Details from
 // a remote probe are cleaned and limited like every other agent text.
 
-import (
-	"coremon/internal/probe"
-	"coremon/internal/proto"
-)
+import "coremon/internal/proto"
 
 const (
-	certInterval   = 3600 // a certificate check's default heartbeat
-	maxCertChain   = 8
-	maxCertNames   = 100
-	maxCertText    = 300
-	certTargetDNS  = "dns"    // connect to where the name points
-	certTargetHost = "device" // connect to the device's own address
+	certInterval = 3600 // a certificate check's default heartbeat
+	maxCertChain = 8
+	maxCertNames = 100
+	maxCertText  = 300
 )
 
 // cleanCert: a copy with every text cleaned and the lists limited.
@@ -42,15 +37,4 @@ func cleanCert(c *proto.CertInfo) *proto.CertInfo {
 		out.Chain = append(out.Chain, n)
 	}
 	return out
-}
-
-// certTarget: how the website names where a certificate check connects.
-func (sv *Service) certTarget() string {
-	if sv.Method != probe.MethodCert {
-		return ""
-	}
-	if sv.Remote {
-		return certTargetDNS
-	}
-	return certTargetHost
 }

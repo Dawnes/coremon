@@ -208,6 +208,26 @@ func parseDeviceIP(s string) (string, error) {
 	return ip.String(), nil
 }
 
+// parseLocalAddr: an agentless device's address: an IP address (as
+// parseDeviceIP), or a name that the checking system looks up in DNS
+// before every check. A name is kept in lower case, without a final dot.
+func parseLocalAddr(s string) (string, error) {
+	s = strings.TrimSpace(s)
+	if s == "" || net.ParseIP(s) != nil || strings.ContainsAny(s, "%/:") {
+		return parseDeviceIP(s)
+	}
+	n := strings.TrimSuffix(strings.ToLower(s), ".")
+	labels := strings.Split(n, ".")
+	last := labels[len(labels)-1]
+	if probe.ValidHost(n) != nil || strings.Trim(last, "0123456789") == "" {
+		return "", fmt.Errorf("%q is not an IP address or a name like nas.example.lan", clip(s, 64))
+	}
+	if n == "localhost" || strings.HasSuffix(n, ".localhost") {
+		return "", errors.New("localhost points at the checking system itself")
+	}
+	return n, nil
+}
+
 // canonIP: the comparable form of an address, or "" for addresses that
 // every system has (loopback, link-local) and are never compared.
 func canonIP(s string) string {
@@ -292,19 +312,21 @@ func (s *Server) localConflicts(d *LocalDevice) []ipConflict {
 // ---- the website view ----
 
 type localView struct {
-	Address   string     `json:"address"`
-	Checked   bool       `json:"checked"`
-	Up        bool       `json:"up"`
-	Since     int64      `json:"since"`
-	LastCheck int64      `json:"last_check"`
-	LastUp    int64      `json:"last_up"`
-	RTTUs     int64      `json:"rtt_us"`
-	Fails     int        `json:"fails"`
-	LastError string     `json:"last_error,omitempty"`
-	Uptime    float64    `json:"uptime"` // share of answered pings in the last 24 hours; -1 none
-	Hist      []histSlot `json:"hist,omitempty"`
-	Interval  int        `json:"interval"`
-	DownAfter int        `json:"down_after"`
+	Address   string      `json:"address"`
+	Resolved  string      `json:"resolved,omitempty"`  // a name: the address the last check went to
+	PointsTo  *ipConflict `json:"points_to,omitempty"` // a name: the known device that has that address
+	Checked   bool        `json:"checked"`
+	Up        bool        `json:"up"`
+	Since     int64       `json:"since"`
+	LastCheck int64       `json:"last_check"`
+	LastUp    int64       `json:"last_up"`
+	RTTUs     int64       `json:"rtt_us"`
+	Fails     int         `json:"fails"`
+	LastError string      `json:"last_error,omitempty"`
+	Uptime    float64     `json:"uptime"` // share of answered pings in the last 24 hours; -1 none
+	Hist      []histSlot  `json:"hist,omitempty"`
+	Interval  int         `json:"interval"`
+	DownAfter int         `json:"down_after"`
 
 	// Ping not running: the status above comes from the services; the ping fields are empty.
 	Ping      bool          `json:"ping"`      // the ping runs
@@ -393,6 +415,11 @@ func (s *Server) localDeviceView(d *LocalDevice, full bool) agentView {
 	}
 	v.Facts.IPs = []string{d.Address}
 	v.Local = lv
+	if d.Resolved != "" {
+		if id, name := s.ipOwner(d.Resolved, d.ID, d.Probe); id != "" {
+			lv.PointsTo = &ipConflict{IP: d.Resolved, ID: id, Name: name}
+		}
+	}
 	v.Conflicts = s.localConflicts(d)
 	s.setVia(&v, d.Via, d.Maint == nil && lv.Checked && !lv.Up, full)
 	return v
@@ -407,7 +434,7 @@ func (s *Server) checksView(d *Checks, full, noReadings bool) *localView {
 	if mode == "" {
 		mode = "on"
 	}
-	lv := &localView{Address: d.Address, Interval: s.st.st.Local.IntervalSec, DownAfter: s.st.st.Local.DownAfter, Ping: d.pinging(), PingMode: mode, Uptime: -1}
+	lv := &localView{Address: d.Address, Resolved: d.Resolved, Interval: s.st.st.Local.IntervalSec, DownAfter: s.st.st.Local.DownAfter, Ping: d.pinging(), PingMode: mode, Uptime: -1}
 	if d.PingMode != pingRemoved {
 		h, up := recentHist(d.Hist, now)
 		pv := &pingView{Mode: mode, Checked: d.Checked, Up: d.Up, Since: d.Since, LastCheck: d.LastCheck, LastUp: d.LastUp, RTTUs: d.RTTUs,
@@ -613,9 +640,10 @@ func (s *Server) pingOne(id string) {
 	}
 	addr, timeout := d.Address, time.Duration(s.st.st.Local.TimeoutSec)*time.Second
 	s.st.mu.Unlock()
-	ip := net.ParseIP(addr)
-	ctx, cancel := context.WithTimeout(context.Background(), timeout+time.Second)
-	rtt, err := s.pinger(ctx, ip, timeout)
+	// A name is looked up first (a failed lookup is a failed ping): up to
+	// one timeout for the lookup and one for the ping.
+	ctx, cancel := context.WithTimeout(context.Background(), 2*timeout+time.Second)
+	ip, rtt, err := probe.PingAddr(ctx, addr, timeout, s.pinger)
 	cancel()
 	var se *probe.SetupError
 	s.loc.mu.Lock()
@@ -640,6 +668,7 @@ func (s *Server) pingOne(id string) {
 		} else {
 			now := time.Now()
 			s.record(d.Checks, rtt, err, now)
+			d.noteIP(ip)
 			s.noteBehind(d.ID, err != nil, d.Hist, now)
 		}
 	}
@@ -748,6 +777,20 @@ func (s *Server) checkAddress(addr, except, probe string) (string, int, error) {
 	return ip, 0, nil
 }
 
+// checkLocalAddress: an agentless device's address. An IP address must be
+// free (checkAddress); a name may be used by several devices, as several
+// names may point to one server. Caller holds s.st.mu.
+func (s *Server) checkLocalAddress(addr, except, probe string) (string, int, error) {
+	a, err := parseLocalAddr(addr)
+	if err != nil {
+		return "", http.StatusBadRequest, err
+	}
+	if net.ParseIP(a) == nil {
+		return a, 0, nil
+	}
+	return s.checkAddress(a, except, probe)
+}
+
 func (s *Server) handleLocalCreate(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Name    string `json:"name"`
@@ -774,7 +817,7 @@ func (s *Server) handleLocalCreate(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, fmt.Sprintf("at most %d agentless devices", maxLocalDevices), http.StatusBadRequest)
 		return
 	}
-	ip, code, err := s.checkAddress(req.Address, "", req.Probe)
+	ip, code, err := s.checkLocalAddress(req.Address, "", req.Probe)
 	if err != nil {
 		http.Error(w, err.Error(), code)
 		return
@@ -864,7 +907,7 @@ func (s *Server) handleLocalUpdate(w http.ResponseWriter, r *http.Request) {
 		}
 		var code int
 		var err error
-		if ip, code, err = s.checkAddress(addr, d.ID, probe); err != nil {
+		if ip, code, err = s.checkLocalAddress(addr, d.ID, probe); err != nil {
 			http.Error(w, err.Error(), code)
 			return
 		}
@@ -892,7 +935,7 @@ func (s *Server) handleLocalUpdate(w http.ResponseWriter, r *http.Request) {
 	}
 	if ip != d.Address {
 		changes = append(changes, "address "+d.Address+" → "+ip)
-		d.Address = ip
+		d.Address, d.Resolved = ip, ""
 		// A new address starts over.
 		d.resetPing()
 		s.loc.mu.Lock()

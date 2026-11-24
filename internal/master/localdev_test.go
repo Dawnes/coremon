@@ -33,9 +33,9 @@ func TestLocalDevices(t *testing.T) {
 		t.Fatal("login")
 	}
 
-	// IP addresses only, and each address once across both types.
+	// Each IP address once across both types (names: TestNameAddress).
 	for addr, want := range map[string]int{
-		"printer.lan": 400, "192.168.5.0/24": 400, "127.0.0.1": 400, "fe80::1": 400, "224.0.0.1": 400, "": 400,
+		"bad name": 400, "1.2.3": 400, "localhost": 400, "192.168.5.0/24": 400, "127.0.0.1": 400, "fe80::1": 400, "224.0.0.1": 400, "": 400,
 		"192.168.5.41": 409, "fd00::5": 409, "192.168.5.50": 200,
 	} {
 		code, body := c.do("POST", "/api/ui/locals", `{"name":"printer","address":"`+addr+`"}`)

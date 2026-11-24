@@ -25,12 +25,8 @@ const (
 )
 
 // checkCert: connect, TLS handshake, then the certificate checks that are
-// switched on. No HTTP request is sent. With Remote the connection goes to
-// where the name points (looked up in DNS) instead of the device's address.
+// switched on. No HTTP request is sent.
 func checkCert(ctx context.Context, addr string, s Service, timeout time.Duration) Outcome {
-	if s.Remote {
-		addr = s.Host
-	}
 	start := time.Now()
 	c, err := dial(ctx, addr, s.Port, timeout)
 	if err != nil {

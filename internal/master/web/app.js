@@ -1023,7 +1023,7 @@ function Dashboard() {
     return html`
       <div class="card ${accent}" data-act="open-agent" data-id="${a.id}" ${arranging() ? raw('data-drag="agent" draggable="true"') : ''}>
         <div class="top">${arranging() ? html`<span class="grip" title="Drag to reorder or move to another group">${icon('grip')}</span>` : ''}${agentDot(a)}
-          <div style="min-width:0"><div class="name">${a.name}</div><div class="os">Agentless${L.probe ? html` · via ${L.probe.name}` : ''}</div><div class="os"><span class="ip">${L.address}</span></div></div></div>
+          <div style="min-width:0"><div class="name">${a.name}</div><div class="os">Agentless${L.probe ? html` · via ${L.probe.name}` : ''}</div><div class="os"><span class="ip" title="${L.resolved ? `Last checked at ${L.resolved}` : ''}">${L.address}</span></div></div></div>
         <div class="mid">${big}<div class="badges">${uptime}</div></div>
         <div class="inforow"><span class="uptime">${icon('clock')}${state === 'maint' ? 'no checks now' : state === 'unk' ? 'no results now' : state === 'wait' ? (L.fails ? 'not decided yet' : 'not checked yet') : `${L.up ? 'up' : state === 'unr' ? 'no answer' : 'down'} ${dur(now() - L.since)}`}</span><span class="spacer"></span>${state === 'up' && L.ping && L.rtt_us ? html`<span class="tag mono">${rttText(L.rtt_us)}</span>` : ''}</div>
         <div class="foot"><span>${L.last_check ? html`${when(L.last_check, 'Services checked ')}.` : 'waiting'}</span></div>
@@ -1451,7 +1451,7 @@ function DeviceList([, cmd]) {
       <td class="nowrap" title="${statusText(a)}${a.below_min ? ` (agent ${a.core_version}, lowest allowed ${a.min_agent})` : ''}">${agentDot(a)}${statusText(a) === 'online' || statusText(a) === '' ? '' : html` <span class="small ${a.maint ? 'c-blue' : a.unreach ? 'c-unr' : statusText(a) === 'unknown' ? 'dim' : a.status === 'pending' || a.status === 'report_only' || a.below_min || statusText(a) === 'waiting' || statusText(a) === 'partly online' || / (service|check)s? down/.test(statusText(a)) ? 'c-amber' : 'c-red'}">${statusText(a)}</span>`}</td>
       <td class="nowrap"><a href="${a.upstream ? '#/settings/upstream' : `#/device/${a.id}`}"><b>${a.name}</b></a>${a.ip_conflicts?.length ? html` <span class="badge sec xs" title="${a.ip_conflicts.map((c) => `IP ${c.ip} is also used by ${c.name}`).join('\n')}">IP also used</span>` : ''}</td>
       <td class="opt muted">${groupName(a.group_id)}</td>
-      <td class="opt small nowrap">${(f.ips || [])[0] || (isVirtual(a) ? html`<span class="dim">—</span>` : '')}</td>
+      <td class="opt small nowrap">${(f.ips || [])[0] || (isVirtual(a) ? html`<span class="dim">—</span>` : '')}${a.local?.resolved ? html` <span class="dim" title="The address the last check went to">→ ${a.local.resolved}</span>` : ''}</td>
       <td class="opt nowrap" title="${a.below_min || isLocal(a) || isVirtual(a) ? '' : osLabel(f)}">${a.upstream ? html`<span class="dim" title="The internet connection, pinged by the master (Settings → Upstream)">upstream</span>` : isVirtual(a) ? html`<span class="dim" title="Virtual device: not checked">virtual</span>` : isLocal(a) ? html`<span class="dim" title="Monitored by the master with a ping; no agent">agentless</span>` : a.below_min ? html`<span class="dim">—</span>` : clipText(osShort(f), 14)}${o?.status === 'expired' ? html` <span class="badge sec xs" title="${osSupportText(o, f.os_id)}">EOL</span>` : o?.status === 'soon' ? html` <span class="badge upd xs" title="${osSupportText(o, f.os_id)}">EOL soon</span>` : ''}</td>
       <td class="opt nowrap">${isVirtual(a) ? html`<span class="dim">—</span>` : statLetters(a)}</td>
       <td class="num"><b class="${u?.security ? 'c-red' : u?.total ? 'c-amber' : 'dim'}">${u ? u.total : '—'}</b></td>
@@ -2355,8 +2355,8 @@ async function localEditModal(a, groups, done) {
   openModal(html`<h3>${isNew ? 'Add an agentless device' : `Edit ${a.name}`}</h3>
     <form class="form" data-submit="save">
       <label class="field">Name<input type="text" name="name" value="${a?.name || ''}" maxlength="64" placeholder="e.g. printer-hall" required ${isNew ? raw('autofocus') : ''}></label>
-      <label class="field">IP address<input type="text" name="address" value="${a?.local.address || ''}" placeholder="e.g. 192.168.5.20" required spellcheck="false" autocomplete="off"></label>
-      <div class="dim small">IPv4 or IPv6. No host names: Coremon does not rely on DNS. Each address can belong to one device only, per checking system.${isNew ? '' : ' A new address starts all checks over.'}</div>
+      <label class="field">IP address or name<input type="text" name="address" value="${a?.local.address || ''}" placeholder="e.g. 192.168.5.20 or nas.example.lan" required spellcheck="false" autocomplete="off"></label>
+      <div class="dim small">${ADDR_HINT}${isNew ? '' : ' A new address starts all checks over.'}</div>
       <div class="field">Checked by${pick('probe', probeItems(pa, cur, a?.local.probe?.name), cur)}</div>
       <div class="dim small">Master: the master checks the device itself. An agent: that agent checks it, for a network the master cannot reach; its results come in with the agent's contact. ${isNew ? '' : 'The history is kept when this changes.'}
         Only agents with Remote probe switched on are listed; switch it on on the agent's device page.</div>
@@ -2494,8 +2494,12 @@ function rttGraph(rtt) {
       <div class="rttg-x">${xl.map((s) => html`<span style="left:${(s.i / n) * 100}%">${hhmm(s.t)}</span>`)}</div></div>
     <div class="rttg-unit">ms</div></div>`;
 }
+// An agentless device's address, in the Add and Edit forms.
+const ADDR_HINT = 'IPv4 or IPv6, or a name: the system that checks the device (Checked by) looks it up in DNS before every check, IPv4 first; IPv6 only when the name has no IPv4 address and that system has IPv6 connectivity. An IP address can belong to one device only, per checking system; several devices may use the same name.';
+// The address as shown: a name with the address its last check went to.
+const addrText = (L) => html`<span class="mono">${L.address}</span>${L.resolved ? html` <span class="dim small mono" title="The address the last check went to">→ ${L.resolved}</span>` : ''}`;
 // Sub-probes of a service check (the master's probe.Steps), in order.
-const STEP_LABEL = { connect: 'Connect', greeting: 'Greeting', tls: 'TLS handshake', cert: 'Certificate valid', cert_time: 'Valid in time', cert_days: 'Certificate days', http: 'HTTP status',
+const STEP_LABEL = { lookup: 'Name lookup', connect: 'Connect', greeting: 'Greeting', tls: 'TLS handshake', cert: 'Certificate valid', cert_time: 'Valid in time', cert_days: 'Certificate days', http: 'HTTP status',
   query: 'Query', rcode: 'Server status', records: 'Records', expect: 'Expected value', time: 'Response time' };
 const stepLabel = (k) => STEP_LABEL[k] || k;
 const svcProto = (s) => (s.metric ? { disk: `DISK ${s.mount}`, memory: 'MEMORY', load: 'CPU' }[s.method] || '' : `${(s.method || 'tcp').toUpperCase()} ${s.port}`);
@@ -2507,7 +2511,7 @@ const metricTotal = (s) => (s.method === 'load' ? '' : (/ of (\S+ [KMGT]?B)$/.ex
 const metricVal = (s, v) => (s.method === 'load' ? v.toFixed(2) : s.limit_kind === 'free' ? `${v.toFixed(1)} GB` : `${Math.round(v)}%`);
 // What a service checks beyond its port: the HTTPS host and path, or the DNS question.
 const svcTarget = (s) => (s.method === 'https' ? ` · ${s.host}${s.path !== '/' ? s.path : ''}` : s.method === 'dns' ? ` · ${s.rtype} ${s.host}`
-  : s.method === 'cert' ? ` · ${s.host}${s.target === 'dns' ? ' (DNS)' : ''}` : '');
+  : s.method === 'cert' ? ` · ${s.host}` : '');
 // A certificate check's web address as typed: name, and the port when not 443.
 const certAddr = (s) => (s.port && s.port !== 443 ? `${s.host.includes(':') ? `[${s.host}]` : s.host}:${s.port}` : s.host || '');
 // How the last check went per sub-probe: ✓ passed, ✗ failed, – not reached.
@@ -2755,7 +2759,7 @@ function certModal(s) {
     <div class="dim small" style="margin:-6px 0 12px">As seen by the last check${s.last_check ? html`, ${when(s.last_check)}` : ''}.</div>
     ${s.last_error ? html`<div class="notice red" style="margin-bottom:12px">${s.last_error}</div>` : ''}
     <table class="certtbl" style="margin-bottom:12px">
-      ${row('Connected to', html`<span class="mono small">${c.addr}</span>${s.target === 'dns' ? html` <span class="dim small">(where ${s.host} points)</span>` : html` <span class="dim small">(this device's address)</span>`}`)}
+      ${row('Connected to', html`<span class="mono small">${c.addr}</span> <span class="dim small">(this device's address)</span>`)}
       ${row('Protocol', `${c.tls}${c.cipher ? ` · ${c.cipher}` : ''}`)}
     </table>
     <div class="stack" style="gap:12px">${(c.chain || []).map(entry)}</div>
@@ -2850,7 +2854,7 @@ function LocalPage([id, tab]) {
     const svcs = L.services || [];
     const kv = [
       ['Status', html`${status} ${L.checked ? `since ${fmtDate(L.since)}` : ''}`],
-      ['IP address', html`<span class="mono">${L.address}</span>`],
+      ['Address', html`${addrText(L)}${L.points_to ? html` <span class="dim small">(<a href="#/device/${L.points_to.id}">${L.points_to.name}</a>)</span>` : ''}`],
       ['Ping', on ? 'on' : html`<span class="badge mute xs">${L.ping_mode === 'paused' ? 'paused' : 'not pinged'}</span>`],
       ['Round-trip time', on && L.up && L.rtt_us ? rttText(L.rtt_us) : '—'],
       ['Last ping', P?.last_check ? html`${fmtDate(P.last_check, true)}` : '—'],
@@ -2896,7 +2900,7 @@ function LocalPage([id, tab]) {
       <div class="page-head syshead">
         <div class="headinfo"><div class="row">${agentDot(a)}<h1>${a.name}</h1>
           <span class="tag">${icon('folder')} ${g ? g.name : 'Ungrouped'}</span><span class="verpill loc" title="${L.probe ? `Checked by the agent ${L.probe.name}` : 'Monitored by the master itself'}; no agent is installed on it">agentless${L.probe ? ` · via ${L.probe.name}` : ''}</span></div>
-          <div class="sub">${L.address} · ${state}${!a.maint && !out && L.up && L.svc_down ? html` · ${L.svc_down} of ${L.svc_total} services down${L.svc_fail ? html` · <span class="c-red">${L.svc_fail.name}: ${L.svc_fail.error || 'down'}</span>` : ''}` : ''}</div>
+          <div class="sub">${L.address}${L.resolved ? ` (${L.resolved})` : ''} · ${state}${!a.maint && !out && L.up && L.svc_down ? html` · ${L.svc_down} of ${L.svc_total} services down${L.svc_fail ? html` · <span class="c-red">${L.svc_fail.name}: ${L.svc_fail.error || 'down'}</span>` : ''}` : ''}</div>
           ${viaLine(a)}</div>
         <span class="spacer"></span>
         <button class="btn sm" data-act="ping" ${st.pinging || !L.ping || L.probe ? 'disabled' : ''} title="${L.probe ? `Checked by ${L.probe.name} on its own schedule` : L.ping ? 'Ping the device now' : pingNote(L)}">${st.pinging ? html`<span class="spin"></span>` : icon('pulse')} Ping now</button>
@@ -3156,13 +3160,13 @@ function deviceAdmin(st) {
         <div class="muted small">The master checks the device itself; nothing is installed on it.</div>
         <form class="row" style="margin-top:14px" data-submit="l-add">
           <input type="text" name="name" placeholder="Name, e.g. printer-hall" maxlength="64" style="width:220px" required>
-          <input type="text" name="address" placeholder="IP address, e.g. 192.168.5.20" style="width:220px" required spellcheck="false" autocomplete="off">
+          <input type="text" name="address" placeholder="IP address or name, e.g. nas.example.lan" style="width:240px" required spellcheck="false" autocomplete="off">
           <select name="group" title="Group">${groupOptions(groups, '')}</select>
           <span title="Checked by: the master itself, or an agent for a network the master cannot reach">${pick('probe', probeItems(st.probes || { agents: [], max: 200 }, '').map((x) => ({ ...x, label: `Checked by: ${x.label}` })), '', { style: 'width:230px' })}</span>
           <span title="Connected via: the device it sits behind on the network">${pick('via', viaItems(st.data, '').map((x) => ({ ...x, label: `Connected via: ${x.label}`, find: `${x.find || ''} ${x.label}` })), '', { style: 'width:250px' })}</span>
           <button class="btn primary">${icon('plus')} Add device</button>
         </form>
-        <div class="dim small" style="margin-top:8px">IPv4 or IPv6 only, no host names. An address can belong to one device only, whether agent or agentless; devices checked by different agents may share an address (separate networks). Only agents with Remote probe switched on (on the agent's device page) can check devices.
+        <div class="dim small" style="margin-top:8px">${ADDR_HINT} Devices checked by different agents may share an IP address (separate networks). Only agents with Remote probe switched on (on the agent's device page) can check devices.
           Connected via: the device it sits behind on the network, such as a switch; when that device is down, this one shows as unreachable instead of down.</div>`}`);
     if (st.addType === 'agent') renderTokens();
   }
@@ -3927,7 +3931,7 @@ function SettingsGeneral() {
             <div class="dim small">${PL.timeout_min}–${PL.timeout_max} seconds. Default 2.</div>
             <label class="field">Down after this many unanswered pings in a row<input type="number" name="down" min="${PL.down_min}" max="${PL.down_max}" value="${ps.down_after}" required></label>
             <div class="dim small" id="lc-hint"></div>
-            <div class="dim small">${pg.method ? `The master sends pings through a ${pg.method}.` : 'The master has sent no ping yet.'} Only the IP address is used: no DNS lookups.</div>`)}
+            <div class="dim small">${pg.method ? `The master sends pings through a ${pg.method}.` : 'The master has sent no ping yet.'} A device known by a name is looked up first, with the checking system's own DNS setup.</div>`)}
         ${block('access', 'Website & sign-in', 'How people and agents reach the master, and how users sign in', html`
             <label class="field">Website port<select name="port">
               <option value="8443" ${s.ui_port !== 443 ? 'selected' : ''}>8443 (default)</option>

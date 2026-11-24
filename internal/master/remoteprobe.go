@@ -64,7 +64,7 @@ func (s *Server) probeList(agentID string) proto.ProbeList {
 				l.Checks = append(l.Checks, proto.ProbeCheck{ID: sv.ID, Kind: sv.kind(), Address: d.Address, Port: sv.Port,
 					Greeting: sv.Greeting, Reverse: sv.Reverse, Interval: sv.Interval, Timeout: sv.Timeout, Retries: sv.Retries,
 					Host: sv.Host, Path: sv.Path, Codes: sv.Codes, CertValid: sv.CertValid, CertDays: sv.CertDays,
-					RType: sv.RType, Expect: sv.Expect, MaxMs: sv.MaxMs, CertTime: sv.CertTime, Remote: sv.Remote})
+					RType: sv.RType, Expect: sv.Expect, MaxMs: sv.MaxMs, CertTime: sv.CertTime})
 			}
 		}
 	}
@@ -192,6 +192,7 @@ func (s *Server) probeIntake(a *Agent, rep *proto.ProbeReport, now time.Time) {
 				continue
 			}
 			s.record(d.Checks, rtt, cerr, at)
+			d.noteIP(r.IP)
 			s.noteBehind(d.ID, cerr != nil, d.Hist, at)
 			dl.add(d.Name+" · Ping", r.OK, outcome(r.OK, "up", rtt, cerr))
 		} else if sv := svcs[r.ID]; sv != nil {
@@ -202,6 +203,7 @@ func (s *Server) probeIntake(a *Agent, rep *proto.ProbeReport, now time.Time) {
 			if sv.Method == probe.MethodCert && r.Cert != nil {
 				sv.Cert = cleanCert(r.Cert)
 			}
+			svcDev[sv.ID].noteIP(r.IP)
 			s.noteBehind(svcDev[sv.ID].ID, !r.OK && !sv.Reverse, sv.Hist, at)
 			what := outcome(r.OK, "reached", rtt, cerr)
 			if sv.Reverse {

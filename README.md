@@ -37,12 +37,17 @@ as **agentless** devices: the master itself pings them and checks their services
   DNS query to the device's own DNS server (A, AAAA, MX, TXT, CNAME or NS, an
   optional expected value and a maximum response time), or **Certificate
   Validity**: the TLS certificate of a web address (name and optional port), on
-  the device's own address or wherever the name points in DNS, with a valid
-  chain, valid in time and not expiring within N days (default 10), checked
+  the device's address, with a valid chain, valid in time and not expiring within N days (default 10), checked
   once an hour; "Show" lists the full certificate, its chain and every valid
   name. Each check shows which step failed. With a 24-hour history and a graph of the
   ping's round-trip time. For a network
   the master cannot reach, an agent there can do the checks instead ("Checked by").
+  The address is an IP address or a name, such as a website or a server known
+  only by its name: the system that checks looks the name up before every
+  check with its own DNS setup (IPv4 first, IPv6 only when the name has no
+  IPv4 address and that system has IPv6 connectivity). A failed lookup fails
+  the check at the step "Name lookup"; the device page shows the address the
+  last check went to, and the device that has it when Coremon knows it.
 * **Services of agent devices**: the same service checks (and optionally a ping)
   on a device with an agent, on its Services tab: checked from outside by the
   master or by another agent, on one of its own addresses or another one.
@@ -120,8 +125,8 @@ Groups are made, renamed and ordered with **Groups** on the Devices page. A
 device's name, group and Connected via are changed with **More → Edit** on its
 own page, where **More** also has Maintenance and Remove.
 
-For a device without an agent choose **Agentless** instead and enter its name and IP
-address. Settings → General → Ping sets how often it is pinged; its services are added
+For a device without an agent choose **Agentless** instead and enter its name and its IP
+address or DNS name. Settings → General → Ping sets how often it is pinged; its services are added
 on the device's Services tab. **Checked by** chooses who checks it: the master, or
 an agent (0.3.9 or later) on another system that can reach it. Only agents an admin
 switched on with **Act as remote probe** (Remote probe section of the agent's device

@@ -12,10 +12,16 @@ import (
 	"net/http"
 	"sort"
 	"strings"
+
+	"coremon/internal/probe"
 )
 
 type Checks struct {
+	// Address: an IP address, or (agentless devices) a name that the
+	// checking system looks up before every check.
 	Address string `json:"address"`
+	// Resolved: for a name, the address the last check went to (not stored).
+	Resolved string `json:"-"`
 	// The ping's results: kept in checks.dat, not in state.dat.
 	Checked   bool       `json:"-"` // up or down has been decided
 	Up        bool       `json:"-"`
@@ -34,6 +40,15 @@ type Checks struct {
 }
 
 func (c *Checks) pinging() bool { return c.PingMode == "" }
+
+// noteIP keeps the address a check of a device known by a name went to.
+func (c *Checks) noteIP(ip string) {
+	if probe.IsName(c.Address) {
+		if v := canonIP(ip); v != "" {
+			c.Resolved = v
+		}
+	}
+}
 
 // activeChecks: the checks from outside that run (the ping and the services
 // not paused; disk, memory and load are measured by the agent itself).

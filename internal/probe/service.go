@@ -14,9 +14,9 @@ package probe
 //            issued for the name, (optional) valid in time, (optional) not
 //            expiring within N days; no HTTP request
 // The hostname is used for SNI and the Host header only: the connection
-// always goes to the device's own address, nothing is looked up in DNS
-// (a DNS check asks the device's own DNS server). The one exception: a
-// cert check with Remote connects to wherever the name points.
+// always goes to the device's own address (a DNS check asks the device's
+// own DNS server). A device known by a name is looked up first (see
+// Resolve); a failed lookup fails the check at StepLookup.
 
 import (
 	"context"
@@ -78,11 +78,11 @@ type Service struct {
 	Expect    string // dns: an answer must contain this ("" = not checked)
 	MaxMs     int    // dns: maximum response time in ms (0 = not checked)
 	CertTime  bool   // cert: valid at this time
-	Remote    bool   // cert: connect to where Host points (DNS), not to the device
 }
 
 // Outcome of one check.
 type Outcome struct {
+	IP     string        // the address checked: the device's own, or what its name resolved to
 	RTT    time.Duration // time to connect
 	Detail string        // the greeting line, or "HTTP 200 · certificate valid until …"
 	Failed string        // the sub-probe that failed; "" when all passed
@@ -134,7 +134,7 @@ func Steps(s Service) []string {
 // KnownStep: s is a sub-probe name (for results that come from an agent).
 func KnownStep(s string) bool {
 	switch s {
-	case StepConnect, StepGreeting, StepTLS, StepCert, StepCertTime, StepCertDays, StepHTTP,
+	case StepLookup, StepConnect, StepGreeting, StepTLS, StepCert, StepCertTime, StepCertDays, StepHTTP,
 		StepQuery, StepRcode, StepRecords, StepExpect, StepTime:
 		return true
 	}
@@ -275,17 +275,48 @@ func codeOK(rs [][2]int, code int) bool {
 	return false
 }
 
-// Check runs one service check against addr.
+// ValidAddress: an IP address, or a name to look up.
+func ValidAddress(addr string) error {
+	if net.ParseIP(addr) != nil {
+		return nil
+	}
+	if err := ValidHost(addr); err != nil {
+		return errors.New("the address must be an IP address or a name like www.example.com")
+	}
+	return nil
+}
+
+// Check runs one service check against addr (an IP address or a name).
 func Check(ctx context.Context, addr string, s Service, timeout time.Duration) Outcome {
+	ip, err := Resolve(ctx, addr, timeout)
+	if err != nil {
+		return Outcome{Failed: StepLookup, Err: err}
+	}
+	addr = ip.String()
+	var o Outcome
 	switch s.Method {
 	case MethodHTTPS:
-		return checkHTTPS(ctx, addr, s, timeout)
+		o = checkHTTPS(ctx, addr, s, timeout)
 	case MethodDNS:
-		return checkDNS(ctx, addr, s, timeout)
+		o = checkDNS(ctx, addr, s, timeout)
 	case MethodCert:
-		return checkCert(ctx, addr, s, timeout)
+		o = checkCert(ctx, addr, s, timeout)
+	default:
+		o = checkTCP(ctx, addr, s, timeout)
 	}
-	return checkTCP(ctx, addr, s, timeout)
+	o.IP = addr
+	return o
+}
+
+// PingAddr pings addr (an IP address or a name); ip is the address pinged
+// ("" when a name could not be looked up).
+func PingAddr(ctx context.Context, addr string, timeout time.Duration, ping func(context.Context, net.IP, time.Duration) (time.Duration, error)) (ip string, rtt time.Duration, err error) {
+	a, err := Resolve(ctx, addr, timeout)
+	if err != nil {
+		return "", 0, err
+	}
+	rtt, err = ping(ctx, a, timeout)
+	return a.String(), rtt, err
 }
 
 func checkTCP(ctx context.Context, addr string, s Service, timeout time.Duration) Outcome {

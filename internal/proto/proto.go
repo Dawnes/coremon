@@ -166,8 +166,10 @@ const (
 )
 
 type ProbeCheck struct {
-	ID       string `json:"id"`   // the master's id of the check
-	Kind     string `json:"kind"` // "ping", "tcp", "https" (agent 0.3.10 and later), "dns" (0.3.11 and later) or "cert" (0.3.15 and later)
+	ID   string `json:"id"`   // the master's id of the check
+	Kind string `json:"kind"` // "ping", "tcp", "https", "dns" or "cert"
+	// Address: an IP address, or a name the agent looks up before every
+	// check (IPv4 first; IPv6 only with IPv6 connectivity).
 	Address  string `json:"address"`
 	Port     int    `json:"port,omitempty"`
 	Greeting bool   `json:"greeting,omitempty"`
@@ -179,10 +181,8 @@ type ProbeCheck struct {
 	Codes     string `json:"codes,omitempty"`
 	CertValid bool   `json:"cert_valid,omitempty"`
 	CertDays  int    `json:"cert_days,omitempty"`
-	// cert (agent 0.3.15 and later): Host is the name; certificate valid in
-	// time; Remote: connect to where Host points (DNS) instead of Address.
+	// cert: Host is the name; certificate valid in time.
 	CertTime bool `json:"cert_time,omitempty"`
-	Remote   bool `json:"remote,omitempty"`
 	// dns: the name to resolve is Host; record type, expected value (an
 	// answer must contain it) and maximum response time in ms.
 	RType     string `json:"rtype,omitempty"`
@@ -207,7 +207,8 @@ type ProbeResult struct {
 	Banner string `json:"banner,omitempty"`
 	Error  string `json:"error,omitempty"`
 	Setup  bool   `json:"setup,omitempty"`  // the agent could not run the check at all (no permission)
-	Failed string `json:"failed,omitempty"` // the sub-probe that failed (connect, greeting, tls, cert, cert_days, http)
+	Failed string `json:"failed,omitempty"` // the sub-probe that failed (lookup, connect, greeting, tls, cert, cert_days, http)
+	IP     string `json:"ip,omitempty"`     // the address checked (for a name: what it resolved to)
 	// cert checks: the certificate the server presented (also when the check failed).
 	Cert *CertInfo `json:"cert,omitempty"`
 }

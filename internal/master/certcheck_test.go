@@ -35,7 +35,7 @@ func TestCertificateCheck(t *testing.T) {
 	}
 	sv := d.Services[0]
 	if sv.Method != probe.MethodCert || sv.Host != "shop.example.com" || sv.Port != 8443 || !sv.CertValid || !sv.CertTime ||
-		sv.CertDays != 10 || sv.Interval != 3600 || sv.Remote || sv.Name != "Certificate Validity" {
+		sv.CertDays != 10 || sv.Interval != 3600 || sv.Name != "Certificate Validity" {
 		t.Fatalf("defaults: %+v", sv)
 	}
 	if st := probe.Steps(sv.spec()); strings.Join(st, ",") != "connect,tls,cert,cert_time,cert_days" {
@@ -48,15 +48,13 @@ func TestCertificateCheck(t *testing.T) {
 	for _, x := range []struct{ body, want string }{
 		{`{"host":"http://shop.example.com"}`, "only https"},
 		{`{"host":"shop.example.com:0"}`, "port"},
-		{`{"target":"elsewhere"}`, "connect to"},
-		{`{"host":"192.0.2.9","target":"dns"}`, "not looked up"},
 	} {
 		if code, b := c.do("POST", "/api/ui/locals/l_web/services/"+sv.ID, x.body); code != 400 || !strings.Contains(b, x.want) {
 			t.Errorf("%s: %d %s", x.body, code, b)
 		}
 	}
-	if code, b := c.do("POST", "/api/ui/locals/l_web/services/"+sv.ID, `{"host":"example.org","target":"dns","cert_valid":false,"cert_time":true,"cert_days":0}`); code != 200 ||
-		sv.Host != "example.org" || sv.Port != 443 || !sv.Remote || sv.CertValid || sv.CertDays != 0 {
+	if code, b := c.do("POST", "/api/ui/locals/l_web/services/"+sv.ID, `{"host":"example.org","cert_valid":false,"cert_time":true,"cert_days":0}`); code != 200 ||
+		sv.Host != "example.org" || sv.Port != 443 || sv.CertValid || sv.CertDays != 0 {
 		t.Errorf("change: %d %s %+v", code, b, sv)
 	}
 
@@ -66,7 +64,7 @@ func TestCertificateCheck(t *testing.T) {
 	l := s.probeList("a_probe")
 	d.Probe = ""
 	s.st.mu.Unlock()
-	if len(l.Checks) != 2 || l.Checks[1].Kind != "cert" || !l.Checks[1].Remote || !l.Checks[1].CertTime || l.Checks[1].Host != "example.org" {
+	if len(l.Checks) != 2 || l.Checks[1].Kind != "cert" || !l.Checks[1].CertTime || l.Checks[1].Host != "example.org" {
 		t.Errorf("probe list: %+v", l.Checks)
 	}
 
@@ -80,7 +78,7 @@ func TestCertificateCheck(t *testing.T) {
 	v := s.localDeviceView(d, true)
 	s.st.mu.Unlock()
 	got := v.Local.Services[0]
-	if got.Cert == nil || got.Cert.Chain[0].Subject != "CN=example.org" || len(got.Cert.Chain[0].Names) != 2 || got.Target != "dns" || !got.CertTime {
+	if got.Cert == nil || got.Cert.Chain[0].Subject != "CN=example.org" || len(got.Cert.Chain[0].Names) != 2 || !got.CertTime {
 		t.Errorf("view: %+v", got)
 	}
 	var cd checksData
@@ -89,7 +87,7 @@ func TestCertificateCheck(t *testing.T) {
 		t.Errorf("checks.dat: %+v", r)
 	}
 	// Another method drops the certificate settings and the hour heartbeat.
-	if code, b := c.do("POST", "/api/ui/locals/l_web/services/"+sv.ID, `{"preset":"","method":"tcp","port":443}`); code != 200 || sv.Remote || sv.CertTime || sv.Interval != defaultSvcInterval || sv.Cert != nil {
+	if code, b := c.do("POST", "/api/ui/locals/l_web/services/"+sv.ID, `{"preset":"","method":"tcp","port":443}`); code != 200 || sv.CertTime || sv.Interval != defaultSvcInterval || sv.Cert != nil {
 		t.Errorf("to tcp: %d %s %+v", code, b, sv)
 	}
 }
