@@ -1144,6 +1144,7 @@ func (s *Server) vulnsFor(a *Agent, full bool) *vulnView {
 	// The waiting updates: for the device page, and always when the package
 	// manager does not mark security updates (the fixes count instead).
 	var upd map[string]string
+	bySource := map[string][]string{} // source package → waiting updates built from it
 	if raw, ok := a.State["updates"]; ok && (full || bytes.Contains(raw, []byte(`"security_from_cve":true`))) {
 		var u updates.Snapshot
 		if json.Unmarshal(raw, &u) == nil {
@@ -1151,6 +1152,9 @@ func (s *Server) vulnsFor(a *Agent, full bool) *vulnView {
 			for _, p := range u.Packages {
 				if !p.New {
 					upd[p.Name] = p.Available
+					if p.Source != "" {
+						bySource[p.Source] = append(bySource[p.Source], p.Name)
+					}
 				}
 			}
 		}
@@ -1243,14 +1247,25 @@ func (s *Server) vulnsFor(a *Agent, full bool) *vulnView {
 			return x.ID > y.ID
 		})
 		if upd != nil {
+			// The app's package, and the other waiting packages of its source
+			// (libcrypto3 next to libssl3): they come with the same fix.
+			pkgs := []string{ap.Package}
+			for _, p := range bySource[ap.Source] {
+				if p != ap.Package && ap.Source != "" {
+					pkgs = append(pkgs, p)
+				}
+			}
 			for _, c := range av.CVEs {
-				if c.ByUpdate {
-					if v.UpdateFixes == nil {
-						v.UpdateFixes = map[string][]string{}
-					}
-					v.UpdateFixes[ap.Package] = append(v.UpdateFixes[ap.Package], c.ID)
+				if !c.ByUpdate {
+					continue
+				}
+				if v.UpdateFixes == nil {
+					v.UpdateFixes = map[string][]string{}
+				}
+				for _, p := range pkgs {
+					v.UpdateFixes[p] = append(v.UpdateFixes[p], c.ID)
 					if c.Accepted == nil {
-						fixing[ap.Package] = true
+						fixing[p] = true
 					}
 				}
 			}

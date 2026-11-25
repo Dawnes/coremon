@@ -5,6 +5,7 @@ package agent
 import (
 	"compress/gzip"
 	"context"
+	"errors"
 	"io"
 	"os"
 	"os/exec"
@@ -59,8 +60,11 @@ func readGz(path string) string {
 func collectHealth() *proto.Health {
 	h := &proto.Health{FailedCount: -1}
 	if apps.OpenRC() {
-		// OpenRC: the services whose daemon died ("crashed").
-		if out, err := run("rc-status", "--crashed"); err == nil {
+		// OpenRC: the services whose daemon died ("crashed"). rc-status
+		// exits with 1 when there are none.
+		out, err := run("rc-status", "--crashed")
+		var ee *exec.ExitError
+		if err == nil || (errors.As(err, &ee) && ee.ExitCode() == 1 && strings.TrimSpace(out) == "") {
 			h.FailedCount, h.Failed = parseFailedUnits(out) // one name per line
 		}
 		return h // no automatic-updates tool, no upgrade history

@@ -3,7 +3,7 @@ package updates
 // The zypper backend (SUSE Linux Enterprise, openSUSE Leap and Tumbleweed).
 // Leap and SLES are upgraded with "zypper update"; Tumbleweed, a rolling
 // release, with "zypper dup". Security updates: the packages a waiting
-// security patch would install. Tumbleweed has no patches: the master
+// (needed) security patch replaces. Tumbleweed has no patches: the master
 // decides from the CVEs it knows (SecurityFromCVE).
 
 import (
@@ -28,7 +28,7 @@ func (zypperBackend) Refresh(c *feature.Ctx) error {
 }
 
 func (z zypperBackend) List(c *feature.Ctx) (*Snapshot, error) {
-	inst, err := c.Output(zypperEnv, "rpm", "-qa", "--qf", `%{NAME}|%{ARCH}|%{EPOCHNUM}:%{VERSION}-%{RELEASE}\n`)
+	inst, err := c.Output(zypperEnv, "rpm", "-qa", "--qf", `%{NAME}|%{ARCH}|%{EPOCHNUM}:%{VERSION}-%{RELEASE}|%{SOURCERPM}\n`)
 	if err != nil {
 		return nil, err
 	}
@@ -41,12 +41,20 @@ func (z zypperBackend) List(c *feature.Ctx) (*Snapshot, error) {
 	if err != nil && up == "" {
 		return nil, err
 	}
-	sec := ""
+	info := ""
 	if !z.rolling {
-		sec, _ = c.Output(zypperEnv, "zypper", "--non-interactive", "--xmlout", "patch", "--dry-run", "--category", "security")
+		lp, _ := c.Output(zypperEnv, "zypper", "--non-interactive", "--xmlout", "list-patches", "--category", "security")
+		names := neededPatches(lp)
+		for len(names) > 0 { // in batches: keep the command line short
+			n := min(len(names), 100)
+			args := append([]string{"--non-interactive", "info", "-t", "patch", "--"}, names[:n]...)
+			out, _ := c.Output(zypperEnv, "zypper", args...)
+			info += out + "\n"
+			names = names[n:]
+		}
 	}
 	repos, _ := c.Output(zypperEnv, "zypper", "--non-interactive", "--xmlout", "repos")
-	s := parseZypper(inst, up, sec)
+	s := parseZypper(inst, up, info)
 	s.Backend = "zypper"
 	s.SecurityFromCVE = z.rolling
 	s.NoSources = strings.Contains(repos, "<stream") && zypperRepos(repos) == 0 // only when zypper answered
@@ -203,17 +211,71 @@ func zypperPkgs(out string) []zypperPkg {
 	return list
 }
 
-func parseZypper(inst, up, sec string) *Snapshot {
-	cur := map[string]string{}
+// neededPatches: the security patches "zypper --xmlout list-patches" lists
+// as needed (its XML lists all categories, despite --category).
+func neededPatches(out string) []string {
+	var names []string
+	seen := map[string]bool{}
+	for _, t := range xmlTags(out) {
+		n := t.attr["name"]
+		if t.end || t.name != "update" || t.attr["kind"] != "patch" || t.attr["status"] != "needed" ||
+			t.attr["category"] != "security" ||
+			n == "" || seen[n] || !PackageNameRe.MatchString(n) {
+			continue
+		}
+		seen[n] = true
+		names = append(names, n)
+	}
+	return names
+}
+
+// patchFixes reads "zypper info -t patch": a patch's Conflicts lines
+// ("libsystemd0.x86_64 < 257.13-160000.2.1", or without the arch) name the
+// package versions it replaces. Key name.arch, or name for any arch; value
+// the highest fixed version.
+func patchFixes(info string) map[string]string {
+	fix := map[string]string{}
+	in := false
+	for _, line := range strings.Split(info, "\n") {
+		line = strings.TrimRight(line, "\r")
+		if line == "" || (line[0] != ' ' && line[0] != '\t') {
+			k, _, ok := strings.Cut(line, ":")
+			in = ok && strings.TrimSpace(k) == "Conflicts"
+			continue
+		}
+		f := strings.Fields(line)
+		if !in || len(f) != 3 || f[1] != "<" || strings.Contains(f[0], ":") {
+			continue
+		}
+		k, v := f[0], stripEpoch0(f[2])
+		k = strings.TrimSuffix(k, ".noarch") // also listed for every real arch; counts for any
+		if old, ok := fix[k]; !ok || RPMVerCmp(v, old) > 0 {
+			fix[k] = v
+		}
+	}
+	return fix
+}
+
+func parseZypper(inst, up, info string) *Snapshot {
+	cur, src := map[string]string{}, map[string]string{}
 	for _, f := range qfLines(inst) {
 		k, v := f[0]+"."+f[1], stripEpoch0(f[2])
 		if old, ok := cur[k]; !ok || RPMVerCmp(v, old) > 0 {
 			cur[k] = v
 		}
+		if len(f) > 3 {
+			src[f[0]] = srpmName(f[3])
+		}
 	}
-	security := map[string]bool{}
-	for _, p := range zypperPkgs(sec) {
-		security[p.name+"."+p.arch] = true
+	fixes := patchFixes(info)
+	// fixed: a waiting security patch replaces this installed version.
+	fixed := func(name, arch, current string) bool {
+		for _, k := range []string{name + "." + arch, name} {
+			if v, ok := fixes[k]; ok && current != "" && RPMVerCmp(current, v) < 0 {
+				return true
+			}
+		}
+		return false
 	}
 	s := &Snapshot{}
 	seen := map[string]bool{}
@@ -223,12 +285,12 @@ func parseZypper(inst, up, sec string) *Snapshot {
 			continue
 		}
 		seen[k] = true
-		pk := Package{Name: p.name, Arch: p.arch, Available: p.edition, Origin: p.repo, Current: p.old}
+		pk := Package{Name: p.name, Arch: p.arch, Available: p.edition, Origin: p.repo, Current: p.old, Source: src[p.name]}
 		if pk.Current == "" {
 			pk.Current = cur[k]
 		}
 		pk.New = p.install || pk.Current == ""
-		pk.Security = security[k]
+		pk.Security = !pk.New && fixed(p.name, p.arch, pk.Current)
 		s.Packages = append(s.Packages, pk)
 	}
 	sort.Slice(s.Packages, func(i, j int) bool {
@@ -238,6 +300,20 @@ func parseZypper(inst, up, sec string) *Snapshot {
 		}
 		return a.Name < b.Name
 	})
+	return s
+}
+
+// srpmName: "openssl-3-3.5.0-160000.4.1.src.rpm" → "openssl-3" (the
+// name without version and release); "" for "(none)".
+func srpmName(s string) string {
+	s = strings.TrimSuffix(strings.TrimSuffix(strings.TrimSpace(s), ".src.rpm"), ".nosrc.rpm")
+	for range 2 {
+		i := strings.LastIndexByte(s, '-')
+		if i <= 0 {
+			return ""
+		}
+		s = s[:i]
+	}
 	return s
 }
 

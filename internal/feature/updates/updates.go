@@ -22,8 +22,11 @@ type Package struct {
 	Current   string `json:"current,omitempty"`
 	Available string `json:"available"`
 	Origin    string `json:"origin,omitempty"`
-	Security  bool   `json:"security"`
-	New       bool   `json:"new"`
+	// Source: the source package (apk, Tumbleweed): an update of another
+	// package of the same source fixes the same CVEs.
+	Source   string `json:"source,omitempty"`
+	Security bool   `json:"security"`
+	New      bool   `json:"new"`
 }
 
 type Snapshot struct {

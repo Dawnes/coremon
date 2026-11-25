@@ -68,9 +68,10 @@ func TestSecurityFromCVE(t *testing.T) {
 	pub, _ := keys(t)
 	s := testServer(t, pub, "http://127.0.0.1:1/none", "0.3.0")
 	eco := "Alpine:v3.22"
-	snap := updates.Snapshot{Backend: "apk", SecurityFromCVE: true, Total: 2, Packages: []updates.Package{
-		{Name: "openssh-server", Current: "9.9_p1-r2", Available: "9.9_p2-r0"},
-		{Name: "busybox", Current: "1.37.0-r18", Available: "1.37.0-r19"},
+	snap := updates.Snapshot{Backend: "apk", SecurityFromCVE: true, Total: 3, Packages: []updates.Package{
+		{Name: "openssh-server", Current: "9.9_p1-r2", Available: "9.9_p2-r0", Source: "openssh"},
+		{Name: "openssh-client", Current: "9.9_p1-r2", Available: "9.9_p2-r0", Source: "openssh"}, // same source
+		{Name: "busybox", Current: "1.37.0-r18", Available: "1.37.0-r19", Source: "busybox"},
 	}}
 	raw, _ := json.Marshal(snap)
 	a := &Agent{ID: "a_alp", Name: "alp", Status: StatusActive, CoreVersion: "0.3.6",
@@ -90,13 +91,14 @@ func TestSecurityFromCVE(t *testing.T) {
 	s.st.mu.Lock()
 	v := s.view(a, false)
 	s.st.mu.Unlock()
-	if v.Updates == nil || v.Updates.Security != 1 || !v.Updates.SecurityFromCVE || v.Vulns.UpdateFixes != nil {
+	if v.Updates == nil || v.Updates.Security != 2 || !v.Updates.SecurityFromCVE || v.Vulns.UpdateFixes != nil {
 		t.Fatalf("overview: %+v %+v", v.Updates, v.Vulns)
 	}
 	s.st.mu.Lock()
 	full := s.view(a, true)
 	s.st.mu.Unlock()
-	if f := full.Vulns.UpdateFixes["openssh-server"]; len(f) != 1 || full.Updates.Security != 1 {
+	if f := full.Vulns.UpdateFixes["openssh-server"]; len(f) != 1 || len(full.Vulns.UpdateFixes["openssh-client"]) != 1 ||
+		full.Vulns.UpdateFixes["busybox"] != nil || full.Updates.Security != 2 {
 		t.Errorf("device page: %+v %+v", full.Updates, full.Vulns.UpdateFixes)
 	}
 	// Accepted: no longer a security update.

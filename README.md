@@ -34,7 +34,7 @@ as **agentless** devices: the master itself pings them and checks their services
   with apt, dnf, zypper or apk. With dnf an update is a security update when a
   security advisory lists it; "reboot required" comes from
   `dnf needs-restarting` and a newer installed kernel. With zypper: when a
-  waiting security patch installs it; "Upgrade all" is `zypper update`, on
+  needed security patch replaces the installed version; "Upgrade all" is `zypper update`, on
   Tumbleweed `zypper dup`; a warning shows when no package sources are enabled
   (such as an unregistered SLES). apk and Tumbleweed mark no security updates:
   an update counts as one when it fixes a known CVE of a tracked application on

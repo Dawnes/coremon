@@ -26,6 +26,11 @@ func (apkBackend) List(c *feature.Ctx) (*Snapshot, error) {
 		return nil, err
 	}
 	s := parseApk(out)
+	db, _ := os.ReadFile("/lib/apk/db/installed")
+	src := apkOrigins(string(db))
+	for i := range s.Packages {
+		s.Packages[i].Source = src[s.Packages[i].Name]
+	}
 	s.Backend, s.SecurityFromCVE = "apk", true
 	s.RefreshedAt = newestMtime("/var/cache/apk/APKINDEX.*.tar.gz")
 	if s.RefreshedAt == 0 {
@@ -78,6 +83,24 @@ func parseApk(out string) *Snapshot {
 	}
 	sort.Slice(s.Packages, func(i, j int) bool { return s.Packages[i].Name < s.Packages[j].Name })
 	return s
+}
+
+// apkOrigins reads apk's database: package (P:) → its origin, the source
+// package (o:).
+func apkOrigins(db string) map[string]string {
+	src := map[string]string{}
+	name := ""
+	for _, line := range strings.Split(db, "\n") {
+		switch {
+		case line == "":
+			name = ""
+		case strings.HasPrefix(line, "P:"):
+			name = line[2:]
+		case strings.HasPrefix(line, "o:") && name != "":
+			src[name] = strings.TrimSpace(line[2:])
+		}
+	}
+	return src
 }
 
 // apkReboot: Alpine's kernel files carry no version (vmlinuz-lts), so a

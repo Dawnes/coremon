@@ -22,18 +22,47 @@ const testZypperLU = `<?xml version='1.0'?>
 </update-status>
 </stream>`
 
-const testZypperSec = `<?xml version='1.0'?>
+// Real output of openSUSE Leap 16.0 (shortened).
+const testZypperLP = `<?xml version='1.0'?>
 <stream>
-<install-summary download-size="1000" space-usage-diff="0" packages-to-change="2">
-<to-upgrade>
-<solvable type="package" name="curl" edition="8.6.0-150600.4.9.1" arch="x86_64" edition-old="8.6.0-150600.4.6.1" repository="repo-sle-update"/>
-<solvable type="package" name="libopenssl3" edition="3.1.4-150600.5.21.1" arch="x86_64" repository="repo-sle-update"/>
-</to-upgrade>
-<to-install>
-<solvable type="patch" name="openSUSE-SLE-15.6-2024-4000" edition="1" arch="noarch"/>
-</to-install>
-</install-summary>
+<message type="info">Loading repository data...</message>
+<update-status version="0.6">
+<update-list>
+<update kind="patch" name="openSUSE-Leap-16.0-961" edition="1" arch="noarch" status="needed" category="security" severity="moderate" pkgmanager="true" restart="false" interactive="false">
+<summary>Security update for zypper</summary>
+<source url="http://cdn.opensuse.org/distribution/leap/16.0/repo/oss/aarch64" alias="openSUSE:repo-oss"/>
+</update>
+<update kind="patch" name="openSUSE-Leap-16.0-1151" edition="1" arch="noarch" status="needed" category="security" severity="important" pkgmanager="false">
+<source alias="openSUSE:repo-oss"/>
+</update>
+<update kind="patch" name="openSUSE-Leap-16.0-900" edition="1" arch="noarch" status="applied" category="security"/>
+<update kind="patch" name="openSUSE-Leap-16.0-901" edition="1" arch="noarch" status="needed" category="recommended"/>
+</update-list>
+</update-status>
 </stream>`
+
+const testZypperInfo = `Loading repository data...
+Reading installed packages...
+
+
+Information for patch openSUSE-Leap-16.0-1151:
+----------------------------------------------
+Repository  : repo-oss (16.0)
+Name        : openSUSE-Leap-16.0-1151
+Status      : needed
+Category    : security
+Summary     : Security update for curl and openssl
+Description :
+    This update for curl fixes:
+    curl < 8.6.0 was vulnerable.
+Conflicts   : [5]
+    curl.x86_64 < 8.6.0-150600.4.9.1
+    curl.noarch < 8.6.0-150600.4.9.1
+    libopenssl3.aarch64 < 3.1.4-150600.5.21.1
+    libopenssl3.x86_64 < 3.1.4-150600.5.21.1
+    python3.13-foo.noarch < 1.0-1.1
+    vim-data < 9.1.0330-150500.20.9.1
+`
 
 const testZypperDup = `<?xml version='1.0'?>
 <stream>
@@ -52,7 +81,14 @@ const testZypperDup = `<?xml version='1.0'?>
 
 func TestParseZypper(t *testing.T) {
 	inst := "curl|x86_64|0:8.6.0-150600.4.6.1\nlibopenssl3|x86_64|0:3.1.4-150600.5.15.1\nvim|x86_64|0:9.1.0330-150500.20.9.1\n"
-	s := parseZypper(inst, testZypperLU, testZypperSec)
+	if n := neededPatches(testZypperLP); len(n) != 2 || n[0] != "openSUSE-Leap-16.0-961" || n[1] != "openSUSE-Leap-16.0-1151" {
+		t.Errorf("needed: %v", n)
+	}
+	if f := patchFixes(testZypperInfo); len(f) != 6 || f["curl"] != "8.6.0-150600.4.9.1" || f["python3.13-foo"] == "" ||
+		f["vim-data"] == "" || f["libopenssl3.aarch64"] == "" || f["curl.x86_64"] == "" {
+		t.Errorf("fixes: %v", f)
+	}
+	s := parseZypper(inst, testZypperLU, testZypperInfo)
 	got := map[string]Package{}
 	for _, p := range s.Packages {
 		got[p.Name] = p
@@ -122,5 +158,14 @@ openssh-server-common-9.7_p1-r3         < 9.7_p1-r4
 	}
 	if n, v, ok := SplitApk("openssh-server-9.7_p1-r3"); !ok || n != "openssh-server" || v != "9.7_p1-r3" {
 		t.Errorf("split: %s %s", n, v)
+	}
+	db := "C:Q1abc=\nP:libssl3\nV:3.5.9-r0\no:openssl\n\nP:libcrypto3\nV:3.5.9-r0\no:openssl\n\nP:zlib\nV:1.3.2-r1\n"
+	if o := apkOrigins(db); o["libssl3"] != "openssl" || o["libcrypto3"] != "openssl" || o["zlib"] != "" {
+		t.Errorf("origins: %v", o)
+	}
+	for in, want := range map[string]string{"openssl-3-3.5.0-160000.4.1.src.rpm": "openssl-3", "(none)": "", "kernel-default-6.12.1-1.1.nosrc.rpm": "kernel-default"} {
+		if got := srpmName(in); got != want {
+			t.Errorf("srpmName(%s) = %q", in, got)
+		}
 	}
 }
