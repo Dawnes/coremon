@@ -323,6 +323,12 @@ ul.plainlist { margin: 0; padding-left: 18px; line-height: 1.8; }
 .card .big.sec { color: var(--red); text-shadow: 0 0 24px rgba(248, 113, 113, 0.35); }
 .card .biglbl { color: var(--muted); font-size: 12px; line-height: 1.3; }
 .card .badges { display: flex; gap: 6px; flex-wrap: wrap; margin-left: auto; justify-content: flex-end; }
+/* The device state (OK, Attention, Problem, Down) with its reasons below. */
+.card .mid.st { flex-direction: column; align-items: stretch; gap: 6px; }
+.card .mid.st .strow { display: flex; align-items: center; gap: 10px; }
+.card .mid.st .big { font-size: 26px; }
+.card .reasons { font-size: 12px; line-height: 1.4; min-width: 0; }
+.card .reasons > div { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .card .svcline { margin: -4px 0 10px; font-size: 12px; font-weight: 500; color: var(--red); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .card .inforow { display: flex; align-items: center; gap: 6px; margin-bottom: 10px; font-size: 12px; flex-wrap: wrap; }
 .card .uptime { display: inline-flex; align-items: center; gap: 5px; color: var(--muted); }

@@ -56,7 +56,7 @@ func (sv *Service) isMetric() bool {
 func (c *Checks) outside() []*Service {
 	out := make([]*Service, 0, len(c.Services))
 	for _, sv := range c.Services {
-		if !sv.isMetric() {
+		if !sv.isMetric() && !sv.isOSSupport() {
 			out = append(out, sv)
 		}
 	}

@@ -508,6 +508,7 @@ func (s *Server) Run(ctx context.Context) error {
 	go s.localLoop(stop)
 	go s.upstreamLoop(stop)
 	go s.checksLoop(stop)
+	go s.osSupportLoop(stop)
 	handler := s.routes()
 	s.handler = handler
 	s.applyUIPort(handler)

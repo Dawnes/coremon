@@ -44,6 +44,10 @@ type Service struct {
 	// where the name points).
 	CertTime bool `json:"cert_time,omitempty"`
 
+	// os_support (every agent device, decided by the master): down this
+	// many days before the OS release's support ends (0: once it ended).
+	Days int `json:"days,omitempty"`
+
 	// dns: the name to resolve is Host; record type, expected value (an
 	// answer must contain it, "" = not checked), maximum response time in ms
 	// (0 = not checked). The query goes to the DNS server on the device.
@@ -293,6 +297,7 @@ type serviceView struct {
 	Expect    string          `json:"expect,omitempty"`
 	MaxMs     int             `json:"max_ms"`
 	CertTime  bool            `json:"cert_time"`
+	Days      int             `json:"days,omitempty"`   // os_support: down this many days before the end
 	Cert      *proto.CertInfo `json:"cert,omitempty"`   // cert: what the last check saw (device page only)
 	Steps     []string        `json:"steps"`            // the sub-probes, in order
 	Failed    string          `json:"failed,omitempty"` // the sub-probe of the last failed check
@@ -336,10 +341,10 @@ func (s *Server) serviceView(sv *Service, now int64, full bool) serviceView {
 		if full {
 			v.Vals = recentVals(sv.Vals, now)
 		}
-	} else {
+	} else if !sv.isOSSupport() {
 		v.Steps = probe.Steps(sv.spec())
 	}
-	v.CertTime = sv.CertTime
+	v.CertTime, v.Days = sv.CertTime, sv.Days
 	if full {
 		v.Hist = h
 		v.Cert = sv.Cert
@@ -502,6 +507,7 @@ type serviceReq struct {
 	Expect    *string `json:"expect"`
 	MaxMs     *int    `json:"max_ms"`
 	CertTime  *bool   `json:"cert_time"`
+	Days      *int    `json:"days"` // os_support
 
 	metricReq
 }
@@ -542,6 +548,9 @@ func (sv *Service) setMethod(m string, certValid bool) {
 // apply checks and applies a request to sv; a default service keeps its
 // port and greeting.
 func (req *serviceReq) apply(sv *Service) error {
+	if sv.isOSSupport() {
+		return req.applyOSSupport(sv)
+	}
 	if req.Preset != nil {
 		if *req.Preset == "" {
 			sv.Preset = ""
@@ -695,6 +704,9 @@ func (sv *Service) describe() string {
 	if sv.isMetric() {
 		return sv.describeMetric()
 	}
+	if sv.isOSSupport() {
+		return sv.describeOSSupport()
+	}
 	d := fmt.Sprintf("%s port %d, every %ds, %d retries, timeout %ds", sv.Name, sv.Port, sv.Interval, sv.Retries, sv.Timeout)
 	if sv.Method == probe.MethodHTTPS {
 		d += fmt.Sprintf(", HTTPS %s%s status %s", sv.Host, sv.Path, sv.Codes)
@@ -821,6 +833,8 @@ func (s *Server) handleServiceUpdate(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, msg, http.StatusConflict)
 			return
 		}
+	} else if n.isOSSupport() {
+		// Decided by the master: no address needed.
 	} else if code, err := s.attach(d); err != nil {
 		http.Error(w, err.Error(), code)
 		return
@@ -866,6 +880,10 @@ func (s *Server) handleServiceDelete(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "service not found", http.StatusNotFound)
 		return
 	}
+	if gone.isOSSupport() {
+		http.Error(w, "OS support is part of every agent device and cannot be removed: pause it to mute it", http.StatusConflict)
+		return
+	}
 	if !gone.Paused && d.lastCheck() {
 		http.Error(w, noCheckMsg, http.StatusConflict)
 		return
@@ -893,6 +911,16 @@ func (s *Server) handleServiceCheck(w http.ResponseWriter, r *http.Request) {
 	if d.service(sid).isMetric() {
 		s.st.mu.Unlock()
 		http.Error(w, "measured by the device's own agent every minute: it cannot be checked now", http.StatusConflict)
+		return
+	}
+	if d.service(sid).isOSSupport() {
+		defer s.st.mu.Unlock()
+		if d.service(sid).Paused {
+			http.Error(w, "this service is paused", http.StatusConflict)
+			return
+		}
+		s.osSupportCheck(d.Agent, time.Now())
+		writeJSON(w, s.devView(d, true))
 		return
 	}
 	if d.Probe != "" {
@@ -953,7 +981,7 @@ func (s *Server) handleServicePause(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, noCheckMsg, http.StatusConflict)
 		return
 	}
-	if !req.Paused {
+	if !req.Paused && !sv.isOSSupport() {
 		if err := s.probeRoom(d.Checks); err != nil {
 			http.Error(w, err.Error(), http.StatusConflict)
 			return

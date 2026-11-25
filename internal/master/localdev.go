@@ -334,7 +334,8 @@ type localView struct {
 	PingInfo  *pingView     `json:"ping_info,omitempty"`
 	SvcTotal  int           `json:"svc_total"` // services that run (not paused)
 	SvcDown   int           `json:"svc_down"`
-	SvcOK     int           `json:"svc_ok"` // running services that are up without failed retries
+	SvcOK     int           `json:"svc_ok"`    // running services that are up without failed retries
+	SvcRetry  int           `json:"svc_retry"` // running services that are up but failing (retries, not down yet)
 	SvcPaused int           `json:"svc_paused"`
 	SvcFail   *svcFailView  `json:"svc_fail,omitempty"` // the first running service that is down: what failed
 	Services  []serviceView `json:"services,omitempty"` // device page only
@@ -473,6 +474,8 @@ func (s *Server) checksView(d *Checks, full, noReadings bool) *localView {
 			}
 		case v.Checked && v.Fails == 0:
 			lv.SvcOK++
+		case v.Checked && v.Up:
+			lv.SvcRetry++
 		}
 	}
 	lv.SvcTotal = len(running)
@@ -482,7 +485,7 @@ func (s *Server) checksView(d *Checks, full, noReadings bool) *localView {
 	}
 	if lv.Probe = s.localProbe(d, now); lv.Probe != nil && lv.Probe.State != "ok" {
 		// No results come in: unknown, not down (no takeover by the master).
-		lv.Checked, lv.Up, lv.SvcOK, lv.SvcDown, lv.SvcFail = false, false, 0, 0, nil
+		lv.Checked, lv.Up, lv.SvcOK, lv.SvcDown, lv.SvcRetry, lv.SvcFail = false, false, 0, 0, 0, nil
 	}
 	if full {
 		lv.Services = svcs

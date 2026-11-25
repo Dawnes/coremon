@@ -367,6 +367,7 @@ func (s *Server) handleApprove(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	a.Status = StatusActive
+	s.osSupportCheck(a, time.Now())
 	s.st.markDirty()
 	s.wake(a.ID)
 	s.audit.writeAgent(actor(r), clientIP(r), "agent.approved", a, "")

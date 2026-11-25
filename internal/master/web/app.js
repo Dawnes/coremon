@@ -777,17 +777,6 @@ const unknownText = (p) => `unknown – ${p.note}`;
 // The checks of a device (ping and services): an agentless device's own, or
 // those on an agent device's Services tab (null while it has none).
 const chk = (a) => (isLocal(a) ? a.local : a.checks || null);
-// Ping and services counted for the overview: [total, ok, down].
-function checkCounts(L) {
-  const P = L.ping_info, out = L.probe && L.probe.state !== 'ok';
-  let t = 0, ok = 0, down = 0;
-  if (L.ping && P) {
-    t++;
-    if (!out && P.checked && !P.up) down++;
-    else if (!out && P.checked && !P.fails) ok++;
-  }
-  return [t + L.svc_total, ok + (L.svc_ok || 0), down + L.svc_down];
-}
 // An agent device's own checks that are down (not in maintenance, with
 // results coming in), or null. Its status itself still comes from its agent.
 function agentChecksDown(a) {
@@ -797,6 +786,56 @@ function agentChecksDown(a) {
   const n = L.svc_down + (ping ? 1 : 0);
   return n ? { n, total: L.svc_total + (L.ping ? 1 : 0), L, ping } : null;
 }
+// The state of a device, the same for every type: OK, Attention, Problem or
+// Down, with the reasons (worst first). null: a state of its own is shown
+// instead (virtual, maintenance, unreachable, pending, agent update
+// required, unknown or not checked yet).
+//   Problem: a check or service down (including OS support, disk, memory,
+//     load), security updates, a red CVE, failed systemd services.
+//   Attention: other updates, reboot required, a check failing but not yet
+//     down (retrying), a newer agent available.
+const STATE = { ok: ['OK', 'zero', 'a-ok'], att: ['Attention', 'some', 'a-upd'], prob: ['Problem', 'sec', 'a-sec'], down: ['Down', 'sec', 'a-off'] };
+const STATE_RANK = { ok: 0, att: 1, prob: 2, down: 3 };
+function devState(a) {
+  if (isVirtual(a) || a.maint || a.unreach || a.status === 'pending' || a.below_min) return null;
+  const L = chk(a), red = [], amber = [];
+  let down = false;
+  if (isLocal(a)) {
+    if (probeOut(a) || !L.checked) return null;
+    down = !L.up;
+    if (down) red.push(L.ping ? 'no answer to ping' : 'no service answers');
+  } else {
+    down = !a.online;
+    if (down) red.push('agent not connected');
+  }
+  const cd = isLocal(a) ? (L.svc_down ? { n: L.svc_down, L } : null) : agentChecksDown(a);
+  if (cd) {
+    const f = cd.L.svc_fail;
+    red.push(f ? `${f.name}${f.error ? `: ${f.error}` : ' down'}${cd.n > 1 ? ` (+${cd.n - 1} more down)` : ''}` : cd.ping ? 'ping: no answer' : checksDownShort(cd));
+  }
+  if (!isLocal(a)) {
+    const u = a.updates, h = a.facts?.health;
+    if (u?.security) red.push(`${u.total} update${u.total === 1 ? '' : 's'} (${u.security} security)`);
+    if (a.vulns?.badge) red.push(`${a.vulns.badge} serious CVE${a.vulns.badge === 1 ? '' : 's'}`);
+    if (h?.failed_count > 0) red.push(`${h.failed_count} failed systemd service${h.failed_count === 1 ? '' : 's'}${h.failed?.length ? `: ${h.failed.slice(0, 3).join(', ')}` : ''}`);
+    if (u?.total && !u.security) amber.push(`${u.total} update${u.total === 1 ? '' : 's'}`);
+    if (u?.reboot_required) amber.push('reboot required');
+    if (a.core_latest && a.core_version && !a.core_is_latest) amber.push(`agent ${a.core_latest} available`);
+  }
+  const retry = (L?.svc_retry || 0) + (L?.ping && L.ping_info?.up && L.ping_info.fails ? 1 : 0);
+  if (retry && !(L.probe && L.probe.state !== 'ok')) amber.push(`${retry} check${retry === 1 ? '' : 's'} failing, not yet down`);
+  const reasons = [...red.map((t) => ({ t, c: 'c-red' })), ...amber.map((t) => ({ t, c: 'c-amber' }))];
+  return { s: down ? 'down' : red.length ? 'prob' : amber.length ? 'att' : 'ok', reasons };
+}
+// The reasons under the state: at most three, then "+N more".
+function stateReasons(st, max = 3) {
+  if (!st?.reasons.length) return '';
+  const shown = st.reasons.slice(0, max), more = st.reasons.length - shown.length;
+  return html`<div class="reasons">${shown.map((x) => html`<div class="${x.c}" title="${x.t}">${x.t}</div>`)}${more ? html`<div class="dim" title="${st.reasons.slice(max).map((x) => x.t).join('\n')}">+${more} more</div>` : ''}</div>`;
+}
+// The middle of a card: the state in big letters and its reasons.
+const stateMid = (st, badges = '') => html`<div class="mid st"><div class="strow"><div class="big ${STATE[st.s][1]}">${STATE[st.s][0]}</div><div class="badges">${badges}</div></div>${stateReasons(st)}</div>`;
+const stateBadge = (st) => (st ? html`<span class="badge ${{ ok: 'ok', att: 'upd', prob: 'sec', down: 'sec' }[st.s]} xs" title="${st.reasons.map((x) => x.t).join('\n')}">${STATE[st.s][0]}</span>` : html`<span class="dim">—</span>`);
 const checksDownText = (x) => `${x.n} of ${x.total} ${x.L.ping ? 'check' : 'service'}${x.total === 1 ? '' : 's'} down`;
 const checksDownShort = (x) => `${x.n} ${x.L.ping ? 'check' : 'service'}${x.n === 1 ? '' : 's'} down`;
 // What failed: the first service that is down and its step, or the ping.
@@ -842,11 +881,10 @@ function upgradedBy(by) {
   if (by?.startsWith('user:')) return `${by.slice(5)} via apt`;
   return 'apt';
 }
-function healthBadges(a, { eol = true } = {}) {
-  const h = a.facts?.health, o = eol ? a.os_support : null, out = [];
-  if (h?.failed_count > 0) out.push(html`<span class="badge sec xs" title="Failed services: ${(h.failed || []).join(', ')}${h.failed_count > (h.failed || []).length ? ', …' : ''}">${h.failed_count} failed</span>`);
-  if (o?.status === 'expired') out.push(html`<span class="badge sec xs" title="${osLabel(a.facts)}: ${osSupportText(o, a.facts.os_id)}">EOL</span>`);
-  else if (o?.status === 'soon') out.push(html`<span class="badge upd xs" title="${osLabel(a.facts)}: ${osSupportText(o, a.facts.os_id)}">EOL soon</span>`);
+// Card badges besides the state: automatic updates (failed systemd services
+// and the OS support end are reasons of the state).
+function healthBadges(a) {
+  const h = a.facts?.health, out = [];
   if (h?.auto_updates === 'on') out.push(html`<span class="badge info xs" title="Automatic updates (unattended-upgrades) are on">auto</span>`);
   return out;
 }
@@ -968,7 +1006,7 @@ async function saveLayout(groupsOrder, lists) {
   await POST('layout', body);
 }
 
-const FILTER_CHIPS = [['all', 'No filter'], ['updates', 'Updates'], ['reboot', 'Reboot'], ['offline', 'Offline'], ['agent', 'Agent outdated']];
+const FILTER_CHIPS = [['all', 'No filter'], ['problem', 'Problem'], ['attention', 'Attention'], ['down', 'Down'], ['reboot', 'Reboot']];
 const TYPE_TABS = [['all', 'All'], ['agent', 'Agents'], ['local', 'Agentless'], ['virtual', 'Virtual']];
 // Filter, type, search (and on Devices the sort) of the Overview and Devices
 // pages, kept while the website is open so going back to a list finds it as left.
@@ -981,10 +1019,10 @@ function agentMatches(a, f, q, groups, type) {
   if (isVirtual(a) ? (type !== 'all' && type !== 'virtual') || f !== 'all' : type === 'virtual') return false;
   if (type === 'agent' && (isLocal(a) || isVirtual(a))) return false;
   if (type === 'local' && !isLocal(a)) return false;
-  if (f === 'updates' && !(u.total > 0)) return false;
+  if (f === 'problem' && devState(a)?.s !== 'prob') return false;
+  if (f === 'attention' && devState(a)?.s !== 'att') return false;
   if (f === 'reboot' && !u.reboot_required) return false;
-  if (f === 'offline' && !isDown(a) && !a.unreach) return false;
-  if (f === 'agent' && (a.core_is_latest || !a.core_version)) return false;
+  if (f === 'down' && !isDown(a) && !a.unreach) return false;
   if (q) {
     const g = groups.find((x) => x.id === a.group_id);
     const hay = `${a.name} ${isVirtual(a) ? 'virtual' : isLocal(a) ? 'agentless ping' : osLabel(a.facts)} ${(a.facts.ips || []).join(' ')} ${g ? g.name : ''} ${a.core_version || ''}`.toLowerCase();
@@ -1007,24 +1045,21 @@ function Dashboard() {
   const filtering = () => st.filter !== 'all' || st.type !== 'all' || st.q !== '';
   const matches = (a) => agentMatches(a, st.filter, st.q, st.data.groups, st.type);
   function localCard(a) {
-    const L = a.local, p = probeOut(a);
+    const L = a.local, p = probeOut(a), ds = devState(a);
     const state = a.maint ? 'maint' : p ? 'unk' : !L.checked ? 'wait' : L.up ? 'up' : a.unreach ? 'unr' : 'down';
-    const svcDown = state === 'up' && L.svc_down > 0;
-    const accent = svcDown ? 'a-upd' : { maint: 'a-maint', unk: 'a-unk', wait: 'a-pend', up: 'a-ok', down: 'a-off', unr: 'a-unr' }[state];
+    const accent = ds ? STATE[ds.s][2] : { maint: 'a-maint', unk: 'a-unk', wait: 'a-pend', up: 'a-ok', down: 'a-off', unr: 'a-unr' }[state];
     const big = { maint: html`<div class="big maint">${icon('pause')}</div><div class="biglbl">in maintenance<br>${a.maint ? maintUntil(a.maint) : ''}</div>`,
       unr: html`<div class="big unr">?</div><div class="biglbl">unreachable<br>behind ${a.unreach?.name || ''}</div>`,
       unk: html`<div class="big dim">?</div><div class="biglbl">unknown<br>${p ? p.note.replace(/:.*/, '') : ''}</div>`,
       wait: L.fails ? html`<div class="big some">?</div><div class="biglbl">no answer yet<br>${L.fails} of ${L.down_after} checks</div>`
       : L.last_error ? html`<div class="big sec" title="${L.last_error}">!</div><div class="biglbl">the master cannot<br>check it</div>`
-      : html`<div class="big dim">—</div><div class="biglbl">waiting for<br>first check</div>`,
-      up: svcDown ? html`<div class="big some">Up</div><div class="biglbl" title="${L.svc_fail ? `${L.svc_fail.name}: ${L.svc_fail.error || 'down'}` : ''}">${L.svc_down} of ${L.svc_total} service${L.svc_total === 1 ? '' : 's'} down${L.svc_fail ? html`<br>${L.svc_fail.name}${L.svc_fail.step && L.svc_fail.step !== 'connect' ? `: ${stepLabel(L.svc_fail.step).toLowerCase()}` : ''}` : ''}</div>` : html`<div class="big zero">Up</div>`,
-      down: html`<div class="big sec">Down</div><div class="biglbl">not<br>reachable</div>` }[state];
+      : html`<div class="big dim">—</div><div class="biglbl">waiting for<br>first check</div>` }[state];
     const uptime = L.uptime >= 0 ? html`<span class="badge ${L.uptime >= 0.999 ? 'ok' : L.uptime >= 0.9 ? 'upd' : 'sec'} xs" title="Share of successful checks in the last 24 hours">${pctText(L.uptime)} 24 h</span>` : '';
     return html`
       <div class="card ${accent}" data-act="open-agent" data-id="${a.id}" ${arranging() ? raw('data-drag="agent" draggable="true"') : ''}>
         <div class="top">${arranging() ? html`<span class="grip" title="Drag to reorder or move to another group">${icon('grip')}</span>` : ''}${agentDot(a)}
           <div style="min-width:0"><div class="name">${a.name}</div><div class="os">Agentless${L.probe ? html` · via ${L.probe.name}` : ''}</div><div class="os"><span class="ip" title="${L.resolved ? `Last checked at ${L.resolved}` : ''}">${L.address}</span></div></div></div>
-        <div class="mid">${big}<div class="badges">${uptime}</div></div>
+        ${ds ? stateMid(ds, uptime) : html`<div class="mid">${big}<div class="badges">${uptime}</div></div>`}
         <div class="inforow"><span class="uptime">${icon('clock')}${state === 'maint' ? 'no checks now' : state === 'unk' ? 'no results now' : state === 'wait' ? (L.fails ? 'not decided yet' : 'not checked yet') : `${L.up ? 'up' : state === 'unr' ? 'no answer' : 'down'} ${dur(now() - L.since)}`}</span><span class="spacer"></span>${state === 'up' && L.ping && L.rtt_us ? html`<span class="tag mono">${rttText(L.rtt_us)}</span>` : ''}</div>
         <div class="foot"><span>${L.last_check ? html`${when(L.last_check, 'Services checked ')}.` : 'waiting'}</span></div>
       </div>`;
@@ -1052,18 +1087,13 @@ function Dashboard() {
   function card(a) {
     if (isVirtual(a)) return virtualCard(a);
     if (isLocal(a)) return localCard(a);
-    const u = a.updates;
-    const f = a.facts;
-    let accent = 'a-ok';
+    const f = a.facts, ds = devState(a);
+    let accent = ds ? STATE[ds.s][2] : 'a-ok';
     if (a.status === 'pending') accent = 'a-pend';
     else if (a.maint) accent = 'a-maint';
     else if (a.below_min) accent = 'a-upd';
     else if (a.unreach) accent = 'a-unr';
-    else if (!a.online) accent = 'a-off';
-    else if (u?.security) accent = 'a-sec';
-    else if (u?.total) accent = 'a-upd';
-    const cdown = a.unreach ? null : agentChecksDown(a);
-    if (cdown && accent === 'a-ok') accent = 'a-upd';
+    const ro = a.status === 'report_only' ? html`<span class="badge info" title="Only reports: no checks, installs or reboots">${icon('pause')} report only</span>` : '';
     const selectable = a.status === 'active' && !a.below_min && canChange();
     let mid;
     if (a.maint) {
@@ -1074,11 +1104,10 @@ function Dashboard() {
     } else if (a.below_min) {
       mid = html`<div class="mid"><div class="big some">↑</div><div class="biglbl">agent update<br>required</div>
         <div class="badges">${ifChange(html`<button class="btn primary sm" data-act="agent-update" data-id="${a.id}" ${a.online ? '' : 'disabled'} title="${a.online ? `Update to agent ${a.core_latest}` : 'The device is offline'}">${icon('up')} Update agent</button>`)}</div></div>`;
-    } else if (!u) {
-      mid = html`<div class="mid"><div class="big dim">—</div><div class="biglbl">${a.status === 'report_only' ? html`no checks<br>(report only)` : html`waiting for<br>first check`}</div><div class="badges">${updBadges(a)}</div></div>`;
+    } else if (ds) {
+      mid = stateMid(ds, ro);
     } else {
-      const cls = u.security ? 'sec' : u.total ? 'some' : 'zero';
-      mid = html`<div class="mid"><div class="big ${cls}">${u.total}</div><div class="biglbl">${u.total === 1 ? 'update' : 'updates'}<br>available</div><div class="badges">${updBadges(a)}</div></div>`;
+      mid = html`<div class="mid"><div class="big unr">?</div><div class="biglbl">unreachable<br>behind ${a.unreach?.name || ''}</div><div class="badges">${ro}</div></div>`;
     }
     return html`
       <div class="card ${accent} ${st.sel.has(a.id) ? 'sel' : ''}" data-act="open-agent" data-id="${a.id}" ${arranging() ? raw('data-drag="agent" draggable="true"') : ''}>
@@ -1088,8 +1117,6 @@ function Dashboard() {
             : html`<div class="os">${osLabel(f)} · ${f.arch || '?'} · ${f.virt || ''}</div><div class="os">${ipLabel(f)}</div>`}</div>
           ${statLetters(a) || selectable ? html`<div class="tcorner">${statLetters(a)}${selectable ? html`<input type="checkbox" class="selbox" data-act="sel" data-id="${a.id}" ${st.sel.has(a.id) ? 'checked' : ''} title="Select">` : ''}</div>` : ''}</div>
         ${mid}
-        ${a.unreach ? html`<div class="svcline unr">${unrText(a)}</div>` : ''}
-        ${cdown ? html`<div class="svcline" title="${cdown.L.svc_fail ? `${cdown.L.svc_fail.name}: ${cdown.L.svc_fail.error || 'down'}` : ''}">${checksDownText(cdown)}${checksFailText(cdown) ? ` · ${checksFailText(cdown)}` : ''}</div>` : ''}
         ${a.status !== 'pending' ? html`<div class="inforow"><span class="uptime" title="${a.below_min ? '' : lastReboot(a)}">${icon('clock')}${!a.online ? (a.maint ? 'not connected' : a.unreach ? 'unreachable' : 'offline') :a.below_min ? 'online' : 'up ' + dur(f.uptime_sec)}</span>${a.maint ? '' : healthBadges(a)}<span class="spacer"></span>${verPill(a)}</div>` : ''}
         <div class="foot">
           ${a.busy ? html`<span class="spin"></span><span>${a.busy} job${a.busy > 1 ? 's' : ''}</span>` : html`<span>${a.online ? checkedLine(a) : a.status === 'pending' ? '' : when(a.last_seen, 'seen ')}</span>`}
@@ -1137,34 +1164,24 @@ function Dashboard() {
     setHTML($('#d-arrange-note'), arranging() ? html`<div class="notice blue">Layout unlocked: drag a device card to change its order or group, or a group header to reorder the groups. Lock the layout when done; it is locked again after a page reload.</div>` : '');
     const A = d.agents;
     const active = A.filter((a) => a.status !== 'pending');
-    // Services OK: per agent its connection; per agentless device the
-    // running ping and services. Undecided (waiting, retrying) is not OK.
-    let svcTotal = 0, svcOK = 0, svcDown = 0, devClean = 0;
+    // Devices OK: every device (not virtual, not pending) by its state;
+    // maintenance, unreachable, unknown and not yet checked are counted
+    // but are not OK.
+    const cnt = { ok: 0, att: 0, prob: 0, down: 0, other: 0 };
     // Unreachable devices, per device they are cut off behind: the cause, once.
     const behind = new Map();
     for (const a of active) {
-      let t = 0, ok = 0, down = 0;
-      // An agent counts its connection, plus the checks on its Services tab.
-      const L = chk(a), [ct, cok, cdown] = L ? checkCounts(L) : [0, 0, 0];
-      if (a.maint || a.unreach) {
-        // In maintenance or unreachable: counts, but not as OK and not as down.
-        t = (isLocal(a) ? 0 : 1) + ct;
-        if (a.unreach && !a.maint) {
-          const c = behind.get(a.unreach.id) || { name: a.unreach.name, n: 0 };
-          c.n++;
-          behind.set(a.unreach.id, c);
-        }
-      } else {
-        t = ct; ok = cok; down = cdown; // unknown (probe out): counts, but not as OK and not as down
-        if (!isLocal(a)) {
-          t++;
-          if (a.online) ok++; else down++;
-        }
+      const ds = devState(a);
+      cnt[ds ? ds.s : 'other']++;
+      if (a.unreach && !a.maint) {
+        const c = behind.get(a.unreach.id) || { name: a.unreach.name, n: 0 };
+        c.n++;
+        behind.set(a.unreach.id, c);
       }
-      svcTotal += t; svcOK += ok; svcDown += down;
-      if (!down) devClean++;
     }
-    const svcClass = svcDown ? 'c-red' : svcOK < svcTotal ? 'c-amber' : 'c-green';
+    const devTotal = active.length;
+    const svcClass = cnt.prob || cnt.down ? 'c-red' : cnt.att || cnt.ok < devTotal ? 'c-amber' : 'c-green';
+    const cntNote = [cnt.down && html`<span class="c-red">${cnt.down} down</span>`, cnt.prob && html`<span class="c-red">${cnt.prob} problem</span>`, cnt.att && html`<span class="c-amber">${cnt.att} attention</span>`].filter(Boolean);
     const totUpd = active.reduce((s, a) => s + (a.updates?.total || 0), 0);
     const totSec = active.reduce((s, a) => s + (a.updates?.security || 0), 0);
     const reboot = active.filter((a) => a.updates?.reboot_required).length;
@@ -1194,8 +1211,8 @@ function Dashboard() {
     if (allCurrent) oldest = null;
     const hours = d.settings?.check_interval_hours || 6;
     setHTML($('#d-stats'), html`
-      <div class="panel stat ${svcClass}" title="Agents: the connection and their services. Agentless devices: the ping and their services. Paused checks are not counted."><div class="label">Services OK</div><div class="value">${svcOK}<small> / ${svcTotal}</small></div>
-        <div class="statnote">${active.length} device${active.length === 1 ? '' : 's'} · ${devClean} without failures${reportOnly ? html` · <span title="Report-only devices only report; no checks, installs or reboots">${reportOnly} report only</span>` : ''}</div>
+      <div class="panel stat ${svcClass}" title="Devices whose state is OK. Devices in maintenance, unreachable, unknown or not checked yet count, but not as OK. Virtual devices are not counted."><div class="label">Devices OK</div><div class="value">${cnt.ok}<small> / ${devTotal}</small></div>
+        <div class="statnote">${cntNote.length ? cntNote.map((x, i) => html`${i ? ' · ' : ''}${x}`) : 'nothing needs attention'}${reportOnly ? html` · <span title="Report-only devices only report; no checks, installs or reboots">${reportOnly} report only</span>` : ''}</div>
         ${[...behind.values()].map((c) => html`<div class="statnote"><span class="c-unr" title="Unreachable devices are not counted as failures">${c.n} unreachable behind ${c.name}</span></div>`)}</div>
       <div class="panel stat c-amber"><div class="label">Pending updates</div><div class="value">${totUpd}</div>
         ${totSec ? html`<div class="statnote"><span class="c-red">${totSec} security</span></div>` : ''}</div>
@@ -1411,6 +1428,7 @@ function DeviceList([, cmd]) {
   const COLS = [
     ['status', '●', (a) => statusText(a), 'dotcol'],
     ['name', 'Name', (a) => a.name, ''],
+    ['state', 'State', (a) => { const ds = devState(a); return ds ? STATE_RANK[ds.s] : -1; }, ''],
     ['group', 'Group', (a) => groupName(a.group_id), 'opt'],
     ['ip', 'IP', (a) => (a.facts.ips || [])[0] || '', 'opt'],
     ['os', 'OS', (a) => (isVirtual(a) ? '~virtual' : isLocal(a) ? '~local' : osShort(a.facts)), 'opt'],
@@ -1446,13 +1464,14 @@ function DeviceList([, cmd]) {
     return a.updates?.checked_at ? when(a.updates.checked_at) : html`<span class="dim">waiting for first check</span>`;
   }
   function row(a) {
-    const u = a.updates, o = a.os_support, f = a.facts;
+    const u = a.updates, f = a.facts;
     return html`<tr>
       <td class="nowrap" title="${statusText(a)}${a.below_min ? ` (agent ${a.core_version}, lowest allowed ${a.min_agent})` : ''}">${agentDot(a)}${statusText(a) === 'online' || statusText(a) === '' ? '' : html` <span class="small ${a.maint ? 'c-blue' : a.unreach ? 'c-unr' : statusText(a) === 'unknown' ? 'dim' : a.status === 'pending' || a.status === 'report_only' || a.below_min || statusText(a) === 'waiting' || statusText(a) === 'partly online' || / (service|check)s? down/.test(statusText(a)) ? 'c-amber' : 'c-red'}">${statusText(a)}</span>`}</td>
       <td class="nowrap"><a href="${a.upstream ? '#/settings/upstream' : `#/device/${a.id}`}"><b>${a.name}</b></a>${a.ip_conflicts?.length ? html` <span class="badge sec xs" title="${a.ip_conflicts.map((c) => `IP ${c.ip} is also used by ${c.name}`).join('\n')}">IP also used</span>` : ''}</td>
+      <td class="nowrap">${isVirtual(a) ? html`<span class="dim">—</span>` : stateBadge(devState(a))}</td>
       <td class="opt muted">${groupName(a.group_id)}</td>
       <td class="opt small nowrap">${(f.ips || [])[0] || (isVirtual(a) ? html`<span class="dim">—</span>` : '')}${a.local?.resolved ? html` <span class="dim" title="The address the last check went to">→ ${a.local.resolved}</span>` : ''}</td>
-      <td class="opt nowrap" title="${a.below_min || isLocal(a) || isVirtual(a) ? '' : osLabel(f)}">${a.upstream ? html`<span class="dim" title="The internet connection, pinged by the master (Settings → Upstream)">upstream</span>` : isVirtual(a) ? html`<span class="dim" title="Virtual device: not checked">virtual</span>` : isLocal(a) ? html`<span class="dim" title="Monitored by the master with a ping; no agent">agentless</span>` : a.below_min ? html`<span class="dim">—</span>` : clipText(osShort(f), 14)}${o?.status === 'expired' ? html` <span class="badge sec xs" title="${osSupportText(o, f.os_id)}">EOL</span>` : o?.status === 'soon' ? html` <span class="badge upd xs" title="${osSupportText(o, f.os_id)}">EOL soon</span>` : ''}</td>
+      <td class="opt nowrap" title="${a.below_min || isLocal(a) || isVirtual(a) ? '' : osLabel(f)}">${a.upstream ? html`<span class="dim" title="The internet connection, pinged by the master (Settings → Upstream)">upstream</span>` : isVirtual(a) ? html`<span class="dim" title="Virtual device: not checked">virtual</span>` : isLocal(a) ? html`<span class="dim" title="Monitored by the master with a ping; no agent">agentless</span>` : a.below_min ? html`<span class="dim">—</span>` : clipText(osShort(f), 14)}</td>
       <td class="opt nowrap">${isVirtual(a) ? html`<span class="dim">—</span>` : statLetters(a)}</td>
       <td class="num"><b class="${u?.security ? 'c-red' : u?.total ? 'c-amber' : 'dim'}">${u ? u.total : '—'}</b></td>
       <td class="num">${!a.vulns ? html`<span class="dim">—</span>` : a.vulns.badge ? html`<b class="c-red" title="${CVE_RED}">${a.vulns.badge}</b>` : html`<span class="dim">0</span>`}</td>
@@ -2172,7 +2191,7 @@ function AgentPage([id, tab]) {
     const kv = [
       ['Hostname', f.hostname], ['Operating system', osLabel(f)], ['Kernel', f.kernel], ['Architecture', `${f.os}/${f.arch}`],
       ['Virtualization', f.virt], ['Platform', platformLabel(f)], ['Uptime', a.online ? dur(f.uptime_sec) : a.maint ? html`<span class="c-blue">not connected (maintenance)</span>` : html`<span class="flash-off">offline</span>`], ['CPUs', f.cpus], ['Memory (assigned)', bytes(f.mem_total)],
-      ['OS support', a.os_support ? html`${a.os_support.status === 'expired' ? html`<span class="badge sec xs">EOL</span> ` : a.os_support.status === 'soon' ? html`<span class="badge upd xs">EOL soon</span> ` : ''}${osSupportText(a.os_support, f.os_id)}` : '—'],
+      ['OS support', a.os_support ? osSupportText(a.os_support, f.os_id) : '—'],
       ['Failed services', !h || h.failed_count < 0 ? '—' : h.failed_count === 0 ? 'none'
         : html`<span class="badge sec xs">${h.failed_count} failed</span> ${(h.failed || []).join(', ')}${h.failed_count > (h.failed || []).length ? ', …' : ''}`],
       ['Automatic updates', ({ on: html`<span class="badge info xs">on</span> unattended-upgrades`, off: 'off', not_installed: 'not installed' })[h?.auto_updates] || '—'],
@@ -2227,8 +2246,8 @@ function AgentPage([id, tab]) {
   function servicesTab(a) {
     const L = a.checks, out = L?.probe && L.probe.state !== 'ok' ? L.probe : null;
     const head = html`<div class="row" style="margin-bottom:12px"><span class="muted small">${L && L.address
-      ? html`Checked on <span class="mono">${L.address}</span> ${L.probe ? html`by the agent <a href="#/device/${L.probe.id}"><b>${L.probe.name}</b></a>, on its own schedule` : 'from the master'}.${(L.services || []).some((s) => s.metric) ? ' Disk, memory and load are measured by the agent itself.' : ''}`
-      : L ? 'Disk, memory and load are measured by the agent itself, every minute. Other services are checked from outside, by the master or another agent.'
+      ? html`Checked on <span class="mono">${L.address}</span> ${L.probe ? html`by the agent <a href="#/device/${L.probe.id}"><b>${L.probe.name}</b></a>, on its own schedule` : 'from the master'}.${(L.services || []).some((s) => s.metric) ? ' Disk, memory and load are measured by the agent itself.' : ''} OS support is decided by the master.`
+      : L ? 'OS support is decided by the master from the support dates; disk, memory and load are measured by the agent itself, every minute. Other services are checked from outside, by the master or another agent.'
       : 'Services of this device checked from outside, by the master or another agent, as for an agentless device. The device\'s own status still comes from its agent.'}</span>
       <span class="spacer"></span>${ifChange(html`<button class="btn sm" data-act="checks-edit">${icon('edit')} Address and checker</button><button class="btn primary sm" data-act="svc-add">${icon('plus')} Add service</button>`)}</div>
       ${out && !a.maint ? html`<div class="notice grey"><b>Unknown – ${out.note}.</b> The shown results are the last ones received from <a href="#/device/${out.id}">${out.name}</a>.</div>` : ''}`;
@@ -2502,7 +2521,7 @@ const addrText = (L) => html`<span class="mono">${L.address}</span>${L.resolved 
 const STEP_LABEL = { lookup: 'Name lookup', connect: 'Connect', greeting: 'Greeting', tls: 'TLS handshake', cert: 'Certificate valid', cert_time: 'Valid in time', cert_days: 'Certificate days', http: 'HTTP status',
   query: 'Query', rcode: 'Server status', records: 'Records', expect: 'Expected value', time: 'Response time' };
 const stepLabel = (k) => STEP_LABEL[k] || k;
-const svcProto = (s) => (s.metric ? { disk: `DISK ${s.mount}`, memory: 'MEMORY', load: 'CPU' }[s.method] || '' : `${(s.method || 'tcp').toUpperCase()} ${s.port}`);
+const svcProto = (s) => (s.method === 'os_support' ? 'OS SUPPORT' : s.metric ? { disk: `DISK ${s.mount}`, memory: 'MEMORY', load: 'CPU' }[s.method] || '' : `${(s.method || 'tcp').toUpperCase()} ${s.port}`);
 // Disk, memory and load: the limit as text ("> 90% used", "< 10 GB free", "> 1.5 per core").
 const metricLimit = (s) => (s.method === 'disk' && s.limit_kind === 'free' ? `< ${s.limit} GB free` : s.method === 'load' ? `> ${s.limit} per core` : `> ${s.limit}% used`);
 // The disk size or total memory of the last reading: the master's text ends
@@ -2967,7 +2986,7 @@ function servicesTable(st, L) {
           ${ifChange(html`${pauseBtn(P.mode === 'paused', 'ping-pause', '')}<button class="btn danger sm iconbtn" data-act="ping-remove" title="Delete">${icon('trash')}</button>`)}</div></td>
       </tr>` : '';
     return html`<div class="panel scrollx"><table class="tbl svctbl"><thead><tr><th>Status</th><th>Service</th><th>Answer</th><th>Response</th><th>Checked</th><th>Last 24 hours</th><th>Check</th><th class="w1"></th></tr></thead>
-      <tbody>${pingRow}${svcs.map((s) => (s.metric ? metricRow(st, s) : html`<tr class="${s.paused ? 'dimrow' : ''}">
+      <tbody>${pingRow}${svcs.map((s) => (s.method === 'os_support' ? osSupportRow(st, s) : s.metric ? metricRow(st, s) : html`<tr class="${s.paused ? 'dimrow' : ''}">
         <td class="nowrap">${svcState(s)}${s.checked && !s.paused ? html`<div class="dim small">${dur(now() - s.since)}</div>` : ''}</td>
         <td class="nowrap"><b>${s.name}</b> ${s.reverse ? html`<span class="badge info xs" title="Reverse mode: reachable counts as down">reverse</span>` : ''}<div class="dim small mono">${svcProto(s)}${svcTarget(s)}</div>${svcSteps(s)}</td>
         <td class="small mono banner">${s.banner ? html`<span title="${s.banner}">${s.banner}</span>` : html`<span class="dim">${s.greeting || s.method === 'https' || s.method === 'dns' ? '—' : 'not waited for'}</span>`}</td>
@@ -2980,6 +2999,35 @@ function servicesTable(st, L) {
           <button class="btn ghost sm iconbtn" data-act="svc-check" data-sid="${s.id}" title="${L.probe ? 'Checked by a remote probe on its own schedule' : 'Check now'}" ${st.checking.has(s.id) || s.paused || L.probe ? 'disabled' : ''}>${st.checking.has(s.id) ? html`<span class="spin"></span>` : icon('refresh')}</button>
           ${ifChange(html`${pauseBtn(s.paused, 'svc-pause', `data-sid="${esc(s.id)}"`)}<button class="btn ghost sm iconbtn" data-act="svc-edit" data-sid="${s.id}" title="Edit">${icon('edit')}</button><button class="btn danger sm iconbtn" data-act="svc-delete" data-sid="${s.id}" title="Delete">${icon('trash')}</button>`)}</div></td>
       </tr>`))}</tbody></table></div>`;
+}
+// OS support: decided by the master from the support dates; on every agent
+// device, it can be paused (muted) but not deleted.
+function osSupportRow(st, s) {
+  return html`<tr class="${s.paused ? 'dimrow' : ''}">
+    <td class="nowrap">${s.checked || s.paused ? svcState(s) : html`<span class="badge mute xs" title="${s.banner || ''}">unknown</span>`}${s.checked && !s.paused ? html`<div class="dim small">${dur(now() - s.since)}</div>` : ''}</td>
+    <td class="nowrap"><b>${s.name}</b><div class="dim small mono">OS SUPPORT</div></td>
+    <td class="small banner">${s.banner ? html`<span title="${s.banner}">${s.banner}</span>` : html`<span class="dim">—</span>`}</td>
+    <td class="small nowrap"><span class="dim">—</span></td>
+    <td class="small nowrap">${s.last_check ? when(s.last_check) : html`<span class="dim">waiting</span>`}${s.last_error && !s.paused && !s.up ? html`<div class="c-red small" style="font-weight:400">${s.last_error}</div>` : ''}</td>
+    <td style="min-width:150px">${uptimeBar(s.hist, { word: 'check', compact: true })}<div class="dim small">${s.uptime >= 0 ? `${pctText(s.uptime)} supported` : 'no checks yet'}</div></td>
+    <td class="dim small nowrap" title="Decided by the master from the OS support dates (Settings → Releases)">every 10 min<br>${s.days ? `down ${s.days} days before the end` : 'down once support ended'}</td>
+    <td class="w1"><div class="row" style="flex-wrap:nowrap;gap:6px">
+      <button class="btn ghost sm iconbtn" data-act="svc-check" data-sid="${s.id}" title="Check now" ${st.checking.has(s.id) || s.paused ? 'disabled' : ''}>${st.checking.has(s.id) ? html`<span class="spin"></span>` : icon('refresh')}</button>
+      ${ifChange(html`${pauseBtn(s.paused, 'svc-pause', `data-sid="${esc(s.id)}"`)}<button class="btn ghost sm iconbtn" data-act="svc-edit" data-sid="${s.id}" title="Edit">${icon('edit')}</button><button class="btn danger sm iconbtn" disabled title="Part of every agent device: pause it to mute it">${icon('trash')}</button>`)}</div></td>
+  </tr>`;
+}
+function osSupportModal(dev, s, done) {
+  openModal(html`<h3>Edit ${s.name}</h3><form class="form" data-submit="save">
+    <div class="muted small">Down once the OS release of ${dev.name} no longer gets security support, or the set number of days before. Decided by the master from the support dates it keeps (Settings → Releases); nothing runs on the device. Part of every agent device: pause it to mute it.</div>
+    <label class="field">Name<input type="text" name="name" value="${s.name}" maxlength="48" required></label>
+    <label class="field">Down this many days before support ends<input type="number" name="days" min="0" max="365" value="${s.days || 0}" required></label>
+    <div class="dim small">0: only once support has ended. At most 365.</div>
+    <div class="actions"><button type="button" class="btn ghost" data-act="cancel">Cancel</button><button class="btn primary">Save</button></div></form>`, {
+    acts: {
+      cancel: () => closeModal(),
+      save: async (f) => { const v = await POST(`locals/${dev.id}/services/${s.id}`, { name: f.name.value, days: +f.days.value }); closeModal(); toast('Saved', 'ok'); done(v); },
+    },
+  });
 }
 // Disk, memory or load: measured by the device's own agent every minute (no Check now).
 function metricRow(st, s) {
@@ -3078,7 +3126,7 @@ function serviceActs(st, id, render) {
       toast('Ping deleted', 'ok');
     },
     'svc-add': () => serviceModal(st.data.agent, null, st.data.presets, st.data.svc_limits, st.data.svc_methods, setAgent),
-    'svc-edit': (t) => serviceModal(st.data.agent, svc(t.dataset.sid), st.data.presets, st.data.svc_limits, st.data.svc_methods, setAgent),
+    'svc-edit': (t) => (svc(t.dataset.sid)?.method === 'os_support' ? osSupportModal(st.data.agent, svc(t.dataset.sid), setAgent) : serviceModal(st.data.agent, svc(t.dataset.sid), st.data.presets, st.data.svc_limits, st.data.svc_methods, setAgent)),
     'svc-cert': (t) => certModal(svc(t.dataset.sid)),
     'svc-pause': async (t) => {
       const s = svc(t.dataset.sid);

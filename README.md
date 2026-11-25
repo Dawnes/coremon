@@ -17,6 +17,15 @@ as **agentless** devices: the master itself pings them and checks their services
 ## Features
 
 * **Dashboard**: all devices at a glance, in your own groups, with filters.
+  Every device has one state, the same for agent and agentless devices:
+  **OK**, **Attention** (updates waiting, reboot required, a check failing but
+  not yet down, a newer agent), **Problem** (a check or service down,
+  security updates, a serious CVE, failed systemd services) or **Down**, with
+  the reasons on its tile. The Overview counts the devices that are OK; the
+  Devices list has a State column and filters for Problem, Attention and Down.
+* **OS support**: a service on every agent device, down once its OS release no
+  longer gets security support (or a set number of days before). Decided by the
+  master from the support dates; it cannot be removed, but pausing it mutes it.
 * **Updates**: check, install selected packages or upgrade all, with live output.
 * **Applications**: 43 common applications (Apache, ClamAV, Docker, Dovecot,
   HAProxy, MariaDB, Nginx, OpenSSL, PostgreSQL, Proxmox VE, Proxmox Backup
