@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"regexp"
+	"strings"
 	"time"
 
 	"coremon/internal/feature"
@@ -35,6 +36,13 @@ type Snapshot struct {
 	RebootPkgs     []string  `json:"reboot_pkgs"`
 	Total          int       `json:"total"`
 	Security       int       `json:"security"`
+	// SecurityFromCVE: the package manager does not mark security updates
+	// (apk, zypper on Tumbleweed): the master counts an update as security
+	// when it fixes a CVE it knows for the device.
+	SecurityFromCVE bool `json:"security_from_cve,omitempty"`
+	// NoSources: no enabled package sources (e.g. SLES not registered):
+	// "up to date" would mean nothing.
+	NoSources bool `json:"no_sources,omitempty"`
 }
 
 type Backend interface {
@@ -54,10 +62,29 @@ func pickBackend() (Backend, error) {
 	if _, err := exec.LookPath("apt-get"); err == nil {
 		return &aptBackend{}, nil
 	}
+	// zypper before dnf: openSUSE can have dnf installed too, but zypper is
+	// its package manager.
+	if _, err := exec.LookPath("zypper"); err == nil {
+		return &zypperBackend{rolling: osReleaseID() == "opensuse-tumbleweed"}, nil
+	}
 	if _, err := exec.LookPath("dnf"); err == nil {
 		return &dnfBackend{}, nil
 	}
-	return nil, errors.New("no supported package manager found (supported: apt, dnf)")
+	if _, err := exec.LookPath("apk"); err == nil {
+		return &apkBackend{}, nil
+	}
+	return nil, errors.New("no supported package manager found (supported: apt, dnf, zypper, apk)")
+}
+
+// osReleaseID: ID from /etc/os-release.
+func osReleaseID() string {
+	b, _ := os.ReadFile("/etc/os-release")
+	for _, line := range strings.Split(string(b), "\n") {
+		if v, ok := strings.CutPrefix(line, "ID="); ok {
+			return strings.Trim(strings.TrimSpace(v), `"'`)
+		}
+	}
+	return ""
 }
 
 // PackageNameRe: a Debian or RPM package name (RPM names may have capitals

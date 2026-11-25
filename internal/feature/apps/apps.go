@@ -58,14 +58,120 @@ type def struct {
 	units []string
 }
 
-// rpmDef: the RPM package names of an application (Rocky Linux, AlmaLinux,
-// RHEL, EPEL), and the extra systemd units there. ver: for an application
-// with versions side by side (multi), the key is taken from the package
-// version when the name has none: 1 = major, 2 = major.minor.
+// rpmDef: the package names of an application in another family than
+// Debian's (rpmDefs: Rocky Linux, AlmaLinux, RHEL, EPEL; suseDefs; apkDefs:
+// Alpine), and the extra service names there. ver: for an application with
+// versions side by side (multi), the key is taken from the package version
+// when the name has none: 1 = major, 2 = major.minor. No re: not packaged
+// in that family.
 type rpmDef struct {
 	re    *regexp.Regexp
 	ver   int
 	units []string
+}
+
+// Package families.
+const (
+	famDeb  = ""
+	famEL   = "el"
+	famSUSE = "suse"
+	famApk  = "apk"
+)
+
+var familyDefs = map[string]map[string]rpmDef{famEL: rpmDefs, famSUSE: suseDefs, famApk: apkDefs}
+
+var suseDefs = map[string]rpmDef{
+	"Apache":                {regexp.MustCompile(`^apache2$`), 0, nil},
+	"BIND9":                 {regexp.MustCompile(`^bind$`), 0, nil},
+	"Certbot":               {regexp.MustCompile(`^(?:certbot|python3\d*-certbot)$`), 0, nil},
+	"Docker":                {regexp.MustCompile(`^docker$`), 0, nil},
+	"Fail2ban":              {regexp.MustCompile(`^fail2ban$`), 0, nil},
+	"ISC DHCP server":       {regexp.MustCompile(`^dhcp-server$`), 0, []string{"dhcpd.service", "dhcpd6.service"}},
+	"Kea DHCP":              {regexp.MustCompile(`^kea$`), 0, nil},
+	"Java":                  {regexp.MustCompile(`^java-(\d+|1_8_0)-openjdk(?:-headless|-devel)?$`), 0, nil},
+	"MariaDB/MySQL":         {regexp.MustCompile(`^(?:mariadb|mysql-community-server)$`), 0, nil},
+	"Nginx":                 {regexp.MustCompile(`^nginx$`), 0, nil},
+	"Node.js":               {regexp.MustCompile(`^nodejs\d*$`), 0, nil},
+	"OpenSSL":               {regexp.MustCompile(`^libopenssl3$`), 0, nil},
+	"OpenVPN":               {regexp.MustCompile(`^openvpn$`), 0, nil},
+	"PHP":                   {regexp.MustCompile(`^php\d(?:-cli|-fpm)?$`), 2, []string{"php-fpm.service"}},
+	"Podman":                {regexp.MustCompile(`^podman$`), 0, nil},
+	"PostgreSQL":            {regexp.MustCompile(`^postgresql(\d+)-server$`), 0, []string{"postgresql.service"}},
+	"Postfix":               {regexp.MustCompile(`^postfix$`), 0, nil},
+	"Python":                {regexp.MustCompile(`^python3(?:\d{2,})?$`), 2, nil},
+	"Redis":                 {regexp.MustCompile(`^redis\d*$`), 0, []string{"redis@*.service"}},
+	"Samba":                 {regexp.MustCompile(`^samba$`), 0, []string{"smb.service", "nmb.service"}},
+	"SSH server":            {regexp.MustCompile(`^openssh-server$`), 0, nil},
+	"sudo":                  {regexp.MustCompile(`^sudo$`), 0, nil},
+	"WireGuard":             {regexp.MustCompile(`^wireguard-tools$`), 0, nil},
+	"Exim":                  {regexp.MustCompile(`^exim$`), 0, []string{"exim.service"}},
+	"ProFTPD":               {regexp.MustCompile(`^proftpd$`), 0, nil},
+	"Tomcat":                {regexp.MustCompile(`^tomcat(\d*)$`), 1, []string{"tomcat.service"}},
+	"Mosquitto":             {regexp.MustCompile(`^mosquitto$`), 0, nil},
+	"Grafana":               {regexp.MustCompile(`^grafana$`), 0, nil},
+	"Tailscale":             {regexp.MustCompile(`^tailscale$`), 0, nil},
+	"QEMU":                  {regexp.MustCompile(`^qemu(?:-kvm)?$`), 0, nil},
+	"Unbound":               {regexp.MustCompile(`^unbound$`), 0, nil},
+	"HAProxy":               {regexp.MustCompile(`^haproxy$`), 0, nil},
+	"Squid":                 {regexp.MustCompile(`^squid$`), 0, nil},
+	"Chrony":                {regexp.MustCompile(`^chrony$`), 0, nil},
+	"NTPsec":                {regexp.MustCompile(`^ntpsec$`), 0, nil},
+	"vsftpd":                {regexp.MustCompile(`^vsftpd$`), 0, nil},
+	"ClamAV":                {regexp.MustCompile(`^clamav$`), 0, []string{"clamd.service", "freshclam.service"}},
+	"Dovecot":               {regexp.MustCompile(`^dovecot\d*$`), 0, nil},
+	"InfluxDB 1":            {regexp.MustCompile(`^influxdb$`), 0, nil},
+	"InfluxDB 2":            {regexp.MustCompile(`^influxdb2$`), 0, nil},
+	"Webmin":                {regexp.MustCompile(`^webmin$`), 0, nil},
+	"Proxmox VE":            {},
+	"Proxmox Backup Server": {},
+}
+
+// apkDefs: Alpine. OpenRC services are named like "sshd" (kept as
+// "sshd.service").
+var apkDefs = map[string]rpmDef{
+	"Apache":                {regexp.MustCompile(`^apache2$`), 0, nil},
+	"BIND9":                 {regexp.MustCompile(`^bind$`), 0, nil},
+	"Certbot":               {regexp.MustCompile(`^certbot$`), 0, nil},
+	"Docker":                {regexp.MustCompile(`^docker(?:-engine)?$`), 0, nil},
+	"Fail2ban":              {regexp.MustCompile(`^fail2ban$`), 0, nil},
+	"ISC DHCP server":       {regexp.MustCompile(`^dhcp-server-(?:vanilla|ldap)$`), 0, []string{"dhcpd.service"}},
+	"Kea DHCP":              {regexp.MustCompile(`^kea-dhcp4$`), 0, nil},
+	"Java":                  {regexp.MustCompile(`^openjdk(\d+)(?:-jre|-jre-headless|-jdk)?$`), 0, nil},
+	"MariaDB/MySQL":         {regexp.MustCompile(`^mariadb$`), 0, nil},
+	"Nginx":                 {regexp.MustCompile(`^nginx$`), 0, nil},
+	"Node.js":               {regexp.MustCompile(`^nodejs(?:-current)?$`), 0, nil},
+	"OpenSSL":               {regexp.MustCompile(`^libssl3$`), 0, nil},
+	"OpenVPN":               {regexp.MustCompile(`^openvpn$`), 0, nil},
+	"PHP":                   {regexp.MustCompile(`^php\d\d(?:-fpm)?$`), 2, []string{"php-fpm8*.service"}},
+	"Podman":                {regexp.MustCompile(`^podman$`), 0, nil},
+	"PostgreSQL":            {regexp.MustCompile(`^postgresql(\d+)$`), 0, []string{"postgresql.service"}},
+	"Postfix":               {regexp.MustCompile(`^postfix$`), 0, nil},
+	"Python":                {regexp.MustCompile(`^python3$`), 2, nil},
+	"Redis":                 {regexp.MustCompile(`^redis$`), 0, nil},
+	"Samba":                 {regexp.MustCompile(`^samba$`), 0, []string{"samba.service"}},
+	"SSH server":            {regexp.MustCompile(`^openssh-server$`), 0, nil},
+	"sudo":                  {regexp.MustCompile(`^sudo$`), 0, nil},
+	"WireGuard":             {regexp.MustCompile(`^wireguard-tools$`), 0, nil},
+	"Exim":                  {regexp.MustCompile(`^exim$`), 0, []string{"exim.service"}},
+	"ProFTPD":               {regexp.MustCompile(`^proftpd$`), 0, nil},
+	"Tomcat":                {},
+	"Mosquitto":             {regexp.MustCompile(`^mosquitto$`), 0, nil},
+	"Grafana":               {regexp.MustCompile(`^grafana$`), 0, []string{"grafana.service"}},
+	"Tailscale":             {regexp.MustCompile(`^tailscale$`), 0, nil},
+	"QEMU":                  {regexp.MustCompile(`^qemu-system-[a-z0-9_]+$`), 0, nil},
+	"Unbound":               {regexp.MustCompile(`^unbound$`), 0, nil},
+	"HAProxy":               {regexp.MustCompile(`^haproxy$`), 0, nil},
+	"Squid":                 {regexp.MustCompile(`^squid$`), 0, nil},
+	"Chrony":                {regexp.MustCompile(`^chrony$`), 0, nil},
+	"NTPsec":                {},
+	"vsftpd":                {regexp.MustCompile(`^vsftpd$`), 0, nil},
+	"ClamAV":                {regexp.MustCompile(`^clamav(?:-daemon)?$`), 0, []string{"clamd.service", "freshclam.service"}},
+	"Dovecot":               {regexp.MustCompile(`^dovecot$`), 0, nil},
+	"InfluxDB 1":            {regexp.MustCompile(`^influxdb$`), 0, nil},
+	"InfluxDB 2":            {},
+	"Webmin":                {},
+	"Proxmox VE":            {},
+	"Proxmox Backup Server": {},
 }
 
 var rpmDefs = map[string]rpmDef{
@@ -219,14 +325,16 @@ func UnitPatterns() []string {
 	var out []string
 	for _, d := range defs {
 		out = append(out, d.units...)
-		out = append(out, rpmDefs[d.name].units...)
+		for _, fd := range familyDefs {
+			out = append(out, fd[d.name].units...)
+		}
 	}
 	return out
 }
 
-// forRPM: the definition with the RPM names and units.
-func (d def) forRPM() (def, int) {
-	r := rpmDefs[d.name]
+// forFamily: the definition with the family's package names and units.
+func (d def) forFamily(fam string) (def, int) {
+	r := familyDefs[fam][d.name]
 	d.re, d.units = r.re, append(append([]string{}, d.units...), r.units...)
 	return d, r.ver
 }
@@ -351,12 +459,12 @@ func installed(r io.Reader) map[string]pkgInfo {
 }
 
 func scan(r io.Reader, sys *System, originOf func([]string) map[string]string) []App {
-	return scanInfo(installed(r), false, sys, originOf)
+	return scanInfo(installed(r), famDeb, sys, originOf)
 }
 
-// scanInfo: the applications among the installed packages; rpm: the
-// packages are RPMs (their names differ from Debian's).
-func scanInfo(info map[string]pkgInfo, rpm bool, sys *System, originOf func([]string) map[string]string) []App {
+// scanInfo: the applications among the installed packages of a package
+// family (famDeb, famEL, famSUSE, famApk: their names differ).
+func scanInfo(info map[string]pkgInfo, fam string, sys *System, originOf func([]string) map[string]string) []App {
 	pkgs := make(map[string]string, len(info))
 	for p, i := range info {
 		pkgs[p] = i.ver
@@ -369,8 +477,8 @@ func scanInfo(info map[string]pkgInfo, rpm bool, sys *System, originOf func([]st
 	var out []App
 	for _, d := range defs {
 		ver := 0
-		if rpm {
-			d, ver = d.forRPM()
+		if fam != famDeb {
+			d, ver = d.forFamily(fam)
 		}
 		rows := map[string]App{}
 		for _, p := range names {
@@ -583,9 +691,18 @@ func Scan() *State {
 			})
 			return st
 		}
+		if b, err := os.ReadFile(apkDB); err == nil { // Alpine
+			info, origin := parseApkDB(string(b))
+			st.Apps = scanInfo(info, famApk, collectSystem(), func([]string) map[string]string { return origin })
+			return st
+		}
 		if out, ok := rpmQuery(); ok {
 			info, origin := parseRPM(out)
-			st.Apps = scanInfo(info, true, collectSystem(), func([]string) map[string]string { return origin })
+			fam := famEL
+			if suseID(osID()) {
+				fam = famSUSE
+			}
+			st.Apps = scanInfo(info, fam, collectSystem(), func([]string) map[string]string { return origin })
 			return st
 		}
 		st.Apps = scan(strings.NewReader(""), nil, nil)

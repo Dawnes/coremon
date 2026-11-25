@@ -30,6 +30,10 @@ type updatesSummary struct {
 	Security       int   `json:"security"`
 	RebootRequired bool  `json:"reboot_required"`
 	CheckedAt      int64 `json:"checked_at"`
+	// SecurityFromCVE: Security counts the waiting updates that fix a known
+	// CVE (apk, Tumbleweed: the package manager marks none).
+	SecurityFromCVE bool `json:"security_from_cve,omitempty"`
+	NoSources       bool `json:"no_sources,omitempty"`
 }
 
 type agentView struct {
@@ -120,6 +124,12 @@ func (s *Server) view(a *Agent, full bool) agentView {
 		v.State, v.StateAt = a.State, a.StateAt
 	}
 	v.Vulns = s.vulnsFor(a, full)
+	if v.Updates != nil && v.Updates.SecurityFromCVE {
+		v.Updates.Security = 0
+		if v.Vulns != nil {
+			v.Updates.Security = min(v.Vulns.fixPkgs, v.Updates.Total)
+		}
+	}
 	if full {
 		v.Probe = s.agentProbe(a, own)
 		v.CheckAddrs = agentAddresses(a)

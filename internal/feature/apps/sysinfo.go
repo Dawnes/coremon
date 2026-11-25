@@ -37,6 +37,34 @@ func parseUnitFiles(out string, into map[string]bool) {
 
 var bootStates = map[string]bool{"enabled": true, "enabled-runtime": true, "alias": true, "indirect": true, "generated": true}
 
+// OpenRC (Alpine): a service "sshd" is kept as "sshd.service", so the same
+// unit patterns fit.
+
+// parseRCStatus reads "rc-status --servicelist": " sshd   [  started  ]".
+func parseRCStatus(out string, into map[string]bool) {
+	for _, line := range strings.Split(out, "\n") {
+		name, rest, ok := strings.Cut(strings.TrimSpace(line), " ")
+		if !ok || name == "" || !strings.Contains(rest, "[") {
+			continue
+		}
+		into[name+".service"] = strings.Contains(rest, "started")
+	}
+}
+
+// parseRCUpdate reads "rc-update show -v": " sshd | boot default"; a
+// service without a runlevel does not start at boot.
+func parseRCUpdate(out string) map[string]bool {
+	m := map[string]bool{}
+	for _, line := range strings.Split(out, "\n") {
+		name, levels, ok := strings.Cut(line, "|")
+		if name = strings.TrimSpace(name); !ok || name == "" {
+			continue
+		}
+		m[name+".service"] = strings.TrimSpace(levels) != ""
+	}
+	return m
+}
+
 func parseIsEnabled(units []string, out string) map[string]bool {
 	lines := strings.Split(strings.TrimSpace(out), "\n")
 	m := map[string]bool{}
@@ -116,6 +144,9 @@ func cgroupUnit(content string) string {
 		for i := len(elems) - 1; i >= 0; i-- {
 			if strings.HasSuffix(elems[i], ".service") {
 				return elems[i]
+			}
+			if n, ok := strings.CutPrefix(elems[i], "openrc."); ok && n != "" { // OpenRC: openrc.<service>
+				return n + ".service"
 			}
 		}
 	}

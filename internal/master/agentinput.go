@@ -37,7 +37,9 @@ func checkState(feature string, raw json.RawMessage) (json.RawMessage, error) {
 	if len(s.Packages) > maxStatePkgs || len(s.Removals) > maxStatePkgs || len(s.RebootPkgs) > maxStatePkgs {
 		return nil, fmt.Errorf("result lists more than %d packages", maxStatePkgs)
 	}
-	if s.Backend != "apt" && s.Backend != "dnf" {
+	switch s.Backend {
+	case "apt", "dnf", "zypper", "apk":
+	default:
 		s.Backend = ""
 	}
 	s.CheckedAt, s.RefreshedAt = notFuture(s.CheckedAt), notFuture(s.RefreshedAt)

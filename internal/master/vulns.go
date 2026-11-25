@@ -3,6 +3,7 @@ package master
 // Known vulnerabilities (CVEs) of the tracked applications: OSV.dev, NVD, CISA KEV and EPSS.
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -237,21 +238,56 @@ func osvEcosystem(f proto.Facts) string {
 			return ""
 		}
 		return map[string]string{"rocky": "Rocky Linux:", "almalinux": "AlmaLinux:"}[f.OSID] + v
+	case "alpine":
+		if v := releaseOf(f.OSVersion, 2); suseVerRe.MatchString(v) {
+			return "Alpine:v" + v
+		}
+	case "opensuse-leap":
+		if suseVerRe.MatchString(f.OSVersion) {
+			return "openSUSE:Leap " + f.OSVersion
+		}
+	case "opensuse-tumbleweed":
+		return "openSUSE:Tumbleweed"
+	case "sles":
+		// SLES 15 is split per module in SUSE's data (Basesystem, Server
+		// Applications, …), not per device: not yet. SLES 16 is one product.
+		if suseVerRe.MatchString(f.OSVersion) && !strings.HasPrefix(f.OSVersion, "15") {
+			return "SUSE:Linux Enterprise Server " + f.OSVersion
+		}
 	}
-	return "" // RHEL: no CVE data yet
+	return "" // RHEL, SLES 15: no CVE data yet
 }
+
+var suseVerRe = regexp.MustCompile(`^\d{1,2}\.\d{1,2}$`)
 
 // rpmEco: an ecosystem with RPM versions and per-advisory records.
 func rpmEco(eco string) bool {
-	return strings.HasPrefix(eco, "Rocky Linux:") || strings.HasPrefix(eco, "AlmaLinux:")
+	for _, p := range []string{"Rocky Linux:", "AlmaLinux:", "openSUSE:", "SUSE:"} {
+		if strings.HasPrefix(eco, p) {
+			return true
+		}
+	}
+	return false
 }
 
 // verCmp: the version comparison of the ecosystem.
 func verCmp(eco string) func(a, b string) int {
-	if rpmEco(eco) {
+	switch {
+	case rpmEco(eco):
 		return updates.RPMVerCmp
+	case strings.HasPrefix(eco, "Alpine:"):
+		return updates.ApkVerCmp
 	}
 	return debVerCmp
+}
+
+// probePkg: a source package every release of the ecosystem has, to see
+// whether OSV.dev has data for it (SUSE's OpenSSL is "openssl-3").
+func probePkg(eco string) string {
+	if strings.HasPrefix(eco, "openSUSE:") || strings.HasPrefix(eco, "SUSE:") {
+		return "openssh"
+	}
+	return "openssl"
 }
 
 func fromDistro(osID, origin string) bool {
@@ -266,6 +302,14 @@ func fromDistro(osID, origin string) bool {
 		return origin == "AlmaLinux"
 	case "rhel":
 		return origin == "Red Hat"
+	case "sles":
+		return origin == "SUSE"
+	case "opensuse-leap": // Leap is built from SLE's packages too
+		return origin == "SUSE" || origin == "openSUSE"
+	case "opensuse-tumbleweed":
+		return origin == "openSUSE"
+	case "alpine":
+		return origin == "Alpine"
 	}
 	return false
 }
@@ -273,7 +317,17 @@ func fromDistro(osID, origin string) bool {
 // osvWanted: an OSV result we use: a record about one CVE (Debian, Ubuntu)
 // or a Rocky Linux / AlmaLinux advisory (several CVEs).
 func osvWanted(id string) bool {
-	return osvIDRe.MatchString(id) && (strings.Contains(id, "CVE-") || strings.HasPrefix(id, "RLSA-") || strings.HasPrefix(id, "ALSA-"))
+	return osvIDRe.MatchString(id) && (strings.Contains(id, "CVE-") || advisoryID(id))
+}
+
+// advisoryID: a record about an advisory (several CVEs) rather than one CVE.
+func advisoryID(id string) bool {
+	for _, p := range []string{"RLSA-", "ALSA-", "SUSE-SU-", "openSUSE-SU-"} {
+		if strings.HasPrefix(id, p) {
+			return true
+		}
+	}
+	return false
 }
 
 func vulnKey(eco, pkg, ver string) string { return eco + "|" + pkg + "|" + ver }
@@ -424,7 +478,7 @@ func (s *Server) runVulnCheck(keys map[string]bool, full bool) (err error) {
 	if len(probe) > 0 {
 		qs := make([]osvQuery, len(probe))
 		for i, e := range probe {
-			qs[i] = osvQuery{Eco: e, Pkg: "openssl", Ver: "0.1"}
+			qs[i] = osvQuery{Eco: e, Pkg: probePkg(e), Ver: "0.1"}
 		}
 		res, err := s.osvQueryBatch(ctx, qs)
 		if err != nil {
@@ -702,7 +756,7 @@ type osvRecord struct {
 const maxAdvisoryCVEs = 200
 
 func reduceRecord(r osvRecord) (*vulnRec, bool) {
-	advisory := strings.HasPrefix(r.ID, "RLSA-") || strings.HasPrefix(r.ID, "ALSA-")
+	advisory := advisoryID(r.ID)
 	cve := ""
 	var more []string
 	if i := strings.Index(r.ID, "CVE-"); i >= 0 && cveRe.MatchString(r.ID[i:]) {
@@ -748,7 +802,7 @@ func reduceRecord(r osvRecord) (*vulnRec, bool) {
 	}
 	for _, a := range r.Affected {
 		e := a.Package.Ecosystem
-		if !(strings.HasPrefix(e, "Debian:") || strings.HasPrefix(e, "Ubuntu:") || rpmEco(e)) || strings.HasPrefix(e, "Ubuntu:Pro:") {
+		if !(strings.HasPrefix(e, "Debian:") || strings.HasPrefix(e, "Ubuntu:") || strings.HasPrefix(e, "Alpine:") || rpmEco(e)) || strings.HasPrefix(e, "Ubuntu:Pro:") {
 			continue
 		}
 		af := vulnAff{Eco: e, Pkg: a.Package.Name}
@@ -1073,6 +1127,9 @@ type vulnView struct {
 	CheckedAt   int64                `json:"checked_at,omitempty"`
 	Apps        map[string]*appVulns `json:"apps,omitempty"`
 	UpdateFixes map[string][]string  `json:"update_fixes,omitempty"`
+	// fixPkgs: how many waiting updates fix a known CVE (the security
+	// count where the package manager marks none).
+	fixPkgs int
 }
 
 func (s *Server) vulnsFor(a *Agent, full bool) *vulnView {
@@ -1084,13 +1141,15 @@ func (s *Server) vulnsFor(a *Agent, full bool) *vulnView {
 	if eco == "" {
 		return nil
 	}
+	// The waiting updates: for the device page, and always when the package
+	// manager does not mark security updates (the fixes count instead).
 	var upd map[string]string
-	if full {
-		if raw, ok := a.State["updates"]; ok {
-			var u updates.Snapshot
-			if json.Unmarshal(raw, &u) == nil {
-				upd = map[string]string{}
-				for _, p := range u.Packages {
+	if raw, ok := a.State["updates"]; ok && (full || bytes.Contains(raw, []byte(`"security_from_cve":true`))) {
+		var u updates.Snapshot
+		if json.Unmarshal(raw, &u) == nil {
+			upd = map[string]string{}
+			for _, p := range u.Packages {
+				if !p.New {
 					upd[p.Name] = p.Available
 				}
 			}
@@ -1105,6 +1164,7 @@ func (s *Server) vulnsFor(a *Agent, full bool) *vulnView {
 		return v
 	}
 	red := map[string]bool{}
+	fixing := map[string]bool{} // waiting updates that fix a counted CVE
 	anyPending := false
 	for _, ap := range st.Apps {
 		if !ap.Installed {
@@ -1182,13 +1242,16 @@ func (s *Server) vulnsFor(a *Agent, full bool) *vulnView {
 			}
 			return x.ID > y.ID
 		})
-		if full && upd != nil {
+		if upd != nil {
 			for _, c := range av.CVEs {
 				if c.ByUpdate {
 					if v.UpdateFixes == nil {
 						v.UpdateFixes = map[string][]string{}
 					}
 					v.UpdateFixes[ap.Package] = append(v.UpdateFixes[ap.Package], c.ID)
+					if c.Accepted == nil {
+						fixing[ap.Package] = true
+					}
 				}
 			}
 		}
@@ -1200,8 +1263,9 @@ func (s *Server) vulnsFor(a *Agent, full bool) *vulnView {
 	if anyPending && v.CheckedAt == 0 {
 		v.Status = "pending"
 	}
+	v.fixPkgs = len(fixing)
 	if !full {
-		v.Apps = nil
+		v.Apps, v.UpdateFixes = nil, nil
 	}
 	return v
 }

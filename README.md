@@ -1,8 +1,9 @@
 # Coremon
 
 Self-hosted update monitoring for a fleet of Linux devices (Debian and Ubuntu
-with apt; Rocky Linux, AlmaLinux and RHEL with dnf): VMs, LXC containers or
-bare metal. A web dashboard shows which devices have
+with apt; Rocky Linux, AlmaLinux and RHEL with dnf; SLES and openSUSE with
+zypper; Alpine with apk): VMs, LXC containers or bare metal, with systemd or
+OpenRC. A web dashboard shows which devices have
 updates, security updates, pending reboots and known vulnerabilities in their
 applications. You choose what to install and when; nothing is ever upgraded
 automatically.
@@ -27,11 +28,17 @@ as **agentless** devices: the master itself pings them and checks their services
 * **OS support**: a service on every agent device, down once its OS release no
   longer gets security support (or a set number of days before). Decided by the
   master from the support dates; it cannot be removed, but pausing it mutes it.
-  For RHEL the end of normal maintenance counts, not the paid extended support.
+  For RHEL and SLES the end of normal support counts, not the paid extended
+  support; openSUSE Tumbleweed is rolling and has no end date.
 * **Updates**: check, install selected packages or upgrade all, with live output,
-  with apt or dnf. With dnf an update is a security update when a security
-  advisory lists it; "reboot required" comes from `dnf needs-restarting` and a
-  newer installed kernel. The System tab shows the package manager.
+  with apt, dnf, zypper or apk. With dnf an update is a security update when a
+  security advisory lists it; "reboot required" comes from
+  `dnf needs-restarting` and a newer installed kernel. With zypper: when a
+  waiting security patch installs it; "Upgrade all" is `zypper update`, on
+  Tumbleweed `zypper dup`; a warning shows when no package sources are enabled
+  (such as an unregistered SLES). apk and Tumbleweed mark no security updates:
+  an update counts as one when it fixes a known CVE of a tracked application on
+  that device. The System tab shows the package manager.
 * **Applications**: 43 common applications (Apache, ClamAV, Docker, Dovecot,
   HAProxy, MariaDB, Nginx, OpenSSL, PostgreSQL, Proxmox VE, Proxmox Backup
   Server, the SSH server and more) with version, status and ports,
@@ -39,9 +46,10 @@ as **agentless** devices: the master itself pings them and checks their services
 * **Vulnerabilities**: known CVEs of those applications, with severity, fixes
   and actively exploited ones highlighted. Proxmox VE and Proxmox Backup Server
   are checked against NVD, the others against the distribution's own data
-  (Debian, Ubuntu, Rocky Linux and AlmaLinux; not yet RHEL). Rocky Linux and
-  AlmaLinux rate a whole advisory (Critical, Important, Moderate, Low); none of
-  those counts as minor. A CVE the distribution rates minor never counts as serious, even when it is
+  (Debian, Ubuntu, Rocky Linux, AlmaLinux, openSUSE Leap and Tumbleweed, SLES
+  16 and Alpine; not yet RHEL and SLES 15, whose data is split per module).
+  Rocky Linux and AlmaLinux rate a whole advisory (Critical, Important,
+  Moderate, Low); none of those counts as minor. A CVE the distribution rates minor never counts as serious, even when it is
   actively exploited. An admin can accept a CVE for all devices, with a note:
   it stays listed but no longer counts, until the acceptance is undone or no
   device has the CVE any more.
@@ -134,7 +142,8 @@ the master and keeps its data.
 The master needs outbound HTTPS to GitHub (releases), Debian and
 endoflife.date (support dates) and OSV.dev, NVD, CISA and FIRST
 (vulnerability data). The master itself runs on Debian or Ubuntu; agents also
-run on Rocky Linux, AlmaLinux and RHEL.
+run on Rocky Linux, AlmaLinux, RHEL, SLES, openSUSE and Alpine (with OpenRC:
+the agent then runs under supervise-daemon).
 
 ## Add a device
 

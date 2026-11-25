@@ -35,8 +35,15 @@ while [ $# -gt 0 ]; do
 done
 
 [ "$(id -u)" = "0" ] || die "must run as root"
-command -v systemctl >/dev/null 2>&1 || die "systemd is required"
-command -v curl >/dev/null 2>&1 || die "curl is required (apt-get install -y curl, or dnf install -y curl)"
+# The service manager: systemd, or OpenRC (Alpine).
+if [ -d /run/systemd/system ] && command -v systemctl >/dev/null 2>&1; then
+  INIT=systemd
+elif command -v openrc-run >/dev/null 2>&1 && command -v rc-update >/dev/null 2>&1; then
+  INIT=openrc
+else
+  die "systemd or OpenRC is required"
+fi
+command -v curl >/dev/null 2>&1 || die "curl is required (apt-get install -y curl, dnf install -y curl, zypper install -y curl or apk add curl)"
 command -v sha256sum >/dev/null 2>&1 || die "sha256sum is required"
 
 ENROLLED=0
@@ -72,6 +79,7 @@ cat > /etc/coremon/agent.json <<EOF
 }
 EOF
 
+if [ "$INIT" = systemd ]; then
 cat > /etc/systemd/system/coremon-agent.service <<'EOF'
 [Unit]
 Description=coremon agent
@@ -90,6 +98,29 @@ EOF
 systemctl daemon-reload
 systemctl enable coremon-agent.service >/dev/null 2>&1
 systemctl restart coremon-agent.service
+else
+# OpenRC: supervise-daemon starts the agent again when it exits (after a
+# self-update, like systemd's Restart=).
+umask 022
+cat > /etc/init.d/coremon-agent <<'EOF'
+#!/sbin/openrc-run
+name="coremon agent"
+command="/usr/local/bin/coremon-agent"
+supervisor="supervise-daemon"
+respawn_delay=5
+respawn_max=0
+output_log="/var/log/coremon-agent.log"
+error_log="/var/log/coremon-agent.log"
+
+depend() {
+	need net
+	after firewall
+}
+EOF
+chmod 755 /etc/init.d/coremon-agent
+rc-update add coremon-agent default >/dev/null 2>&1
+rc-service coremon-agent restart >/dev/null 2>&1 || rc-service coremon-agent start
+fi
 echo "coremon: agent installed and started."
 if [ "$ENROLLED" = 0 ]; then
   echo "coremon: approve this device in the master UI (Dashboard > Devices): $MASTER"
@@ -162,6 +193,7 @@ func (s *Server) handleInstallScript(w http.ResponseWriter, r *http.Request) {
 func (s *Server) installCommand(r *http.Request, token string) string {
 	base := s.baseURL(r)
 	sum := sha256.Sum256(s.renderInstall(base))
-	return fmt.Sprintf(`T=$(mktemp) && curl -fsSLk %s/install.sh -o "$T" && echo "%s  $T" | sha256sum -c --quiet && sh "$T" --token %s; rm -f "$T"`,
+	// sha256sum -c >/dev/null: also BusyBox's (Alpine), which has no --quiet.
+	return fmt.Sprintf(`T=$(mktemp) && curl -fsSLk %s/install.sh -o "$T" && echo "%s  $T" | sha256sum -c >/dev/null && sh "$T" --token %s; rm -f "$T"`,
 		base, hex.EncodeToString(sum[:]), token)
 }

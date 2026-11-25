@@ -155,6 +155,8 @@ func TestOSInfoLookup(t *testing.T) {
 			w.Write([]byte(testRockyJSON))
 		case r.URL.Path == "/eol/rhel.json":
 			w.Write([]byte(testRHELJSON))
+		case strings.HasPrefix(r.URL.Path, "/eol/"): // sles, opensuse, alpine-linux
+			w.Write([]byte(`[{"cycle":"16.0","releaseDate":"2025-11-04","eol":"2027-11-30"},{"cycle":"3.22","releaseDate":"2025-05-30","eol":"2027-05-01"}]`))
 		default:
 			http.NotFound(w, r)
 		}

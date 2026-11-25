@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"coremon/internal/feature/apps"
 	"coremon/internal/proto"
 )
 
@@ -57,6 +58,13 @@ func readGz(path string) string {
 
 func collectHealth() *proto.Health {
 	h := &proto.Health{FailedCount: -1}
+	if apps.OpenRC() {
+		// OpenRC: the services whose daemon died ("crashed").
+		if out, err := run("rc-status", "--crashed"); err == nil {
+			h.FailedCount, h.Failed = parseFailedUnits(out) // one name per line
+		}
+		return h // no automatic-updates tool, no upgrade history
+	}
 	if out, err := run("systemctl", "list-units", "--state=failed", "--plain", "--no-legend", "--no-pager"); err == nil {
 		h.FailedCount, h.Failed = parseFailedUnits(out)
 	}

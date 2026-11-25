@@ -67,6 +67,10 @@ func vendorOrigin(v string) string {
 		return "Red Hat"
 	case strings.Contains(v, "Fedora Project"):
 		return "EPEL"
+	case strings.HasPrefix(v, "openSUSE"):
+		return "openSUSE"
+	case strings.HasPrefix(v, "SUSE"):
+		return "SUSE"
 	}
 	if len(v) > 64 {
 		v = v[:64]

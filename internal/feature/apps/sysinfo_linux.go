@@ -37,10 +37,24 @@ func rpmQuery() (string, bool) {
 	return run("rpm", "-qa", "--qf", rpmFormat), true
 }
 
+// OpenRC: the system runs OpenRC instead of systemd (Alpine).
+func OpenRC() bool {
+	if _, err := os.Stat("/run/systemd/system"); err == nil {
+		return false
+	}
+	_, err := exec.LookPath("rc-status")
+	return err == nil
+}
+
 func collectSystem() *System {
 	sys := &System{Active: map[string]bool{}, Enabled: map[string]bool{}, Ports: map[string][]Port{}}
-	parseListUnits(run("systemctl", "list-units", "--all", "--plain", "--no-legend", "--no-pager", "--type=service,socket"), sys.Active)
-	parseUnitFiles(run("systemctl", "list-unit-files", "--plain", "--no-legend", "--no-pager", "--type=service,socket"), sys.Active)
+	openrc := OpenRC()
+	if openrc {
+		parseRCStatus(run("rc-status", "--servicelist", "--nocolor"), sys.Active)
+	} else {
+		parseListUnits(run("systemctl", "list-units", "--all", "--plain", "--no-legend", "--no-pager", "--type=service,socket"), sys.Active)
+		parseUnitFiles(run("systemctl", "list-unit-files", "--plain", "--no-legend", "--no-pager", "--type=service,socket"), sys.Active)
+	}
 
 	var units []string
 	for u := range sys.Active {
@@ -59,7 +73,11 @@ func collectSystem() *System {
 	if len(units) == 0 {
 		return sys
 	}
-	sys.Enabled = parseIsEnabled(units, run("systemctl", append([]string{"is-enabled"}, units...)...))
+	if openrc {
+		sys.Enabled = parseRCUpdate(run("rc-update", "show", "-v"))
+	} else {
+		sys.Enabled = parseIsEnabled(units, run("systemctl", append([]string{"is-enabled"}, units...)...))
+	}
 
 	byInode := map[string]sock{}
 	for _, f := range []struct{ file, proto string }{{"tcp", "tcp"}, {"tcp6", "tcp"}, {"udp", "udp"}, {"udp6", "udp"}} {

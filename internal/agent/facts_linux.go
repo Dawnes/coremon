@@ -78,7 +78,40 @@ func detectVirt() string {
 		if s := strings.TrimSpace(string(out)); s != "" {
 			v = s
 		}
+	} else { // no systemd (Alpine): the usual signs
+		read := func(p string) string { b, _ := os.ReadFile(p); return string(b) }
+		v = guessVirt(read("/proc/1/environ"), read("/sys/class/dmi/id/sys_vendor"), read("/sys/class/dmi/id/product_name"), read("/proc/cpuinfo"))
 	}
 	virtCache = v
 	return v
+}
+
+// guessVirt: what systemd-detect-virt would say, from PID 1's environment
+// (containers), the DMI vendor and the CPU's hypervisor flag.
+func guessVirt(environ, vendor, product, cpuinfo string) string {
+	for _, kv := range strings.Split(environ, "\x00") {
+		if c, ok := strings.CutPrefix(kv, "container="); ok && strings.TrimSpace(c) != "" {
+			return strings.TrimSpace(c)
+		}
+	}
+	dmi := strings.ToLower(vendor + " " + product)
+	switch {
+	case strings.Contains(dmi, "qemu"), strings.Contains(dmi, "kvm"):
+		return "kvm"
+	case strings.Contains(dmi, "vmware"):
+		return "vmware"
+	case strings.Contains(dmi, "virtualbox"), strings.Contains(dmi, "innotek"):
+		return "oracle"
+	case strings.Contains(dmi, "microsoft"):
+		return "microsoft"
+	case strings.Contains(dmi, "xen"):
+		return "xen"
+	}
+	if strings.Contains(cpuinfo, " hypervisor") {
+		return "vm-other"
+	}
+	if vendor != "" {
+		return "none"
+	}
+	return "unknown"
 }

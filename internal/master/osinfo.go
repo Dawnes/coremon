@@ -1,8 +1,9 @@
 package master
 
 // End-of-support dates of Debian and Ubuntu releases (distro-info-data),
-// and of Rocky Linux, AlmaLinux and RHEL (endoflife.date). For RHEL the end
-// of normal maintenance counts, not the paid extended support.
+// and of Rocky Linux, AlmaLinux, RHEL, SLES, openSUSE Leap and Alpine
+// (endoflife.date). For RHEL and SLES the end of normal support counts, not
+// the paid extended support. openSUSE Tumbleweed is rolling: no end.
 
 import (
 	"encoding/csv"
@@ -47,10 +48,36 @@ type osInfoData struct {
 	EL map[string][]osRelease `json:"el,omitempty"`
 }
 
-// elProducts: os_id → endoflife.date product.
-var elProducts = map[string]string{"rocky": "rocky-linux", "almalinux": "almalinux", "rhel": "rhel"}
+// eolProduct: an OS whose dates come from endoflife.date. parts: how much
+// of VERSION_ID names the release ("10.3" → "10"; "15.6"; "3.20.3" →
+// "3.20"). full: it has a full-support phase before maintenance (EL).
+type eolProduct struct {
+	product string
+	parts   int
+	full    bool
+}
+
+// elProducts: os_id → endoflife.date product (the EL map of osInfoData
+// holds all of them, by os_id).
+var elProducts = map[string]eolProduct{
+	"rocky":         {"rocky-linux", 1, true},
+	"almalinux":     {"almalinux", 1, true},
+	"rhel":          {"rhel", 1, true},
+	"sles":          {"sles", 2, false},
+	"opensuse-leap": {"opensuse", 2, false},
+	"alpine":        {"alpine-linux", 2, false},
+}
 
 func isEL(osID string) bool { _, ok := elProducts[osID]; return ok }
+
+// releaseOf: the part of VERSION_ID that names the release.
+func releaseOf(version string, parts int) string {
+	p := strings.Split(version, ".")
+	if len(p) < parts {
+		return version
+	}
+	return strings.Join(p[:parts], ".")
+}
 
 type osInfoFile struct {
 	Data    *osInfoData `json:"data"`
@@ -188,7 +215,8 @@ func (s *Server) fetchOSInfo(oldEL map[string][]osRelease) (*osInfoData, error) 
 		return nil, fmt.Errorf("ubuntu.csv: %w", err)
 	}
 	var elErr error
-	for id, product := range elProducts {
+	for id, p := range elProducts {
+		product := p.product
 		b, err := s.osInfoGet(hc, s.eolBase()+"/"+product+".json", product)
 		var list []osRelease
 		if err == nil {
@@ -223,7 +251,7 @@ func (s *Server) osInfoGet(hc *http.Client, u, name string) ([]byte, error) {
 	return b, err
 }
 
-var elCycleRe = regexp.MustCompile(`^\d{1,2}$`)
+var elCycleRe = regexp.MustCompile(`^\d{1,2}(\.\d{1,2})?$`)
 
 // parseEOL: endoflife.date releases. "eol": end of maintenance (the end
 // that counts), "support": end of full support. A date or false (open).
@@ -384,14 +412,15 @@ func supportStatus(d *osInfoData, osID, version string, now time.Time) *osSuppor
 		list = d.Debian
 	case "ubuntu":
 		list = d.Ubuntu
+	case "opensuse-tumbleweed": // rolling: no end
+		return &osSupport{Status: "supported", Phase: "open"}
 	default:
-		if !isEL(osID) {
+		p, ok := elProducts[osID]
+		if !ok {
 			return nil
 		}
 		list = d.EL[osID]
-		if i := strings.IndexByte(version, '.'); i >= 0 { // "10.3": release 10
-			version = version[:i]
-		}
+		version = releaseOf(version, p.parts)
 	}
 	var rel *osRelease
 	for i := range list {
@@ -411,8 +440,10 @@ func supportStatus(d *osInfoData, osID, version string, now time.Time) *osSuppor
 			o.Phase = "open"
 		case rel.Full != "" && now.Before(day(rel.Full)):
 			o.Phase, o.Until, o.MaintUntil = "full", rel.Full, rel.EOL
-		case now.Before(day(o.End)):
+		case now.Before(day(o.End)) && elProducts[osID].full:
 			o.Phase, o.Until = "maintenance", o.End
+		case now.Before(day(o.End)):
+			o.Phase, o.Until = "until", o.End // SUSE, Alpine: one support period
 		default:
 			o.Phase = "ended"
 		}

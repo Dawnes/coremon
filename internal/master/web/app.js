@@ -872,6 +872,7 @@ function osSupportText(o, osID) {
     case 'standard': return `standard support until ${ymd(o.until)}${esm}`;
     case 'full': return `full support until ${ymd(o.until)}, then maintenance until ${ymd(o.maint_until)}`;
     case 'maintenance': return `maintenance support until ${ymd(o.until)}`;
+    case 'until': return `supported until ${ymd(o.until)}`;
     case 'ended': return osID === 'ubuntu' ? `standard support ended ${ymd(o.end)}${esm}` : `support ended ${ymd(o.end)}`;
     default: return 'supported, no end date yet';
   }
@@ -879,7 +880,14 @@ function osSupportText(o, osID) {
 // Rocky Linux, AlmaLinux, RHEL: dnf instead of apt.
 const isEL = (f) => ['rocky', 'almalinux', 'rhel'].includes(f?.os_id);
 const autoTool = (f) => (isEL(f) ? 'dnf-automatic' : 'unattended-upgrades');
-const distName = (f) => ({ ubuntu: 'Ubuntu', rocky: 'Rocky Linux', almalinux: 'AlmaLinux', rhel: 'Red Hat' })[f?.os_id] || 'Debian';
+const distName = (f) => ({ ubuntu: 'Ubuntu', rocky: 'Rocky Linux', almalinux: 'AlmaLinux', rhel: 'Red Hat', sles: 'SUSE', 'opensuse-leap': 'openSUSE', 'opensuse-tumbleweed': 'openSUSE', alpine: 'Alpine' })[f?.os_id] || 'Debian';
+const PKG_MGR = { apt: 'apt (Debian, Ubuntu)', dnf: 'dnf (Rocky Linux, AlmaLinux, RHEL)', zypper: 'zypper (SUSE, openSUSE)', apk: 'apk (Alpine)' };
+// No CVE lookup for this OS yet (a note on the Applications tab).
+function noCVEsNote(f) {
+  if (f.os_id === 'rhel') return 'CVEs are not looked up for RHEL yet.';
+  if (f.os_id === 'sles' && /^15/.test(f.os_version || '')) return "CVEs are not looked up for SLES 15 yet: SUSE's data for it is split per module, not per system.";
+  return '';
+}
 function upgradedBy(by) {
   if (by === 'coremon') return 'Coremon';
   if (by === 'automatic') return 'automatic updates';
@@ -957,7 +965,7 @@ function openCves(appName, v, reload) {
           : html`<button class="btn ghost sm" data-act="accept" data-id="${c.id}" title="Accept it for all devices: it stays listed but no longer counts">Accept</button>`}</td>`)}</tr>`)}</tbody></table></div>
     <div class="dim small" style="margin-top:12px">Severity: the CVSS score from OSV or NVD, otherwise the distribution's own rating. Dimmed: the distribution considers it minor, or it is accepted. Neither counts as serious.
       ${/^Proxmox/.test(appName) ? 'Data: NVD (the CVEs listed for the product and the versions they affect), CISA (actively exploited), FIRST (EPSS). The CVE numbers link to NVD.'
-        : 'Data: OSV.dev (the distribution\'s own advisories: Debian, Ubuntu, Rocky Linux, AlmaLinux), NVD, CISA (actively exploited), FIRST (EPSS). The CVE numbers link to OSV.dev.'}</div>
+        : 'Data: OSV.dev (the distribution\'s own advisories: Debian, Ubuntu, Rocky Linux, AlmaLinux, SUSE, Alpine), NVD, CISA (actively exploited), FIRST (EPSS). The CVE numbers link to OSV.dev.'}</div>
     <div class="actions"><button class="btn" data-act="cancel">Close</button></div>`, {
     wide: true,
     acts: {
@@ -2060,6 +2068,9 @@ async function maintEnd(a, done) {
 function AgentPage([id, tab]) {
   const st = { tab: ['updates', 'jobs', 'system', 'apps', 'services', 'proxmox'].includes(tab) ? tab : 'system', sel: new Set(), data: null, appsAll: false, pinging: false, checking: new Set() };
   const upd = () => st.data?.agent?.state?.updates || null;
+  // A security update: as the package manager marks it, or (apk, Tumbleweed)
+  // when it fixes a known CVE of the device.
+  const secPkg = (s, p) => (s?.security_from_cve ? !!st.data?.agent?.vulns?.update_fixes?.[p.name]?.length : p.security);
   function header(a, groups) {
     const f = a.facts, cdown = agentChecksDown(a);
     const g = groups.find((x) => x.id === a.group_id);
@@ -2113,6 +2124,8 @@ function AgentPage([id, tab]) {
         ${ed ? html`<div style="margin-top:14px"><button class="btn" data-act="check" ${canAct ? '' : 'disabled'}>${icon('refresh')} Check now</button></div>` : ''}`}</div>`;
     }
     const pk = s.packages || [];
+    const isSec = (p) => secPkg(s, p);
+    const nSec = s.security_from_cve ? pk.filter((p) => !p.new && isSec(p)).length : s.security;
     const selectable = pk.filter((p) => !p.new);
     for (const n of [...st.sel]) if (!selectable.some((p) => p.name === n)) st.sel.delete(n);
     const nsel = st.sel.size;
@@ -2121,7 +2134,7 @@ function AgentPage([id, tab]) {
       <div class="panel panel-pad" style="margin-bottom:16px">
         <div class="row">
           ${s.total ? html`<span class="badge upd">${s.total} update${s.total > 1 ? 's' : ''}</span>` : html`<span class="badge ok">${icon('check')} up to date</span>`}
-          ${s.security ? html`<span class="badge sec">${s.security} security</span>` : ''}
+          ${nSec ? html`<span class="badge sec" title="${s.security_from_cve ? `${distName(a.facts)} does not mark security updates: these fix a known CVE of a tracked application` : ''}">${nSec} security</span>` : ''}
           ${s.reboot_required ? html`<span class="badge reboot" title="${(s.reboot_pkgs || []).join(', ')}">reboot required${s.reboot_pkgs?.length ? ': ' + s.reboot_pkgs.slice(0, 3).join(', ') : ''}</span>` : ''}
           <span class="muted small">${when(s.checked_at, 'checked ')} · ${when(s.refreshed_at, 'package lists refreshed ')} · ${s.backend}</span>
           <span class="spacer"></span>
@@ -2130,6 +2143,7 @@ function AgentPage([id, tab]) {
           <button class="btn warn sm" data-act="upgrade-all" ${canAct && s.total ? '' : 'disabled'}>${icon('zap')} Upgrade all</button>` : ''}
         </div>
       </div>
+      ${s.no_sources ? html`<div class="notice red">No package sources are enabled, so no updates can be found: "up to date" means nothing here.${a.facts.os_id === 'sles' ? ' Register the system (SUSEConnect) to get updates.' : ''}</div>` : ''}
       ${s.removals?.length ? html`<div class="notice red">“Upgrade all” would remove: <b>${s.removals.join(', ')}</b></div>` : ''}
       ${a.status === 'report_only' ? html`<div class="notice blue">Report only: this list is from the last check before the device was set to report only, ${when(s.checked_at)}.</div>` : ''}
       ${pk.length ? html`
@@ -2148,7 +2162,7 @@ function AgentPage([id, tab]) {
               <td><b>${p.name}</b> <span class="dim small">${p.arch}</span></td>
               <td class="mono">${p.current ? html`<span class="ver">${p.current}</span><span class="arrow">→</span>` : ''}<span class="ver new">${p.available}</span></td>
               <td class="muted small">${p.origin}</td>
-              <td class="w1"><div class="row" style="flex-wrap:nowrap;gap:6px">${p.security ? html`<span class="badge sec">security</span>` : ''}${p.new ? html`<span class="badge new" title="Pulled in as a dependency; installed together with its parent">new dependency</span>` : ''}${fixes(p.name)}</div></td>
+              <td class="w1"><div class="row" style="flex-wrap:nowrap;gap:6px">${isSec(p) ? html`<span class="badge sec">security</span>` : ''}${p.new ? html`<span class="badge new" title="Pulled in as a dependency; installed together with its parent">new dependency</span>` : ''}${fixes(p.name)}</div></td>
             </tr>`)}</tbody></table></div>
       </div>` : noUpdates(a)}`;
   }
@@ -2195,7 +2209,7 @@ function AgentPage([id, tab]) {
       ${vul?.status === 'unsupported' ? html`<div class="notice">${a.os_support?.status === 'expired'
         ? `${osLabel(a.facts)} is no longer supported: no security data and no fixes are published, so it can't be checked. Upgrade to a supported release.`
         : `OSV.dev has no vulnerability data for ${osLabel(a.facts)}, so the applications cannot be checked for CVEs.`}</div>`
-        : !vul && a.facts.os_id === 'rhel' ? html`<div class="notice">CVEs are not looked up for RHEL yet: only for Debian, Ubuntu, Rocky Linux and AlmaLinux.</div>` : ''}`;
+        : !vul && noCVEsNote(a.facts) ? html`<div class="notice">${noCVEsNote(a.facts)}</div>` : ''}`;
     const security = (x) => {
       const v = vul?.apps?.[x.name];
       if (!v || vul.status === 'unsupported') return html`<span class="dim">—</span>`;
@@ -2244,8 +2258,8 @@ function AgentPage([id, tab]) {
       ['Failed services', !h || h.failed_count < 0 ? '—' : h.failed_count === 0 ? 'none'
         : html`<span class="badge sec xs">${h.failed_count} failed</span> ${(h.failed || []).join(', ')}${h.failed_count > (h.failed || []).length ? ', …' : ''}`],
       ['Automatic updates', ({ on: html`<span class="badge info xs">on</span> ${autoTool(f)}`, off: 'off', not_installed: 'not installed' })[h?.auto_updates] || '—'],
-      ['Package manager', { apt: 'apt (Debian, Ubuntu)', dnf: 'dnf (Rocky Linux, AlmaLinux, RHEL)' }[upd()?.backend] || '—'],
-      ['Last upgrade', h?.last_upgrade ? `${fmtDate(h.last_upgrade.time)} (${ago(h.last_upgrade.time)}, ${h.last_upgrade.packages} package${h.last_upgrade.packages === 1 ? '' : 's'}) · by ${upgradedBy(h.last_upgrade.by)}` : h && !isEL(f) ? 'none recorded' : '—'],
+      ['Package manager', PKG_MGR[upd()?.backend] || '—'],
+      ['Last upgrade', h?.last_upgrade ? `${fmtDate(h.last_upgrade.time)} (${ago(h.last_upgrade.time)}, ${h.last_upgrade.packages} package${h.last_upgrade.packages === 1 ? '' : 's'}) · by ${upgradedBy(h.last_upgrade.by)}` : h && upd()?.backend === 'apt' ? 'none recorded' : '—'],
     ];
     return html`<div class="panel panel-pad" style="margin-bottom:16px"><div class="facts">${kv.map(([k, v]) => html`<div><div class="k">${k}</div><div class="v">${v ?? '—'}</div></div>`)}</div></div>${networkPanel(f)}${metricGraphs(a)}${agentPanel(a)}${probePanel(a)}`;
   }
@@ -2366,7 +2380,7 @@ function AgentPage([id, tab]) {
       'sel-pkg': (t) => { t.checked ? st.sel.add(t.dataset.name) : st.sel.delete(t.dataset.name); render(); },
       'sel-toggle-all': (t) => { const pk = (upd()?.packages || []).filter((p) => !p.new); st.sel = new Set(t.checked ? pk.map((p) => p.name) : []); render(); },
       'sel-all': () => { st.sel = new Set((upd()?.packages || []).filter((p) => !p.new).map((p) => p.name)); render(); },
-      'sel-sec': () => { st.sel = new Set((upd()?.packages || []).filter((p) => !p.new && p.security).map((p) => p.name)); render(); },
+      'sel-sec': () => { const s = upd(); st.sel = new Set((s?.packages || []).filter((p) => !p.new && secPkg(s, p)).map((p) => p.name)); render(); },
       'sel-none': () => { st.sel.clear(); render(); },
       approve: () => approveModal(a(), st.data.groups),
       'report-only': async () => {
@@ -3959,7 +3973,7 @@ function SettingsGeneral() {
   function osInfoBox(o) {
     if (!o) return;
     const hostOf = (u) => (u || '').replace(/^https?:\/\//, '').split('/')[0];
-    setHTML($('#osinfo-box'), html`<div class="dim small">End-of-support dates of Debian and Ubuntu from Debian's distro-info-data (${hostOf(o.source)}), of Rocky Linux, AlmaLinux and RHEL from ${hostOf(o.source_el)} (for RHEL the end of normal maintenance, not the paid extended support).
+    setHTML($('#osinfo-box'), html`<div class="dim small">End-of-support dates of Debian and Ubuntu from Debian's distro-info-data (${hostOf(o.source)}), of Rocky Linux, AlmaLinux, RHEL, SLES, openSUSE Leap and Alpine from ${hostOf(o.source_el)} (for RHEL and SLES the end of normal support, not the paid extended support). openSUSE Tumbleweed is a rolling release without an end date.
       ${o.fetched_at ? html`Last fetched ${fmtDate(o.fetched_at)}` : 'Not fetched yet'}${o.next_at ? html` · next check ${fmtDate(o.next_at)}` : ''}.
       ${ifChange(html`<button type="button" class="btn ghost sm" data-act="osinfo-check" ${st.osChecking ? 'disabled' : ''}>${icon('refresh')} Check now</button>`)}</div>
       ${o.error ? html`<div class="notice red small" style="margin:6px 0 0">Last lookup failed (${fmtDate(o.last_try)}): ${o.error}. Retrying every 6 hours; the previous dates stay in use.</div>` : ''}`);
@@ -3967,8 +3981,8 @@ function SettingsGeneral() {
   function vulnBox(v) {
     if (!v) return;
     const mins = Math.ceil((v.nvd_pending * (v.nvd_key_set ? 0.8 : 6.5)) / 60);
-    setHTML($('#vuln-box'), html`<div class="dim small">The installed versions of the tracked applications are looked up at OSV.dev, which uses the distributions' own security data (Debian, Ubuntu, Rocky Linux, AlmaLinux; not yet RHEL).
-      Sent: the OS release (e.g. Debian:12 or Rocky Linux:10) and source package names with their versions — no host names or addresses.
+    setHTML($('#vuln-box'), html`<div class="dim small">The installed versions of the tracked applications are looked up at OSV.dev, which uses the distributions' own security data (Debian, Ubuntu, Rocky Linux, AlmaLinux, openSUSE, SLES 16, Alpine; not yet RHEL and SLES 15).
+      Sent: the OS release (e.g. Debian:12 or Alpine:v3.22) and source package names with their versions — no host names or addresses.
       Severity comes from the OSV record, otherwise from NVD (only CVE numbers are sent there); CISA lists the actively exploited ones and FIRST (EPSS) the chance of exploitation.
       Proxmox VE and Proxmox Backup Server come from Proxmox's own package source: their CVEs come from NVD (only the product name is sent).</div>
       <div class="dim small" style="margin-top:6px">${v.last_run ? html`Last check ${fmtDate(v.last_run)}` : 'Not checked yet'}${v.next_at ? html` · next ${fmtDate(v.next_at)}` : ''} · ${v.cves} CVE${v.cves === 1 ? '' : 's'} known for ${v.systems} device${v.systems === 1 ? '' : 's'}${v.kev_count ? html` · CISA list: ${v.kev_count} exploited CVEs` : ''}.

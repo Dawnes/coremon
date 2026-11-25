@@ -8,7 +8,9 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"syscall"
 
+	"coremon/internal/feature/apps"
 	"coremon/internal/proto"
 )
 
@@ -42,10 +44,24 @@ func selfUpdate(ctx context.Context, cl *client, pub string, a *proto.Artifact, 
 	return os.Rename(tmp, exe)
 }
 
+const openrcPath = "/etc/init.d/coremon-agent"
+
 func uninstall(opt Options) error {
-	_ = exec.Command("systemctl", "disable", "coremon-agent.service").Run()
-	os.Remove(unitPath)
-	_ = exec.Command("systemctl", "daemon-reload").Run()
+	if apps.OpenRC() {
+		_ = exec.Command("rc-update", "del", "coremon-agent", "default").Run()
+		// supervise-daemon would start the agent again after it exits: a
+		// detached shell stops the service once the agent is gone, then
+		// removes it.
+		cmd := exec.Command("/bin/sh", "-c", "sleep 3; rc-service coremon-agent stop >/dev/null 2>&1; rm -f "+openrcPath)
+		cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
+		if cmd.Start() != nil {
+			os.Remove(openrcPath)
+		}
+	} else {
+		_ = exec.Command("systemctl", "disable", "coremon-agent.service").Run()
+		os.Remove(unitPath)
+		_ = exec.Command("systemctl", "daemon-reload").Run()
+	}
 	os.RemoveAll(opt.StateDir)
 	os.RemoveAll(filepath.Dir(opt.ConfigPath))
 	if exe, err := os.Executable(); err == nil {
