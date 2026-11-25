@@ -870,10 +870,16 @@ function osSupportText(o, osID) {
     case 'security': return `security support until ${ymd(o.until)}${o.lts_until ? `, then LTS until ${ymd(o.lts_until)}` : ''}`;
     case 'lts': return `LTS until ${ymd(o.until)}`;
     case 'standard': return `standard support until ${ymd(o.until)}${esm}`;
+    case 'full': return `full support until ${ymd(o.until)}, then maintenance until ${ymd(o.maint_until)}`;
+    case 'maintenance': return `maintenance support until ${ymd(o.until)}`;
     case 'ended': return osID === 'ubuntu' ? `standard support ended ${ymd(o.end)}${esm}` : `support ended ${ymd(o.end)}`;
     default: return 'supported, no end date yet';
   }
 }
+// Rocky Linux, AlmaLinux, RHEL: dnf instead of apt.
+const isEL = (f) => ['rocky', 'almalinux', 'rhel'].includes(f?.os_id);
+const autoTool = (f) => (isEL(f) ? 'dnf-automatic' : 'unattended-upgrades');
+const distName = (f) => ({ ubuntu: 'Ubuntu', rocky: 'Rocky Linux', almalinux: 'AlmaLinux', rhel: 'Red Hat' })[f?.os_id] || 'Debian';
 function upgradedBy(by) {
   if (by === 'coremon') return 'Coremon';
   if (by === 'automatic') return 'automatic updates';
@@ -885,7 +891,7 @@ function upgradedBy(by) {
 // and the OS support end are reasons of the state).
 function healthBadges(a) {
   const h = a.facts?.health, out = [];
-  if (h?.auto_updates === 'on') out.push(html`<span class="badge info xs" title="Automatic updates (unattended-upgrades) are on">auto</span>`);
+  if (h?.auto_updates === 'on') out.push(html`<span class="badge info xs" title="Automatic updates (${autoTool(a.facts)}) are on">auto</span>`);
   return out;
 }
 function ipLabel(f) {
@@ -925,23 +931,63 @@ function sevBadge(c) {
   const from = { osv: 'CVSS score from the OSV record', nvd: 'CVSS score from NVD', distro: "the distribution's own rating (no CVSS score yet)" }[c.src] || 'no rating yet';
   return html`<span class="badge ${cls} xs" title="${from}">${SEV[c.level] || 'unknown'}${c.scored ? ' ' + c.score.toFixed(1) : ''}</span>`;
 }
-function openCves(appName, v) {
+// reload: fetches the device again and returns this application's
+// vulnerabilities, after accepting or undoing.
+function openCves(appName, v, reload) {
   const pct = (x) => (x >= 0.1 ? Math.round(x * 100) + '%' : x >= 0.001 ? (x * 100).toFixed(1) + '%' : '<0.1%');
-  const sum = [v.fixable ? `${v.fixable} fixed by an update` : '', v.open ? `${v.open} without a fix yet` : '', v.minor ? `${v.minor} minor` : '']
+  const sum = [v.fixable ? `${v.fixable} fixed by an update` : '', v.open ? `${v.open} without a fix yet` : '', v.minor ? `${v.minor} minor` : '', v.accepted ? `${v.accepted} accepted` : '']
     .filter(Boolean).join(' · ');
+  const again = async () => {
+    const nv = await reload();
+    if (nv?.cves?.length) openCves(appName, nv, reload); else closeAllModals();
+  };
+  const accTip = (x) => `Accepted by ${x.by} ${ago(x.at)}${x.note ? ': ' + x.note : ''}. It does not count for this or any other device.`;
   openModal(html`<h3>${appName}: known vulnerabilities</h3>
     <div class="muted small">${sum}${v.kev ? html` · <b class="c-red">${v.kev} actively exploited</b>` : ''}</div>
     <div class="tbl-wrap" style="margin-top:14px;max-height:60vh"><table class="tbl">
-      <thead><tr><th>CVE</th><th>Severity</th><th>Fixed in</th><th title="EPSS: chance of exploitation in the next 30 days">Exploit chance</th></tr></thead>
-      <tbody>${v.cves.map((c) => html`<tr class="${c.minor ? 'dimrow' : ''}">
-        <td class="nowrap"><a href="${c.link}" target="_blank" rel="noopener noreferrer">${c.id}</a>${c.kev ? html` <span class="badge sec xs" title="On CISA's list of actively exploited vulnerabilities">actively exploited</span>` : ''}${c.minor ? html` <span class="badge mute xs" title="The distribution rates it ${c.word}: not worth fixing">minor</span>` : ''}</td>
+      <thead><tr><th>CVE</th><th>Severity</th><th>Fixed in</th><th title="EPSS: chance of exploitation in the next 30 days">Exploit chance</th>${ifChange(html`<th></th>`)}</tr></thead>
+      <tbody>${v.cves.map((c) => html`<tr class="${c.minor || c.accepted ? 'dimrow' : ''}">
+        <td><span class="nowrap"><a href="${c.link}" target="_blank" rel="noopener noreferrer">${c.id}</a>${c.kev ? html` <span class="badge sec xs" title="On CISA's list of actively exploited vulnerabilities">actively exploited</span>` : ''}${c.minor ? html` <span class="badge mute xs" title="The distribution rates it ${c.word}: not worth fixing. It never counts as serious.">minor</span>` : ''}${c.accepted ? html` <span class="badge info xs" title="${accTip(c.accepted)}">accepted</span>` : ''}</span>
+          ${c.accepted ? html`<div class="dim small">by ${c.accepted.by} ${when(c.accepted.at)}${c.accepted.note ? html` · ${c.accepted.note}` : ''}</div>` : ''}</td>
         <td>${sevBadge(c)}</td>
         <td class="mono small">${c.fixed ? html`${c.fixed}${c.by_update ? html` <span class="badge ok xs" title="The waiting update installs this version or newer">in waiting update</span>` : ''}` : html`<span class="dim">no fix yet</span>`}</td>
-        <td class="small">${c.epss ? html`<span title="Higher than ${Math.round(c.pct * 100)}% of all CVEs">${pct(c.epss)}</span>` : html`<span class="dim">—</span>`}</td></tr>`)}</tbody></table></div>
-    <div class="dim small" style="margin-top:12px">Severity: the CVSS score from OSV or NVD, otherwise the distribution's own rating. Dimmed: the distribution considers it minor.
+        <td class="small">${c.epss ? html`<span title="Higher than ${Math.round(c.pct * 100)}% of all CVEs">${pct(c.epss)}</span>` : html`<span class="dim">—</span>`}</td>
+        ${ifChange(html`<td class="nowrap">${c.accepted
+          ? html`<button class="btn ghost sm" data-act="unaccept" data-id="${c.id}" title="Count it again, on all devices">Undo accept</button>`
+          : html`<button class="btn ghost sm" data-act="accept" data-id="${c.id}" title="Accept it for all devices: it stays listed but no longer counts">Accept</button>`}</td>`)}</tr>`)}</tbody></table></div>
+    <div class="dim small" style="margin-top:12px">Severity: the CVSS score from OSV or NVD, otherwise the distribution's own rating. Dimmed: the distribution considers it minor, or it is accepted. Neither counts as serious.
       ${/^Proxmox/.test(appName) ? 'Data: NVD (the CVEs listed for the product and the versions they affect), CISA (actively exploited), FIRST (EPSS). The CVE numbers link to NVD.'
-        : 'Data: OSV.dev (Debian\'s and Ubuntu\'s advisories), NVD, CISA (actively exploited), FIRST (EPSS). The CVE numbers link to OSV.dev.'}</div>
-    <div class="actions"><button class="btn" data-act="cancel">Close</button></div>`, { wide: true, acts: { cancel: () => closeModal() } });
+        : 'Data: OSV.dev (the distribution\'s own advisories: Debian, Ubuntu, Rocky Linux, AlmaLinux), NVD, CISA (actively exploited), FIRST (EPSS). The CVE numbers link to OSV.dev.'}</div>
+    <div class="actions"><button class="btn" data-act="cancel">Close</button></div>`, {
+    wide: true,
+    acts: {
+      cancel: () => closeModal(),
+      accept: (t) => {
+        const id = t.dataset.id;
+        openModal(html`<h3>Accept ${id}</h3>
+          <div class="muted small">Accepted for all devices: it stays listed, dimmed, but no longer counts for the CVE badge or the device state. You can undo it. Once no device has it any more, the acceptance is forgotten.</div>
+          <form class="form" data-submit="save">
+            <label class="field">Note <span class="dim">(why it is accepted)</span><input type="text" name="note" maxlength="200" autofocus placeholder="e.g. the service is not reachable from outside"></label>
+            <div class="actions"><button type="button" class="btn ghost" data-act="cancel">Cancel</button><button class="btn primary" type="submit">${icon('check')} Accept</button></div>
+          </form>`, {
+          over: true,
+          acts: {
+            cancel: () => closeModal(),
+            save: async (f) => {
+              await POST(`cves/${encodeURIComponent(id)}/accept`, { note: f.note.value });
+              toast(`${id} accepted for all devices`, 'ok');
+              await again();
+            },
+          },
+        });
+      },
+      unaccept: async (t) => {
+        await POST(`cves/${encodeURIComponent(t.dataset.id)}/unaccept`, {});
+        toast(`${t.dataset.id} counts again`, 'ok');
+        await again();
+      },
+    },
+  });
 }
 function groupOptions(groups, sel) {
   return html`<option value="" ${!sel ? 'selected' : ''}>Ungrouped</option>${groups.map((g) => html`<option value="${g.id}" ${sel === g.id ? 'selected' : ''}>${g.name}</option>`)}`;
@@ -1408,7 +1454,7 @@ function healthCell(a) {
   const main = h.failed_count > 0
     ? html`<span class="badge sec xs" title="Failed services: ${(h.failed || []).join(', ')}${h.failed_count > (h.failed || []).length ? ', …' : ''}">${h.failed_count} failed</span>`
     : html`<span class="badge ok xs">ok</span>`;
-  return html`${main}${h.auto_updates === 'on' ? html` <span class="badge info xs" title="Automatic updates (unattended-upgrades) are on">auto</span>` : ''}`;
+  return html`${main}${h.auto_updates === 'on' ? html` <span class="badge info xs" title="Automatic updates (${autoTool(a.facts)}) are on">auto</span>` : ''}`;
 }
 const osShort = (f) => (f.os_id && f.os_version ? f.os_id.charAt(0).toUpperCase() + f.os_id.slice(1) + ' ' + f.os_version : osLabel(f));
 
@@ -2148,18 +2194,21 @@ function AgentPage([id, tab]) {
     const head = html`<div class="row" style="margin-bottom:12px">${sw}<span class="muted small">${s?.scanned_at ? html`Scanned ${when(s.scanned_at)} · from the package manager` : 'Not scanned yet'}${vul?.checked_at ? html` · CVEs looked up ${when(vul.checked_at)}` : ''}</span><span class="spacer"></span>${btn}</div>
       ${vul?.status === 'unsupported' ? html`<div class="notice">${a.os_support?.status === 'expired'
         ? `${osLabel(a.facts)} is no longer supported: no security data and no fixes are published, so it can't be checked. Upgrade to a supported release.`
-        : `OSV.dev has no vulnerability data for ${osLabel(a.facts)}, so the applications cannot be checked for CVEs.`}</div>` : ''}`;
+        : `OSV.dev has no vulnerability data for ${osLabel(a.facts)}, so the applications cannot be checked for CVEs.`}</div>`
+        : !vul && a.facts.os_id === 'rhel' ? html`<div class="notice">CVEs are not looked up for RHEL yet: only for Debian, Ubuntu, Rocky Linux and AlmaLinux.</div>` : ''}`;
     const security = (x) => {
       const v = vul?.apps?.[x.name];
       if (!v || vul.status === 'unsupported') return html`<span class="dim">—</span>`;
-      const dist = a.facts.os_id === 'ubuntu' ? 'Ubuntu' : 'Debian';
+      const dist = distName(a.facts);
       switch (v.status) {
         case 'manual': return html`<span class="dim" title="Not installed from a package source, so not checked">not checked</span>`;
         case 'not_distro': return html`<span class="dim" title="From ${v.origin}, not from ${dist}: ${dist}'s security data does not cover it, so not checked">not checked</span>`;
         case 'pending': return html`<span class="dim" title="Being looked up">…</span>`;
-        case 'ok': return html`<span class="badge ok xs" title="No known vulnerabilities for this version${v.minor ? ` (${v.minor} minor)` : ''}">ok</span>`;
+        case 'ok': return v.accepted
+          ? html`<button type="button" class="linkbtn" data-act="cves" data-app="${x.name}" title="Nothing that counts: ${v.accepted} accepted${v.minor ? `, ${v.minor} minor` : ''} — click for the list"><span class="badge ok xs">ok</span> <span class="dim small">${v.accepted} accepted</span></button>`
+          : html`<span class="badge ok xs" title="No known vulnerabilities for this version${v.minor ? ` (${v.minor} minor)` : ''}">ok</span>`;
       }
-      const tip = [v.fixable ? `${v.fixable} fixed by an update` : '', v.open ? `${v.open} without a fix yet` : '', v.minor ? `${v.minor} minor` : '', v.kev ? `${v.kev} actively exploited` : ''].filter(Boolean).join(', ');
+      const tip = [v.fixable ? `${v.fixable} fixed by an update` : '', v.open ? `${v.open} without a fix yet` : '', v.minor ? `${v.minor} minor` : '', v.accepted ? `${v.accepted} accepted` : '', v.kev ? `${v.kev} actively exploited` : ''].filter(Boolean).join(', ');
       return html`<button type="button" class="linkbtn" data-act="cves" data-app="${x.name}" title="${tip} — click for the list">
         ${v.fixable ? html`<span class="badge ${v.red ? 'sec' : 'upd'} xs">${v.fixable} fixable</span>` : ''}
         ${v.open ? html`<span class="badge ${v.kev && !v.fixable ? 'sec' : 'mute'} xs">${v.open} without fix</span>` : ''}
@@ -2194,8 +2243,9 @@ function AgentPage([id, tab]) {
       ['OS support', a.os_support ? osSupportText(a.os_support, f.os_id) : '—'],
       ['Failed services', !h || h.failed_count < 0 ? '—' : h.failed_count === 0 ? 'none'
         : html`<span class="badge sec xs">${h.failed_count} failed</span> ${(h.failed || []).join(', ')}${h.failed_count > (h.failed || []).length ? ', …' : ''}`],
-      ['Automatic updates', ({ on: html`<span class="badge info xs">on</span> unattended-upgrades`, off: 'off', not_installed: 'not installed' })[h?.auto_updates] || '—'],
-      ['Last upgrade', h?.last_upgrade ? `${fmtDate(h.last_upgrade.time)} (${ago(h.last_upgrade.time)}, ${h.last_upgrade.packages} package${h.last_upgrade.packages === 1 ? '' : 's'}) · by ${upgradedBy(h.last_upgrade.by)}` : h ? 'none recorded' : '—'],
+      ['Automatic updates', ({ on: html`<span class="badge info xs">on</span> ${autoTool(f)}`, off: 'off', not_installed: 'not installed' })[h?.auto_updates] || '—'],
+      ['Package manager', { apt: 'apt (Debian, Ubuntu)', dnf: 'dnf (Rocky Linux, AlmaLinux, RHEL)' }[upd()?.backend] || '—'],
+      ['Last upgrade', h?.last_upgrade ? `${fmtDate(h.last_upgrade.time)} (${ago(h.last_upgrade.time)}, ${h.last_upgrade.packages} package${h.last_upgrade.packages === 1 ? '' : 's'}) · by ${upgradedBy(h.last_upgrade.by)}` : h && !isEL(f) ? 'none recorded' : '—'],
     ];
     return html`<div class="panel panel-pad" style="margin-bottom:16px"><div class="facts">${kv.map(([k, v]) => html`<div><div class="k">${k}</div><div class="v">${v ?? '—'}</div></div>`)}</div></div>${networkPanel(f)}${metricGraphs(a)}${agentPanel(a)}${probePanel(a)}`;
   }
@@ -2294,7 +2344,10 @@ function AgentPage([id, tab]) {
       },
       check: () => runAction([id], 'updates', 'check', {}),
       'apps-scan': async () => { await runAction([id], 'apps', 'scan', {}, { open: false }); refresh(); },
-      cves: (t) => { const v = st.data?.agent?.vulns?.apps?.[t.dataset.app]; if (v?.cves?.length) openCves(t.dataset.app, v); },
+      cves: (t) => {
+        const name = t.dataset.app, v = st.data?.agent?.vulns?.apps?.[name];
+        if (v?.cves?.length) openCves(name, v, async () => { await refresh(); return st.data?.agent?.vulns?.apps?.[name]; });
+      },
       install: async () => {
         const pk = [...st.sel];
         if (!pk.length) return;
@@ -3010,7 +3063,7 @@ function osSupportRow(st, s) {
     <td class="small nowrap"><span class="dim">—</span></td>
     <td class="small nowrap">${s.last_check ? when(s.last_check) : html`<span class="dim">waiting</span>`}${s.last_error && !s.paused && !s.up ? html`<div class="c-red small" style="font-weight:400">${s.last_error}</div>` : ''}</td>
     <td style="min-width:150px">${uptimeBar(s.hist, { word: 'check', compact: true })}<div class="dim small">${s.uptime >= 0 ? `${pctText(s.uptime)} supported` : 'no checks yet'}</div></td>
-    <td class="dim small nowrap" title="Decided by the master from the OS support dates (Settings → Releases)">every 10 min<br>${s.days ? `down ${s.days} days before the end` : 'down once support ended'}</td>
+    <td class="dim small nowrap" title="Decided by the master from the OS support dates (Settings → Releases)">every 24 h<br>${s.days ? `down ${s.days} days before the end` : 'down once support ended'}</td>
     <td class="w1"><div class="row" style="flex-wrap:nowrap;gap:6px">
       <button class="btn ghost sm iconbtn" data-act="svc-check" data-sid="${s.id}" title="Check now" ${st.checking.has(s.id) || s.paused ? 'disabled' : ''}>${st.checking.has(s.id) ? html`<span class="spin"></span>` : icon('refresh')}</button>
       ${ifChange(html`${pauseBtn(s.paused, 'svc-pause', `data-sid="${esc(s.id)}"`)}<button class="btn ghost sm iconbtn" data-act="svc-edit" data-sid="${s.id}" title="Edit">${icon('edit')}</button><button class="btn danger sm iconbtn" disabled title="Part of every agent device: pause it to mute it">${icon('trash')}</button>`)}</div></td>
@@ -3905,8 +3958,8 @@ function SettingsGeneral() {
   }
   function osInfoBox(o) {
     if (!o) return;
-    const host = (o.source || '').replace(/^https?:\/\//, '').split('/')[0];
-    setHTML($('#osinfo-box'), html`<div class="dim small">End-of-support dates of Debian and Ubuntu, from Debian's distro-info-data (${host}).
+    const hostOf = (u) => (u || '').replace(/^https?:\/\//, '').split('/')[0];
+    setHTML($('#osinfo-box'), html`<div class="dim small">End-of-support dates of Debian and Ubuntu from Debian's distro-info-data (${hostOf(o.source)}), of Rocky Linux, AlmaLinux and RHEL from ${hostOf(o.source_el)} (for RHEL the end of normal maintenance, not the paid extended support).
       ${o.fetched_at ? html`Last fetched ${fmtDate(o.fetched_at)}` : 'Not fetched yet'}${o.next_at ? html` · next check ${fmtDate(o.next_at)}` : ''}.
       ${ifChange(html`<button type="button" class="btn ghost sm" data-act="osinfo-check" ${st.osChecking ? 'disabled' : ''}>${icon('refresh')} Check now</button>`)}</div>
       ${o.error ? html`<div class="notice red small" style="margin:6px 0 0">Last lookup failed (${fmtDate(o.last_try)}): ${o.error}. Retrying every 6 hours; the previous dates stay in use.</div>` : ''}`);
@@ -3914,8 +3967,8 @@ function SettingsGeneral() {
   function vulnBox(v) {
     if (!v) return;
     const mins = Math.ceil((v.nvd_pending * (v.nvd_key_set ? 0.8 : 6.5)) / 60);
-    setHTML($('#vuln-box'), html`<div class="dim small">The installed versions of the tracked applications are looked up at OSV.dev, which uses Debian's and Ubuntu's own security data.
-      Sent: the OS release (e.g. Debian:12) and source package names with their versions — no host names or addresses.
+    setHTML($('#vuln-box'), html`<div class="dim small">The installed versions of the tracked applications are looked up at OSV.dev, which uses the distributions' own security data (Debian, Ubuntu, Rocky Linux, AlmaLinux; not yet RHEL).
+      Sent: the OS release (e.g. Debian:12 or Rocky Linux:10) and source package names with their versions — no host names or addresses.
       Severity comes from the OSV record, otherwise from NVD (only CVE numbers are sent there); CISA lists the actively exploited ones and FIRST (EPSS) the chance of exploitation.
       Proxmox VE and Proxmox Backup Server come from Proxmox's own package source: their CVEs come from NVD (only the product name is sent).</div>
       <div class="dim small" style="margin-top:6px">${v.last_run ? html`Last check ${fmtDate(v.last_run)}` : 'Not checked yet'}${v.next_at ? html` · next ${fmtDate(v.next_at)}` : ''} · ${v.cves} CVE${v.cves === 1 ? '' : 's'} known for ${v.systems} device${v.systems === 1 ? '' : 's'}${v.kev_count ? html` · CISA list: ${v.kev_count} exploited CVEs` : ''}.

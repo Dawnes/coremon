@@ -74,3 +74,15 @@ End-Date: 2026-11-05  10:00:05
 		t.Fatal("root")
 	}
 }
+
+func TestDnfApplyOn(t *testing.T) {
+	on := "[commands]\nupgrade_type = default\napply_updates = yes\n\n[emitters]\napply_updates = no\n"
+	if !dnfApplyOn(on) {
+		t.Error("apply_updates = yes")
+	}
+	for _, off := range []string{"", "[commands]\napply_updates = no\n", "[emitters]\napply_updates = yes\n", "[commands]\n# apply_updates = yes\n"} {
+		if dnfApplyOn(off) {
+			t.Errorf("%q: on", off)
+		}
+	}
+}

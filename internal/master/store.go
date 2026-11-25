@@ -295,6 +295,9 @@ type State struct {
 
 	NVDKey string `json:"nvd_key,omitempty"`
 
+	// AcceptedCVEs: vulnerabilities an admin accepted for all devices (by ID).
+	AcceptedCVEs map[string]*AcceptedCVE `json:"accepted_cves,omitempty"`
+
 	CheckRoundAt int64 `json:"-"` // agents.dat
 
 	LoginsFilled bool `json:"logins_filled,omitempty"`

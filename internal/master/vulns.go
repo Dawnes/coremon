@@ -76,7 +76,12 @@ type vulnRec struct {
 	Scored   bool      `json:"sc,omitempty"`
 	Word     string    `json:"w,omitempty"`
 	Aff      []vulnAff `json:"a"`
+	// More: a Rocky Linux / AlmaLinux advisory: its other CVEs (CVE is the first).
+	More []string `json:"cs,omitempty"`
 }
+
+// ids: the CVEs of the record.
+func (r *vulnRec) ids() []string { return append([]string{r.CVE}, r.More...) }
 
 type cveMeta struct {
 	Score  float64 `json:"score,omitempty"`
@@ -223,8 +228,30 @@ func osvEcosystem(f proto.Facts) string {
 			return "Ubuntu:" + v + ":LTS"
 		}
 		return "Ubuntu:" + v
+	case "rocky", "almalinux":
+		v := f.OSVersion
+		if i := strings.IndexByte(v, '.'); i >= 0 {
+			v = v[:i]
+		}
+		if v == "" || len(v) > 2 || strings.Trim(v, "0123456789") != "" {
+			return ""
+		}
+		return map[string]string{"rocky": "Rocky Linux:", "almalinux": "AlmaLinux:"}[f.OSID] + v
 	}
-	return ""
+	return "" // RHEL: no CVE data yet
+}
+
+// rpmEco: an ecosystem with RPM versions and per-advisory records.
+func rpmEco(eco string) bool {
+	return strings.HasPrefix(eco, "Rocky Linux:") || strings.HasPrefix(eco, "AlmaLinux:")
+}
+
+// verCmp: the version comparison of the ecosystem.
+func verCmp(eco string) func(a, b string) int {
+	if rpmEco(eco) {
+		return updates.RPMVerCmp
+	}
+	return debVerCmp
 }
 
 func fromDistro(osID, origin string) bool {
@@ -233,8 +260,20 @@ func fromDistro(osID, origin string) bool {
 		return origin == "Debian"
 	case "ubuntu":
 		return strings.HasPrefix(origin, "Ubuntu")
+	case "rocky":
+		return origin == "Rocky Linux"
+	case "almalinux":
+		return origin == "AlmaLinux"
+	case "rhel":
+		return origin == "Red Hat"
 	}
 	return false
+}
+
+// osvWanted: an OSV result we use: a record about one CVE (Debian, Ubuntu)
+// or a Rocky Linux / AlmaLinux advisory (several CVEs).
+func osvWanted(id string) bool {
+	return osvIDRe.MatchString(id) && (strings.Contains(id, "CVE-") || strings.HasPrefix(id, "RLSA-") || strings.HasPrefix(id, "ALSA-"))
 }
 
 func vulnKey(eco, pkg, ver string) string { return eco + "|" + pkg + "|" + ver }
@@ -419,7 +458,7 @@ func (s *Server) runVulnCheck(keys map[string]bool, full bool) (err error) {
 	for i, q := range qs {
 		var ids []string
 		for _, v := range results[i] {
-			if !strings.Contains(v.ID, "CVE-") || !osvIDRe.MatchString(v.ID) {
+			if !osvWanted(v.ID) {
 				continue
 			}
 			ids = append(ids, v.ID)
@@ -445,6 +484,7 @@ func (s *Server) runVulnCheck(keys map[string]bool, full bool) (err error) {
 	s.vul.mu.Lock()
 	list := s.pruneLocked(keys, inUse)
 	s.vul.mu.Unlock()
+	s.forgetAccepted(list)
 
 	if err := s.refreshKEV(ctx); err != nil {
 		log.Printf("vulnerability check: CISA list: %v", err)
@@ -488,7 +528,9 @@ func (s *Server) pruneLocked(keys, ecos map[string]bool) []string {
 			delete(d.Records, id)
 			continue
 		}
-		cves[r.CVE] = true
+		for _, c := range r.ids() {
+			cves[c] = true
+		}
 	}
 	for _, p := range d.Products {
 		for _, c := range p.CVEs {
@@ -637,6 +679,8 @@ type osvRecord struct {
 	Modified string   `json:"modified"`
 	Aliases  []string `json:"aliases"`
 	Upstream []string `json:"upstream"`
+	Related  []string `json:"related"`
+	Summary  string   `json:"summary"`
 	Severity []struct {
 		Type  string `json:"type"`
 		Score string `json:"score"`
@@ -655,22 +699,38 @@ type osvRecord struct {
 	DBSpecific map[string]any `json:"database_specific"`
 }
 
+const maxAdvisoryCVEs = 200
+
 func reduceRecord(r osvRecord) (*vulnRec, bool) {
+	advisory := strings.HasPrefix(r.ID, "RLSA-") || strings.HasPrefix(r.ID, "ALSA-")
 	cve := ""
+	var more []string
 	if i := strings.Index(r.ID, "CVE-"); i >= 0 && cveRe.MatchString(r.ID[i:]) {
 		cve = r.ID[i:]
 	}
-	for _, l := range [][]string{r.Upstream, r.Aliases} {
+	seen := map[string]bool{}
+	for _, l := range [][]string{r.Upstream, r.Aliases, r.Related} {
 		for _, a := range l {
-			if cve == "" && cveRe.MatchString(a) {
+			switch {
+			case !cveRe.MatchString(a) || seen[a]:
+			case cve == "":
 				cve = a
+			case advisory && a != cve && len(more) < maxAdvisoryCVEs:
+				more = append(more, a)
 			}
+			seen[a] = true
 		}
 	}
 	if cve == "" {
 		return nil, false
 	}
-	out := &vulnRec{Modified: r.Modified, CVE: cve}
+	sort.Strings(more)
+	out := &vulnRec{Modified: r.Modified, CVE: cve, More: more}
+	if advisory { // "Important: openssh security update"
+		if w, _, ok := strings.Cut(r.Summary, ":"); ok && wordLevel(w) > 0 {
+			out.Word = strings.ToLower(strings.TrimSpace(w))
+		}
+	}
 	for _, sv := range r.Severity {
 		switch {
 		case strings.HasPrefix(sv.Type, "CVSS_V3"):
@@ -688,7 +748,7 @@ func reduceRecord(r osvRecord) (*vulnRec, bool) {
 	}
 	for _, a := range r.Affected {
 		e := a.Package.Ecosystem
-		if !(strings.HasPrefix(e, "Debian:") || strings.HasPrefix(e, "Ubuntu:")) || strings.HasPrefix(e, "Ubuntu:Pro:") {
+		if !(strings.HasPrefix(e, "Debian:") || strings.HasPrefix(e, "Ubuntu:") || rpmEco(e)) || strings.HasPrefix(e, "Ubuntu:Pro:") {
 			continue
 		}
 		af := vulnAff{Eco: e, Pkg: a.Package.Name}
@@ -755,14 +815,15 @@ func (s *Server) fetchRecords(ctx context.Context, need map[string]string) error
 			}
 			s.vul.mu.Lock()
 			s.vul.d.Records[id] = rec
-			m := s.vul.d.CVEs[rec.CVE]
-			if m == nil {
-				m = &cveMeta{}
-				s.vul.d.CVEs[rec.CVE] = m
-			}
-
-			if rec.Scored && !m.Scored {
-				m.Score, m.Scored, m.Src = rec.Score, true, "osv"
+			for _, c := range rec.ids() {
+				m := s.vul.d.CVEs[c]
+				if m == nil {
+					m = &cveMeta{}
+					s.vul.d.CVEs[c] = m
+				}
+				if rec.Scored && !m.Scored {
+					m.Score, m.Scored, m.Src = rec.Score, true, "osv"
+				}
 			}
 			s.vul.mu.Unlock()
 		}(id)
@@ -982,19 +1043,28 @@ type cveView struct {
 	ByUpdate bool    `json:"by_update,omitempty"`
 	Minor    bool    `json:"minor,omitempty"`
 	Word     string  `json:"word,omitempty"`
+	// Accepted: an admin accepted it for all devices; it is not counted.
+	Accepted *AcceptedCVE `json:"accepted,omitempty"`
 }
 
-func (c cveView) red() bool { return c.KEV || (!c.Minor && c.Fixed != "" && c.Level >= 3) }
+// red: counts for the red CVE badge (and the device's Problem state):
+// actively exploited, or High/Critical with a fix. Never when the
+// distribution rates it minor (its maintainers judged it does not affect
+// their build), nor when an admin accepted it.
+func (c cveView) red() bool {
+	return !c.Minor && c.Accepted == nil && (c.KEV || (c.Fixed != "" && c.Level >= 3))
+}
 
 type appVulns struct {
-	Status  string    `json:"status"`
-	Origin  string    `json:"origin,omitempty"`
-	Fixable int       `json:"fixable"`
-	Open    int       `json:"open"`
-	Minor   int       `json:"minor"`
-	Red     bool      `json:"red"`
-	KEV     int       `json:"kev"`
-	CVEs    []cveView `json:"cves,omitempty"`
+	Status   string    `json:"status"`
+	Origin   string    `json:"origin,omitempty"`
+	Fixable  int       `json:"fixable"`
+	Open     int       `json:"open"`
+	Minor    int       `json:"minor"`
+	Accepted int       `json:"accepted"` // accepted by an admin: listed, not counted
+	Red      bool      `json:"red"`
+	KEV      int       `json:"kev"`
+	CVEs     []cveView `json:"cves,omitempty"`
 }
 
 type vulnView struct {
@@ -1064,7 +1134,12 @@ func (s *Server) vulnsFor(a *Agent, full bool) *vulnView {
 			}
 		}
 		for _, c := range list {
+			c.Accepted = s.st.st.AcceptedCVEs[c.ID]
 			switch {
+			case c.Accepted != nil:
+				av.Accepted++
+				av.CVEs = append(av.CVEs, c)
+				continue
 			case c.Minor:
 				av.Minor++
 			case c.Fixed != "":
@@ -1087,6 +1162,9 @@ func (s *Server) vulnsFor(a *Agent, full bool) *vulnView {
 		}
 		sort.Slice(av.CVEs, func(i, j int) bool {
 			x, y := av.CVEs[i], av.CVEs[j]
+			if (x.Accepted == nil) != (y.Accepted == nil) {
+				return x.Accepted == nil // accepted ones last
+			}
 			if x.KEV != y.KEV {
 				return x.KEV
 			}
@@ -1148,53 +1226,70 @@ func (s *Server) distroCVEs(ap apps.App, eco, osID string, upd map[string]string
 	if q.At > *checkedAt {
 		*checkedAt = q.At
 	}
-	var out []cveView
-	{
-		seen := map[string]bool{}
-		for _, id := range q.IDs {
-			r := d.Records[id]
-			if r == nil || seen[r.CVE] {
+	cmp := verCmp(eco)
+	// One row per CVE. A Rocky Linux / AlmaLinux advisory names several
+	// CVEs, and a CVE can be in several advisories: the lowest fix newer
+	// than the installed version, the highest rating.
+	var out []*cveView
+	byID := map[string]*cveView{}
+	recLevel := map[string]int{} // the record's own rating also counts for the level
+	for _, id := range q.IDs {
+		r := d.Records[id]
+		if r == nil {
+			continue
+		}
+		fixed, word := "", r.Word
+		for _, af := range r.Aff {
+			if af.Eco != eco || af.Pkg != ap.Source {
 				continue
 			}
-			seen[r.CVE] = true
-			c := cveView{ID: r.CVE, Link: osvLink + url.PathEscape(id), KEV: d.KEV[r.CVE], Word: r.Word}
-			for _, af := range r.Aff {
-				if af.Eco != eco || af.Pkg != ap.Source {
-					continue
-				}
-				if af.Word != "" {
-					c.Word = af.Word
-				}
-				for _, ev := range af.Events {
-					if ev[0] == "fixed" && debVerCmp(ev[1], ap.SourceVersion) > 0 && (c.Fixed == "" || debVerCmp(ev[1], c.Fixed) < 0) {
-						c.Fixed = ev[1]
-					}
+			if af.Word != "" {
+				word = af.Word
+			}
+			for _, ev := range af.Events {
+				if ev[0] == "fixed" && cmp(ev[1], ap.SourceVersion) > 0 && (fixed == "" || cmp(ev[1], fixed) < 0) {
+					fixed = ev[1]
 				}
 			}
-			c.Minor = minorWord(c.Word)
-			if m := d.CVEs[r.CVE]; m != nil {
-				c.EPSS, c.Pct = m.EPSS, m.Pct
-				if m.Scored {
-					c.Score, c.Scored, c.Src = m.Score, true, m.Src
-					c.Level = scoreLevel(m.Score)
-				}
+		}
+		for _, cid := range r.ids() {
+			c := byID[cid]
+			if c == nil {
+				c = &cveView{ID: cid, Link: osvLink + url.PathEscape(id), KEV: d.KEV[cid], Word: word}
+				byID[cid] = c
+				out = append(out, c)
+			} else if wordLevel(word) > wordLevel(c.Word) {
+				c.Word = word
 			}
-			if !c.Scored {
-				for _, w := range []string{c.Word, r.Word} {
-					if l := wordLevel(w); l > c.Level {
-						c.Level, c.Src = l, "distro"
-					}
-				}
+			if fixed != "" && (c.Fixed == "" || cmp(fixed, c.Fixed) < 0) {
+				c.Fixed = fixed
 			}
-			if c.Fixed != "" && upd != nil {
-				if nv := upd[ap.Package]; nv != "" && debVerCmp(nv, c.Fixed) >= 0 {
-					c.ByUpdate = true
-				}
-			}
-			out = append(out, c)
+			recLevel[cid] = max(recLevel[cid], wordLevel(r.Word))
 		}
 	}
-	return out, true
+	list := make([]cveView, 0, len(out))
+	for _, c := range out {
+		c.Minor = minorWord(c.Word)
+		if m := d.CVEs[c.ID]; m != nil {
+			c.EPSS, c.Pct = m.EPSS, m.Pct
+			if m.Scored {
+				c.Score, c.Scored, c.Src = m.Score, true, m.Src
+				c.Level = scoreLevel(m.Score)
+			}
+		}
+		if !c.Scored {
+			if l := max(wordLevel(c.Word), recLevel[c.ID]); l > c.Level {
+				c.Level, c.Src = l, "distro"
+			}
+		}
+		if c.Fixed != "" && upd != nil {
+			if nv := upd[ap.Package]; nv != "" && cmp(nv, c.Fixed) >= 0 {
+				c.ByUpdate = true
+			}
+		}
+		list = append(list, *c)
+	}
+	return list, true
 }
 
 func (s *Server) vulnStatus(days int) map[string]any {

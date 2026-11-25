@@ -30,6 +30,55 @@ const testUbuntuCSV = `version,codename,series,created,release,eol,eol-server,eo
 25.10,Questing Quokka,questing,2025-04-17,2025-10-09,2026-07-09
 `
 
+const testRockyJSON = `[{"cycle":"10","releaseDate":"2025-06-11","eol":"2035-05-31","latest":"10.3","lts":false,"support":"2030-05-31"},
+{"cycle":"9","releaseDate":"2022-07-14","eol":"2032-05-31","support":"2027-05-31"},
+{"cycle":"8","releaseDate":"2021-05-01","eol":"2029-05-31","support":"2024-05-31"}]`
+
+const testRHELJSON = `[{"cycle":"10","releaseDate":"2025-05-20","eol":"2035-05-31","support":"2030-05-31","extendedSupport":"2039-05-31"},
+{"cycle":"7","releaseDate":"2014-06-10","eol":"2024-06-30","support":"2019-08-06","extendedSupport":"2029-05-31"},
+{"cycle":"11","releaseDate":"2030-05-20","eol":false,"support":false}]`
+
+func TestELSupportStatus(t *testing.T) {
+	rocky, err := parseEOL([]byte(testRockyJSON))
+	if err != nil {
+		t.Fatal(err)
+	}
+	rhel, err := parseEOL([]byte(testRHELJSON))
+	if err != nil {
+		t.Fatal(err)
+	}
+	d := &osInfoData{EL: map[string][]osRelease{"rocky": rocky, "rhel": rhel}}
+	now := time.Date(2026, 11, 25, 12, 0, 0, 0, time.UTC)
+	for _, c := range []struct {
+		id, ver, status, phase, until string
+	}{
+		{"rocky", "10.3", "supported", "full", "2030-05-31"},
+		{"rocky", "9.6", "supported", "full", "2027-05-31"},
+		{"rocky", "8", "supported", "maintenance", "2029-05-31"},
+		{"rhel", "7.9", "expired", "ended", ""}, // the paid extended support does not count
+		{"rhel", "11.0", "supported", "open", ""},
+	} {
+		o := supportStatus(d, c.id, c.ver, now)
+		if o == nil || o.Status != c.status || o.Phase != c.phase || o.Until != c.until {
+			t.Errorf("%s %s: %+v", c.id, c.ver, o)
+		}
+	}
+	if o := supportStatus(d, "rocky", "10.3", now); o.MaintUntil != "2035-05-31" || o.End != "2035-05-31" {
+		t.Errorf("rocky 10 maintenance: %+v", o)
+	}
+	if o := supportStatus(d, "almalinux", "10.3", now); o != nil {
+		t.Errorf("no AlmaLinux data: %+v", o)
+	}
+	if text, fail, known := supportVerdict(supportStatus(d, "rocky", "10.3", now), 30, now); !known || fail != "" || text != "Full support until 2030-05-31, maintenance until 2035-05-31" {
+		t.Errorf("verdict: %q %q %v", text, fail, known)
+	}
+	for _, bad := range []string{`{}`, `[]`, `[{"cycle":"10","eol":"31-05-2035"}]`, `[{"cycle":"10","eol":5}]`} {
+		if _, err := parseEOL([]byte(bad)); err == nil {
+			t.Errorf("accepted: %s", bad)
+		}
+	}
+}
+
 func TestOSSupportStatus(t *testing.T) {
 	deb, err := parseDistroInfo([]byte(testDebianCSV), "debian")
 	if err != nil {
@@ -91,7 +140,7 @@ func TestOSSupportStatus(t *testing.T) {
 }
 
 func TestOSInfoLookup(t *testing.T) {
-	fail := false
+	fail, eolFail := false, false
 	gh := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
 		case fail:
@@ -100,6 +149,12 @@ func TestOSInfoLookup(t *testing.T) {
 			w.Write([]byte(testDebianCSV))
 		case r.URL.Path == "/ubuntu.csv":
 			w.Write([]byte(testUbuntuCSV))
+		case eolFail && strings.HasPrefix(r.URL.Path, "/eol/"):
+			http.Error(w, "down", 503)
+		case r.URL.Path == "/eol/rocky-linux.json", r.URL.Path == "/eol/almalinux.json":
+			w.Write([]byte(testRockyJSON))
+		case r.URL.Path == "/eol/rhel.json":
+			w.Write([]byte(testRHELJSON))
 		default:
 			http.NotFound(w, r)
 		}
@@ -107,7 +162,7 @@ func TestOSInfoLookup(t *testing.T) {
 	defer gh.Close()
 	pub, _ := keys(t)
 	s := testServer(t, pub, "http://127.0.0.1:1/none", "0.3.0")
-	s.cfg.OSInfoURL = gh.URL
+	s.cfg.OSInfoURL, s.cfg.EOLURL = gh.URL, gh.URL+"/eol"
 	if s.supportFor("debian", "12", time.Now()) != nil {
 		t.Fatal("support known before any lookup")
 	}
@@ -117,6 +172,18 @@ func TestOSInfoLookup(t *testing.T) {
 	if o := s.supportFor("debian", "12", time.Now()); o == nil {
 		t.Fatal("no status after lookup")
 	}
+	if o := s.supportFor("almalinux", "10.1", time.Now()); o == nil || o.End != "2035-05-31" {
+		t.Fatalf("AlmaLinux after lookup: %+v", o)
+	}
+	// endoflife.date down: Debian's dates are renewed, the old EL dates stay.
+	eolFail = true
+	if err := s.refreshOSInfo(); err == nil || !strings.Contains(err.Error(), "endoflife.date") {
+		t.Fatalf("EL failure not reported: %v", err)
+	}
+	if o := s.supportFor("rocky", "10.3", time.Now()); o == nil {
+		t.Fatal("old EL dates lost")
+	}
+	eolFail = false
 	// A failed lookup keeps the data and is retried after 6 hours.
 	fail = true
 	if err := s.refreshOSInfo(); err == nil {

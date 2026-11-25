@@ -1,7 +1,8 @@
 # Coremon
 
-Self-hosted update monitoring for a fleet of Debian and Ubuntu devices: VMs,
-LXC containers or bare metal. A web dashboard shows which devices have
+Self-hosted update monitoring for a fleet of Linux devices (Debian and Ubuntu
+with apt; Rocky Linux, AlmaLinux and RHEL with dnf): VMs, LXC containers or
+bare metal. A web dashboard shows which devices have
 updates, security updates, pending reboots and known vulnerabilities in their
 applications. You choose what to install and when; nothing is ever upgraded
 automatically.
@@ -26,14 +27,24 @@ as **agentless** devices: the master itself pings them and checks their services
 * **OS support**: a service on every agent device, down once its OS release no
   longer gets security support (or a set number of days before). Decided by the
   master from the support dates; it cannot be removed, but pausing it mutes it.
-* **Updates**: check, install selected packages or upgrade all, with live output.
+  For RHEL the end of normal maintenance counts, not the paid extended support.
+* **Updates**: check, install selected packages or upgrade all, with live output,
+  with apt or dnf. With dnf an update is a security update when a security
+  advisory lists it; "reboot required" comes from `dnf needs-restarting` and a
+  newer installed kernel. The System tab shows the package manager.
 * **Applications**: 43 common applications (Apache, ClamAV, Docker, Dovecot,
   HAProxy, MariaDB, Nginx, OpenSSL, PostgreSQL, Proxmox VE, Proxmox Backup
   Server, the SSH server and more) with version, status and ports,
   per device and as one list for the whole environment.
 * **Vulnerabilities**: known CVEs of those applications, with severity, fixes
   and actively exploited ones highlighted. Proxmox VE and Proxmox Backup Server
-  are checked against NVD, the others against the distribution's own data.
+  are checked against NVD, the others against the distribution's own data
+  (Debian, Ubuntu, Rocky Linux and AlmaLinux; not yet RHEL). Rocky Linux and
+  AlmaLinux rate a whole advisory (Critical, Important, Moderate, Low); none of
+  those counts as minor. A CVE the distribution rates minor never counts as serious, even when it is
+  actively exploited. An admin can accept a CVE for all devices, with a note:
+  it stays listed but no longer counts, until the acceptance is undone or no
+  device has the CVE any more.
 * **System and network**: per device the OS, platform (such as "Proxmox VE
   9.0.11"), uptime and health, and a Network box with the main network card
   and its MAC address (a bridge, bond or VLAN is followed to the physical card),
@@ -120,8 +131,10 @@ The script prints the website address and an initial password. Open
 `admin` and choose a new password. Running the same command again upgrades
 the master and keeps its data.
 
-The master needs outbound HTTPS to GitHub (releases), Debian (support dates)
-and OSV.dev, NVD, CISA and FIRST (vulnerability data).
+The master needs outbound HTTPS to GitHub (releases), Debian and
+endoflife.date (support dates) and OSV.dev, NVD, CISA and FIRST
+(vulnerability data). The master itself runs on Debian or Ubuntu; agents also
+run on Rocky Linux, AlmaLinux and RHEL.
 
 ## Add a device
 

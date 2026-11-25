@@ -36,7 +36,7 @@ done
 
 [ "$(id -u)" = "0" ] || die "must run as root"
 command -v systemctl >/dev/null 2>&1 || die "systemd is required"
-command -v curl >/dev/null 2>&1 || die "curl is required (apt-get install -y curl)"
+command -v curl >/dev/null 2>&1 || die "curl is required (apt-get install -y curl, or dnf install -y curl)"
 command -v sha256sum >/dev/null 2>&1 || die "sha256sum is required"
 
 ENROLLED=0

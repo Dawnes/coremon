@@ -1,6 +1,8 @@
 package master
 
-// End-of-support dates of Debian and Ubuntu releases (distro-info-data).
+// End-of-support dates of Debian and Ubuntu releases (distro-info-data),
+// and of Rocky Linux, AlmaLinux and RHEL (endoflife.date). For RHEL the end
+// of normal maintenance counts, not the paid extended support.
 
 import (
 	"encoding/csv"
@@ -20,6 +22,7 @@ import (
 
 const (
 	osInfoBase     = "https://salsa.debian.org/debian/distro-info-data/-/raw/main"
+	eolBase        = "https://endoflife.date/api"
 	osInfoRetry    = 6 * time.Hour
 	osInfoSoon     = 183 * 24 * time.Hour
 	maxOSInfoBytes = 1 << 20
@@ -31,13 +34,23 @@ type osRelease struct {
 	EOL     string `json:"eol"`
 	EOLLTS  string `json:"eol_lts"`
 	EOLESM  string `json:"eol_esm"`
+	// Full: Rocky Linux, AlmaLinux, RHEL: end of full support (then
+	// maintenance until EOL).
+	Full string `json:"full,omitempty"`
 }
 
 type osInfoData struct {
 	FetchedAt int64       `json:"fetched_at"`
 	Debian    []osRelease `json:"debian"`
 	Ubuntu    []osRelease `json:"ubuntu"`
+	// EL: per os_id (rocky, almalinux, rhel), from endoflife.date.
+	EL map[string][]osRelease `json:"el,omitempty"`
 }
+
+// elProducts: os_id → endoflife.date product.
+var elProducts = map[string]string{"rocky": "rocky-linux", "almalinux": "almalinux", "rhel": "rhel"}
+
+func isEL(osID string) bool { _, ok := elProducts[osID]; return ok }
 
 type osInfoFile struct {
 	Data    *osInfoData `json:"data"`
@@ -115,13 +128,21 @@ func (s *Server) osInfoLoop(stop <-chan struct{}) {
 func (s *Server) refreshOSInfo() error {
 	s.osi.fetch.Lock()
 	defer s.osi.fetch.Unlock()
-	data, err := s.fetchOSInfo()
+	s.osi.mu.Lock()
+	var old map[string][]osRelease
+	if s.osi.f.Data != nil {
+		old = s.osi.f.Data.EL
+	}
+	s.osi.mu.Unlock()
+	data, err := s.fetchOSInfo(old)
 	s.osi.mu.Lock()
 	s.osi.f.LastTry = time.Now().Unix()
+	if data != nil { // also when only endoflife.date failed: its old dates stay
+		s.osi.f.Data = data
+	}
+	s.osi.f.Error = ""
 	if err != nil {
 		s.osi.f.Error = err.Error()
-	} else {
-		s.osi.f.Data, s.osi.f.Error = data, ""
 	}
 	f := s.osi.f
 	s.osi.mu.Unlock()
@@ -134,22 +155,19 @@ func (s *Server) refreshOSInfo() error {
 	return err
 }
 
-func (s *Server) fetchOSInfo() (*osInfoData, error) {
+func (s *Server) eolBase() string {
+	if s.cfg.EOLURL != "" {
+		return strings.TrimRight(s.cfg.EOLURL, "/")
+	}
+	return eolBase
+}
+
+// fetchOSInfo: nil when Debian's data failed; with an error but data when
+// only endoflife.date failed (the old EL dates are kept).
+func (s *Server) fetchOSInfo(oldEL map[string][]osRelease) (*osInfoData, error) {
 	hc := &http.Client{Timeout: 60 * time.Second}
 	get := func(name string) ([]byte, error) {
-		resp, err := hc.Get(s.osInfoBase() + "/" + name)
-		if err != nil {
-			return nil, err
-		}
-		defer resp.Body.Close()
-		if resp.StatusCode != http.StatusOK {
-			return nil, fmt.Errorf("%s: %s", name, resp.Status)
-		}
-		b, err := io.ReadAll(io.LimitReader(resp.Body, maxOSInfoBytes+1))
-		if err == nil && len(b) > maxOSInfoBytes {
-			err = fmt.Errorf("%s: too large", name)
-		}
-		return b, err
+		return s.osInfoGet(hc, s.osInfoBase()+"/"+name, name)
 	}
 	deb, err := get("debian.csv")
 	if err != nil {
@@ -159,14 +177,95 @@ func (s *Server) fetchOSInfo() (*osInfoData, error) {
 	if err != nil {
 		return nil, err
 	}
-	d := &osInfoData{FetchedAt: time.Now().Unix()}
+	d := &osInfoData{FetchedAt: time.Now().Unix(), EL: map[string][]osRelease{}}
 	if d.Debian, err = parseDistroInfo(deb, "debian"); err != nil {
 		return nil, fmt.Errorf("debian.csv: %w", err)
 	}
 	if d.Ubuntu, err = parseDistroInfo(ubu, "ubuntu"); err != nil {
 		return nil, fmt.Errorf("ubuntu.csv: %w", err)
 	}
-	return d, nil
+	var elErr error
+	for id, product := range elProducts {
+		b, err := s.osInfoGet(hc, s.eolBase()+"/"+product+".json", product)
+		var list []osRelease
+		if err == nil {
+			list, err = parseEOL(b)
+		}
+		if err != nil {
+			if elErr == nil {
+				elErr = fmt.Errorf("endoflife.date %s: %w", product, err)
+			}
+			list = oldEL[id]
+		}
+		if len(list) > 0 {
+			d.EL[id] = list
+		}
+	}
+	return d, elErr
+}
+
+func (s *Server) osInfoGet(hc *http.Client, u, name string) ([]byte, error) {
+	resp, err := hc.Get(u)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("%s: %s", name, resp.Status)
+	}
+	b, err := io.ReadAll(io.LimitReader(resp.Body, maxOSInfoBytes+1))
+	if err == nil && len(b) > maxOSInfoBytes {
+		err = fmt.Errorf("%s: too large", name)
+	}
+	return b, err
+}
+
+var elCycleRe = regexp.MustCompile(`^\d{1,2}$`)
+
+// parseEOL: endoflife.date releases. "eol": end of maintenance (the end
+// that counts), "support": end of full support. A date or false (open).
+func parseEOL(b []byte) ([]osRelease, error) {
+	var rows []map[string]any
+	if err := json.Unmarshal(b, &rows); err != nil {
+		return nil, err
+	}
+	date := func(row map[string]any, k string) (string, error) {
+		switch v := row[k].(type) {
+		case nil, bool:
+			return "", nil
+		case string:
+			if _, err := time.Parse("2006-01-02", v); err != nil || !dateRe.MatchString(v) {
+				return "", fmt.Errorf("bad date %q", v)
+			}
+			return v, nil
+		}
+		return "", fmt.Errorf("bad %s", k)
+	}
+	var out []osRelease
+	for _, row := range rows {
+		c, _ := row["cycle"].(string)
+		if !elCycleRe.MatchString(c) {
+			continue // "7 (ELS)" and the like
+		}
+		r := osRelease{Version: c}
+		var err error
+		if r.Release, err = date(row, "releaseDate"); err == nil {
+			if r.EOL, err = date(row, "eol"); err == nil {
+				r.Full, err = date(row, "support")
+			}
+		}
+		if err != nil {
+			return nil, fmt.Errorf("%s: %w", c, err)
+		}
+		out = append(out, r)
+		if len(out) > 100 {
+			return nil, errors.New("too many releases")
+		}
+	}
+	if len(out) == 0 {
+		return nil, errors.New("no releases")
+	}
+	return out, nil
 }
 
 var (
@@ -260,6 +359,9 @@ type osSupport struct {
 	End      string `json:"end,omitempty"`
 	LTSUntil string `json:"lts_until,omitempty"`
 	ESMUntil string `json:"esm_until,omitempty"`
+	// MaintUntil: Rocky Linux, AlmaLinux, RHEL in full support: maintenance
+	// until then.
+	MaintUntil string `json:"maint_until,omitempty"`
 }
 
 func (s *Server) supportFor(osID, version string, now time.Time) *osSupport {
@@ -280,7 +382,13 @@ func supportStatus(d *osInfoData, osID, version string, now time.Time) *osSuppor
 	case "ubuntu":
 		list = d.Ubuntu
 	default:
-		return nil
+		if !isEL(osID) {
+			return nil
+		}
+		list = d.EL[osID]
+		if i := strings.IndexByte(version, '.'); i >= 0 { // "10.3": release 10
+			version = version[:i]
+		}
 	}
 	var rel *osRelease
 	for i := range list {
@@ -293,7 +401,19 @@ func supportStatus(d *osInfoData, osID, version string, now time.Time) *osSuppor
 	}
 	day := func(s string) time.Time { t, _ := time.Parse("2006-01-02", s); return t.Add(24 * time.Hour) }
 	o := &osSupport{}
-	if osID == "debian" {
+	if isEL(osID) {
+		o.End = rel.EOL
+		switch {
+		case o.End == "":
+			o.Phase = "open"
+		case rel.Full != "" && now.Before(day(rel.Full)):
+			o.Phase, o.Until, o.MaintUntil = "full", rel.Full, rel.EOL
+		case now.Before(day(o.End)):
+			o.Phase, o.Until = "maintenance", o.End
+		default:
+			o.Phase = "ended"
+		}
+	} else if osID == "debian" {
 		o.End = rel.EOLLTS
 		if o.End == "" {
 			o.End = rel.EOL
@@ -334,7 +454,7 @@ func (s *Server) osInfoStatus(days int) map[string]any {
 	s.osi.mu.Lock()
 	f := s.osi.f
 	s.osi.mu.Unlock()
-	out := map[string]any{"source": s.osInfoBase(), "last_try": f.LastTry, "error": f.Error}
+	out := map[string]any{"source": s.osInfoBase(), "source_el": s.eolBase(), "last_try": f.LastTry, "error": f.Error}
 	var next int64
 	if f.Data != nil {
 		out["fetched_at"] = f.Data.FetchedAt

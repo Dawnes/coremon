@@ -58,6 +58,62 @@ type def struct {
 	units []string
 }
 
+// rpmDef: the RPM package names of an application (Rocky Linux, AlmaLinux,
+// RHEL, EPEL), and the extra systemd units there. ver: for an application
+// with versions side by side (multi), the key is taken from the package
+// version when the name has none: 1 = major, 2 = major.minor.
+type rpmDef struct {
+	re    *regexp.Regexp
+	ver   int
+	units []string
+}
+
+var rpmDefs = map[string]rpmDef{
+	"Apache":                {regexp.MustCompile(`^httpd$`), 0, []string{"httpd.service"}},
+	"BIND9":                 {regexp.MustCompile(`^bind$`), 0, nil},
+	"Certbot":               {regexp.MustCompile(`^certbot$`), 0, nil},
+	"Docker":                {regexp.MustCompile(`^(?:docker-ce|moby-engine)$`), 0, nil},
+	"Fail2ban":              {regexp.MustCompile(`^fail2ban(?:-server)?$`), 0, nil},
+	"ISC DHCP server":       {regexp.MustCompile(`^dhcp-server$`), 0, []string{"dhcpd.service", "dhcpd6.service"}},
+	"Kea DHCP":              {regexp.MustCompile(`^kea$`), 0, nil},
+	"Java":                  {regexp.MustCompile(`^java-(\d+(?:\.\d+\.\d+)?)-openjdk(?:-headless|-devel)?$`), 0, nil},
+	"MariaDB/MySQL":         {regexp.MustCompile(`^(?:mariadb-server|mysql-server|mysql-community-server)$`), 0, []string{"mysqld.service"}},
+	"Nginx":                 {regexp.MustCompile(`^nginx(?:-core)?$`), 0, nil},
+	"Node.js":               {regexp.MustCompile(`^nodejs$`), 0, nil},
+	"OpenSSL":               {regexp.MustCompile(`^openssl-libs$`), 0, nil},
+	"OpenVPN":               {regexp.MustCompile(`^openvpn$`), 0, nil},
+	"PHP":                   {regexp.MustCompile(`^php-(?:cli|fpm|common)$`), 2, []string{"php-fpm.service"}},
+	"Podman":                {regexp.MustCompile(`^podman$`), 0, nil},
+	"PostgreSQL":            {regexp.MustCompile(`^postgresql(\d+)?-server$`), 1, []string{"postgresql.service", "postgresql-{v}.service"}},
+	"Postfix":               {regexp.MustCompile(`^postfix$`), 0, nil},
+	"Python":                {regexp.MustCompile(`^(?:python(3\.\d+)|python3)$`), 2, nil},
+	"Redis":                 {regexp.MustCompile(`^redis$`), 0, nil},
+	"Samba":                 {regexp.MustCompile(`^samba$`), 0, []string{"smb.service", "nmb.service"}},
+	"SSH server":            {regexp.MustCompile(`^openssh-server$`), 0, nil},
+	"sudo":                  {regexp.MustCompile(`^sudo$`), 0, nil},
+	"WireGuard":             {regexp.MustCompile(`^wireguard-tools$`), 0, nil},
+	"Exim":                  {regexp.MustCompile(`^exim$`), 0, []string{"exim.service"}},
+	"ProFTPD":               {regexp.MustCompile(`^proftpd$`), 0, nil},
+	"Tomcat":                {regexp.MustCompile(`^tomcat$`), 1, []string{"tomcat.service"}},
+	"Mosquitto":             {regexp.MustCompile(`^mosquitto$`), 0, nil},
+	"Grafana":               {regexp.MustCompile(`^grafana(?:-enterprise)?$`), 0, nil},
+	"Tailscale":             {regexp.MustCompile(`^tailscale$`), 0, nil},
+	"QEMU":                  {regexp.MustCompile(`^qemu-kvm(?:-core)?$`), 0, nil},
+	"Unbound":               {regexp.MustCompile(`^unbound$`), 0, nil},
+	"HAProxy":               {regexp.MustCompile(`^haproxy$`), 0, nil},
+	"Squid":                 {regexp.MustCompile(`^squid$`), 0, nil},
+	"Chrony":                {regexp.MustCompile(`^chrony$`), 0, nil},
+	"NTPsec":                {regexp.MustCompile(`^ntpsec$`), 0, nil},
+	"vsftpd":                {regexp.MustCompile(`^vsftpd$`), 0, nil},
+	"ClamAV":                {regexp.MustCompile(`^clamav$`), 0, []string{"clamd@*.service"}},
+	"Dovecot":               {regexp.MustCompile(`^dovecot$`), 0, nil},
+	"InfluxDB 1":            {regexp.MustCompile(`^influxdb$`), 0, nil},
+	"InfluxDB 2":            {regexp.MustCompile(`^influxdb2$`), 0, nil},
+	"Webmin":                {regexp.MustCompile(`^webmin$`), 0, nil},
+	"Proxmox VE":            {},
+	"Proxmox Backup Server": {},
+}
+
 var defs = []def{
 	{"Apache", regexp.MustCompile(`^apache2$`), false, []string{"apache2.service"}},
 	{"BIND9", regexp.MustCompile(`^bind9$`), false, []string{"named.service", "bind9.service"}},
@@ -163,8 +219,25 @@ func UnitPatterns() []string {
 	var out []string
 	for _, d := range defs {
 		out = append(out, d.units...)
+		out = append(out, rpmDefs[d.name].units...)
 	}
 	return out
+}
+
+// forRPM: the definition with the RPM names and units.
+func (d def) forRPM() (def, int) {
+	r := rpmDefs[d.name]
+	d.re, d.units = r.re, append(append([]string{}, d.units...), r.units...)
+	return d, r.ver
+}
+
+// verKey: the first n parts of a version (major or major.minor).
+func verKey(v string, n int) string {
+	parts := strings.SplitN(v, ".", n+1)
+	if len(parts) < n {
+		return ""
+	}
+	return strings.Join(parts[:n], ".")
 }
 
 func unitMatch(p, v, unit string) bool {
@@ -278,7 +351,12 @@ func installed(r io.Reader) map[string]pkgInfo {
 }
 
 func scan(r io.Reader, sys *System, originOf func([]string) map[string]string) []App {
-	info := installed(r)
+	return scanInfo(installed(r), false, sys, originOf)
+}
+
+// scanInfo: the applications among the installed packages; rpm: the
+// packages are RPMs (their names differ from Debian's).
+func scanInfo(info map[string]pkgInfo, rpm bool, sys *System, originOf func([]string) map[string]string) []App {
 	pkgs := make(map[string]string, len(info))
 	for p, i := range info {
 		pkgs[p] = i.ver
@@ -290,8 +368,15 @@ func scan(r io.Reader, sys *System, originOf func([]string) map[string]string) [
 	sort.Strings(names)
 	var out []App
 	for _, d := range defs {
+		ver := 0
+		if rpm {
+			d, ver = d.forRPM()
+		}
 		rows := map[string]App{}
 		for _, p := range names {
+			if d.re == nil {
+				break
+			}
 			m := d.re.FindStringSubmatch(p)
 			if m == nil {
 				continue
@@ -302,6 +387,9 @@ func scan(r io.Reader, sys *System, originOf func([]string) map[string]string) [
 					if g != "" {
 						key = g
 					}
+				}
+				if key == "" && ver > 0 {
+					key = verKey(Readable(pkgs[p]), ver)
 				}
 			}
 			if _, seen := rows[key]; seen {
@@ -493,6 +581,11 @@ func Scan() *State {
 				}
 				return m
 			})
+			return st
+		}
+		if out, ok := rpmQuery(); ok {
+			info, origin := parseRPM(out)
+			st.Apps = scanInfo(info, true, collectSystem(), func([]string) map[string]string { return origin })
 			return st
 		}
 		st.Apps = scan(strings.NewReader(""), nil, nil)

@@ -16,7 +16,8 @@ import (
 const (
 	methodOSSupport = "os_support"
 	osSupportName   = "OS support"
-	osSupportEvery  = 10 * time.Minute
+	osSupportEvery  = 24 * time.Hour   // each service is decided once a day
+	osSupportTick   = 10 * time.Minute // how often the loop looks for one that is due
 	maxSupportDays  = 365
 )
 
@@ -42,6 +43,7 @@ func (s *Server) ensureOSSupport(a *Agent) *Service {
 		a.Checks = &Checks{PingMode: pingRemoved}
 	}
 	if sv := a.Checks.osSupportSvc(); sv != nil {
+		sv.Interval = int(osSupportEvery / time.Second)
 		return sv
 	}
 	sv := &Service{ID: "s_" + randHex(8), Name: osSupportName, Method: methodOSSupport, Interval: int(osSupportEvery / time.Second)}
@@ -91,6 +93,9 @@ func supportVerdict(o *osSupport, days int, now time.Time) (text, fail string, k
 	if o.Phase == "security" && o.LTSUntil != "" {
 		text = fmt.Sprintf("Security support until %s, LTS until %s", o.Until, o.LTSUntil)
 	}
+	if o.Phase == "full" && o.MaintUntil != "" {
+		text = fmt.Sprintf("Full support until %s, maintenance until %s", o.Until, o.MaintUntil)
+	}
 	left := int(end.Sub(now).Hours() / 24)
 	switch {
 	case !now.Before(end):
@@ -101,16 +106,19 @@ func supportVerdict(o *osSupport, days int, now time.Time) (text, fail string, k
 	return text, "", true
 }
 
-// osSupportLoop decides every agent device's OS support service now and
-// then every 10 minutes.
+// osSupportLoop decides every agent device's OS support service once a
+// day: every 10 minutes it decides those not decided in the last 24 hours
+// (new, resumed, after maintenance, or a day old). "Check now" decides at once.
 func (s *Server) osSupportLoop(stop <-chan struct{}) {
-	t := time.NewTicker(osSupportEvery)
+	t := time.NewTicker(osSupportTick)
 	defer t.Stop()
 	for {
 		now := time.Now()
 		s.st.mu.Lock()
 		for _, a := range s.st.st.Agents {
-			s.osSupportCheck(a, now)
+			if sv := s.ensureOSSupport(a); sv != nil && now.Unix()-sv.LastCheck >= int64(osSupportEvery/time.Second) {
+				s.osSupportCheck(a, now)
+			}
 		}
 		s.st.mu.Unlock()
 		select {

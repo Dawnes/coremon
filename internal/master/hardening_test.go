@@ -91,7 +91,7 @@ func TestInputHardening(t *testing.T) {
 	s.st.st.Agents["a_1"].Status = StatusActive
 	s.st.st.Agents["a_1"].Features = []proto.FeatureInfo{{Name: "updates", Actions: []proto.ActionSpec{{Name: "install", Mutating: true}}}}
 	s.st.mu.Unlock()
-	for _, p := range []string{"curl;reboot", "-o=evil", "$(id)", "Curl", "a b"} {
+	for _, p := range []string{"curl;reboot", "-o=evil", "$(id)", "_curl", "a b"} {
 		if code, _ := c.do("POST", "/api/ui/actions", `{"agent_ids":["a_1"],"feature":"updates","action":"install","params":{"packages":[`+q(p)+`]}}`); code != 400 {
 			t.Errorf("package %q accepted", p)
 		}
@@ -124,7 +124,8 @@ func TestRogueAgent(t *testing.T) {
 
 	// Update results.
 	good := updates.Snapshot{Backend: "apt", CheckedAt: time.Now().Add(48 * time.Hour).Unix(), Total: 99, Security: -1,
-		Packages: []updates.Package{{Name: "libssl3", Available: "3.0.2\x1b[0m", Origin: "Debian<b>", Security: true}}}
+		Packages:   []updates.Package{{Name: "libssl3", Available: "3.0.2\x1b[0m", Origin: "Debian<b>", Security: true}},
+		RebootPkgs: []string{"linux-image-6.1.0-29-amd64", "kernel 6.1.0-29-amd64 (running 6.1.0-28-amd64)\x1b[0m"}}
 	raw, _ := json.Marshal(good)
 	out, err := checkState("updates", raw)
 	if err != nil {
@@ -134,6 +135,15 @@ func TestRogueAgent(t *testing.T) {
 	json.Unmarshal(out, &got)
 	if got.CheckedAt > time.Now().Unix() || got.Total != 1 || got.Security != 1 || got.Packages[0].Available != "3.0.2[0m" || got.Packages[0].Origin != "Debianb" {
 		t.Errorf("state not cleaned: %+v", got)
+	}
+	if len(got.RebootPkgs) != 2 || got.RebootPkgs[1] != "kernel 6.1.0-29-amd64 (running 6.1.0-28-amd64)[0m" {
+		t.Errorf("reboot reasons: %q", got.RebootPkgs)
+	}
+	// dnf results (Rocky Linux): RPM names and versions.
+	dnf := updates.Snapshot{Backend: "dnf", Packages: []updates.Package{{Name: "NetworkManager", Available: "1:1.52.0-1.el10_0"}}}
+	raw, _ = json.Marshal(dnf)
+	if out, err := checkState("updates", raw); err != nil || !strings.Contains(string(out), `"backend":"dnf"`) {
+		t.Errorf("dnf result: %v %s", err, out)
 	}
 	for name, s := range map[string]updates.Snapshot{
 		"bad name":      {Packages: []updates.Package{{Name: "evil;reboot"}}},

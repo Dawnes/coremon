@@ -96,6 +96,29 @@ func aptPeriodicOn(out string) bool {
 	return false
 }
 
+// dnfApplyOn: "apply_updates = yes" in the [commands] part of
+// /etc/dnf/automatic.conf.
+func dnfApplyOn(conf string) bool {
+	section := ""
+	for _, line := range strings.Split(conf, "\n") {
+		t := strings.TrimSpace(line)
+		if strings.HasPrefix(t, "[") && strings.HasSuffix(t, "]") {
+			section = strings.ToLower(strings.Trim(t, "[] "))
+			continue
+		}
+		k, v, ok := strings.Cut(t, "=")
+		if !ok || section != "commands" || strings.TrimSpace(strings.ToLower(k)) != "apply_updates" {
+			continue
+		}
+		switch strings.ToLower(strings.TrimSpace(v)) {
+		case "yes", "true", "1", "on":
+			return true
+		}
+		return false
+	}
+	return false
+}
+
 func autoUpdates(installed, periodic, timerActive bool) string {
 	switch {
 	case !installed:

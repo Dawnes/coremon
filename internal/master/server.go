@@ -43,6 +43,7 @@ type Config struct {
 	IndexURL string
 
 	OSInfoURL string
+	EOLURL    string // endoflife.date (Rocky Linux, AlmaLinux, RHEL); tests
 
 	OSVURL, NVDURL, KEVURL, EPSSURL string
 }
@@ -388,6 +389,8 @@ func (s *Server) routes() http.Handler {
 	change("POST /api/ui/locals/{id}/delete", s.handleLocalDelete)
 	view("POST /api/ui/locals/{id}/ping", s.handleLocalPing)
 	change("POST /api/ui/locals/{id}/services", s.handleServiceCreate)
+	change("POST /api/ui/cves/{id}/accept", s.handleCVEAccept)
+	change("POST /api/ui/cves/{id}/unaccept", s.handleCVEUnaccept)
 	change("POST /api/ui/locals/{id}/services/{sid}", s.handleServiceUpdate)
 	change("POST /api/ui/locals/{id}/services/{sid}/delete", s.handleServiceDelete)
 	view("POST /api/ui/locals/{id}/services/{sid}/check", s.handleServiceCheck)

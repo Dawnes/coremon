@@ -29,6 +29,14 @@ func packageOrigins(pkgs []string) map[string]string {
 	return parseOrigins(run("apt-cache", args...), sources)
 }
 
+// rpmQuery: the installed RPM packages (rpmFormat), false without rpm.
+func rpmQuery() (string, bool) {
+	if _, err := exec.LookPath("rpm"); err != nil {
+		return "", false
+	}
+	return run("rpm", "-qa", "--qf", rpmFormat), true
+}
+
 func collectSystem() *System {
 	sys := &System{Active: map[string]bool{}, Enabled: map[string]bool{}, Ports: map[string][]Port{}}
 	parseListUnits(run("systemctl", "list-units", "--all", "--plain", "--no-legend", "--no-pager", "--type=service,socket"), sys.Active)

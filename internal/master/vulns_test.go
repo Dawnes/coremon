@@ -186,6 +186,39 @@ func TestVulnCheck(t *testing.T) {
 	if ov := view("a_deb", false); ov.Badge != 2 || ov.Apps != nil {
 		t.Errorf("overview: %+v", ov)
 	}
+	// Accepting a CVE (for all devices): listed, last, not counted; undone again.
+	cveCall := func(id, what, body string) int {
+		w := httptest.NewRecorder()
+		r := httptest.NewRequest("POST", "/api/ui/cves/x/"+what, strings.NewReader(body))
+		r.SetPathValue("id", id)
+		if what == "accept" {
+			s.handleCVEAccept(w, r)
+		} else {
+			s.handleCVEUnaccept(w, r)
+		}
+		return w.Code
+	}
+	if c := cveCall("CVE-2025-1003", "accept", `{"note":"not reachable from outside"}`); c != 200 {
+		t.Fatalf("accept: %d", c)
+	}
+	if c := cveCall("not an id", "accept", `{}`); c != 400 {
+		t.Errorf("bad ID accepted: %d", c)
+	}
+	v = view("a_deb", true)
+	o = v.Apps["OpenSSL"]
+	if v.Badge != 1 || o.Accepted != 1 || o.KEV != 0 || o.Open != 0 || len(o.CVEs) != 3 || o.CVEs[2].ID != "CVE-2025-1003" ||
+		o.CVEs[2].Accepted == nil || o.CVEs[2].Accepted.Note != "not reachable from outside" {
+		t.Errorf("after accepting: badge %d %+v", v.Badge, o)
+	}
+	if c := cveCall("CVE-2025-1003", "unaccept", ``); c != 200 {
+		t.Fatalf("unaccept: %d", c)
+	}
+	if c := cveCall("CVE-2025-1003", "unaccept", ``); c != 404 {
+		t.Errorf("unaccept twice: %d", c)
+	}
+	if v = view("a_deb", true); v.Badge != 2 || v.Apps["OpenSSL"].Accepted != 0 {
+		t.Errorf("after undoing: badge %d %+v", v.Badge, v.Apps["OpenSSL"])
+	}
 	if nv := view("a_new", true); nv.Status != "unsupported" {
 		t.Errorf("release without OSV data: %+v", nv)
 	}
@@ -317,8 +350,18 @@ func TestVulnCheck(t *testing.T) {
 	if v := view("a_deb", true); v.Apps["OpenSSL"].Fixable != 0 || v.Apps["OpenSSL"].Open != 1 || v.Badge != 1 {
 		t.Errorf("after upgrade: %+v", v.Apps["OpenSSL"])
 	}
+	// The full check forgets acceptances of CVEs no device has any more.
+	cveCall("CVE-2025-1001", "accept", `{}`) // fixed by the upgrade
+	cveCall("CVE-2025-1003", "accept", `{}`) // still there
 	if err := s.vulnTick(true); err != nil {
 		t.Fatal(err)
+	}
+	s.st.mu.Lock()
+	_, gone := s.st.st.AcceptedCVEs["CVE-2025-1001"]
+	_, still := s.st.st.AcceptedCVEs["CVE-2025-1003"]
+	s.st.mu.Unlock()
+	if gone || !still {
+		t.Errorf("accepted after the full check: 1001 %v (want gone), 1003 %v (want kept)", gone, still)
 	}
 	s.vul.mu.Lock()
 	nq, nr := len(s.vul.d.Queries), len(s.vul.d.Records)
@@ -334,6 +377,35 @@ func TestVulnCheck(t *testing.T) {
 	}
 	if _, err := os.Stat(s.vulnPath()); err != nil {
 		t.Error(err)
+	}
+}
+
+func TestCVERed(t *testing.T) {
+	for _, c := range []struct {
+		name string
+		c    cveView
+		want bool
+	}{
+		{"exploited", cveView{KEV: true}, true},
+		{"high with a fix", cveView{Level: 3, Fixed: "1.2"}, true},
+		{"high without a fix", cveView{Level: 3}, false},
+		{"medium with a fix", cveView{Level: 2, Fixed: "1.2"}, false},
+		{"minor, even when exploited", cveView{KEV: true, Minor: true, Level: 3}, false},
+		{"accepted", cveView{KEV: true, Accepted: &AcceptedCVE{By: "admin"}}, false},
+	} {
+		if got := c.c.red(); got != c.want {
+			t.Errorf("%s: red %v, want %v", c.name, got, c.want)
+		}
+	}
+	for _, id := range []string{"CVE-2024-6387", "GHSA-abcd-1234-efgh", "DEBIAN-CVE-2025-1"} {
+		if _, err := checkCVEID(id); err != nil {
+			t.Errorf("%s: %v", id, err)
+		}
+	}
+	for _, id := range []string{"", "cve-2024-1", "CVE-", "CVE-2024/../x", "CVE 2024 1"} {
+		if _, err := checkCVEID(id); err == nil {
+			t.Errorf("%q accepted", id)
+		}
 	}
 }
 

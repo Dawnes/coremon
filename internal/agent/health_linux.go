@@ -23,6 +23,24 @@ func run(name string, args ...string) (string, error) {
 	return string(out), err
 }
 
+// dnfAutomatic: automatic updates with dnf-automatic. The install timer
+// always installs; the plain timer only when apply_updates is on.
+func dnfAutomatic() string {
+	active := func(unit string) bool {
+		out, _ := run("systemctl", "is-active", unit)
+		return strings.TrimSpace(out) == "active"
+	}
+	installed := false
+	for _, dir := range []string{"/usr/lib/systemd/system/", "/lib/systemd/system/"} {
+		if _, err := os.Stat(dir + "dnf-automatic.timer"); err == nil {
+			installed = true
+		}
+	}
+	conf, _ := os.ReadFile("/etc/dnf/automatic.conf")
+	apply := dnfApplyOn(string(conf))
+	return autoUpdates(installed, true, active("dnf-automatic-install.timer") || (apply && active("dnf-automatic.timer")))
+}
+
 func readGz(path string) string {
 	f, err := os.Open(path)
 	if err != nil {
@@ -52,6 +70,9 @@ func collectHealth() *proto.Health {
 	h.AutoUpdates = autoUpdates(installed, periodic, strings.TrimSpace(active) == "active")
 	if len(status) == 0 {
 		h.AutoUpdates = ""
+		if _, err := exec.LookPath("dnf"); err == nil {
+			h.AutoUpdates = dnfAutomatic()
+		}
 	}
 	cur, _ := os.ReadFile("/var/log/apt/history.log")
 	h.LastUpgrade = lastUpgrade([]string{readGz("/var/log/apt/history.log.1.gz"), string(cur)}, time.Local)

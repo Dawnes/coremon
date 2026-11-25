@@ -54,10 +54,15 @@ func pickBackend() (Backend, error) {
 	if _, err := exec.LookPath("apt-get"); err == nil {
 		return &aptBackend{}, nil
 	}
-	return nil, errors.New("no supported package manager found (supported: apt)")
+	if _, err := exec.LookPath("dnf"); err == nil {
+		return &dnfBackend{}, nil
+	}
+	return nil, errors.New("no supported package manager found (supported: apt, dnf)")
 }
 
-var PackageNameRe = regexp.MustCompile(`^[a-z0-9][a-z0-9+.\-]{0,127}(:[a-z0-9]{1,16})?$`)
+// PackageNameRe: a Debian or RPM package name (RPM names may have capitals
+// and underscores, like NetworkManager or perl_Foo).
+var PackageNameRe = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9+._\-]{0,127}(:[a-z0-9]{1,16})?$`)
 
 type Updates struct{}
 

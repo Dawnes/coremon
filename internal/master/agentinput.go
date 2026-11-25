@@ -37,7 +37,7 @@ func checkState(feature string, raw json.RawMessage) (json.RawMessage, error) {
 	if len(s.Packages) > maxStatePkgs || len(s.Removals) > maxStatePkgs || len(s.RebootPkgs) > maxStatePkgs {
 		return nil, fmt.Errorf("result lists more than %d packages", maxStatePkgs)
 	}
-	if s.Backend != "apt" {
+	if s.Backend != "apt" && s.Backend != "dnf" {
 		s.Backend = ""
 	}
 	s.CheckedAt, s.RefreshedAt = notFuture(s.CheckedAt), notFuture(s.RefreshedAt)
@@ -55,12 +55,14 @@ func checkState(feature string, raw json.RawMessage) (json.RawMessage, error) {
 			sec++
 		}
 	}
-	for _, list := range [][]string{s.Removals, s.RebootPkgs} {
-		for _, n := range list {
-			if !updates.PackageNameRe.MatchString(n) {
-				return nil, fmt.Errorf("result has an invalid package name %q", cleanText(n, 64))
-			}
+	for _, n := range s.Removals {
+		if !updates.PackageNameRe.MatchString(n) {
+			return nil, fmt.Errorf("result has an invalid package name %q", cleanText(n, 64))
 		}
+	}
+	// Why a reboot is needed: package names, or "kernel 6.12.0-… (running …)".
+	for i, n := range s.RebootPkgs {
+		s.RebootPkgs[i] = cleanText(n, 128)
 	}
 
 	if s.Total < 0 || s.Total > len(s.Packages) {
@@ -130,7 +132,8 @@ func checkApps(raw json.RawMessage) (json.RawMessage, error) {
 
 const maxAppPorts = 32
 
-var debVersionRe = regexp.MustCompile(`^[0-9][A-Za-z0-9.+~:-]{0,126}$`)
+// debVersionRe: a Debian or RPM version (RPM releases have _ and ^: el9_4).
+var debVersionRe = regexp.MustCompile(`^[0-9][A-Za-z0-9.+~:_^-]{0,126}$`)
 
 type rateLimiter struct {
 	mu      sync.Mutex

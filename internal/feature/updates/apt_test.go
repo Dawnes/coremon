@@ -57,12 +57,12 @@ func TestVersionLess(t *testing.T) {
 }
 
 func TestPkgNameRe(t *testing.T) {
-	for _, ok := range []string{"libssl3", "libc6:i386", "g++-12", "linux-image-6.1.0-23-amd64"} {
+	for _, ok := range []string{"libssl3", "libc6:i386", "g++-12", "linux-image-6.1.0-23-amd64", "NetworkManager", "perl-Data-Dumper", "python3-PyYAML"} {
 		if !PackageNameRe.MatchString(ok) {
 			t.Errorf("%q should be valid", ok)
 		}
 	}
-	for _, bad := range []string{"-o", "--allow-unauthenticated", "foo bar", "a;rm", "Foo", ""} {
+	for _, bad := range []string{"-o", "--allow-unauthenticated", "foo bar", "a;rm", "_x", "a/b", ""} {
 		if PackageNameRe.MatchString(bad) {
 			t.Errorf("%q should be invalid", bad)
 		}

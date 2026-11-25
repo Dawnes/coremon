@@ -5,3 +5,5 @@ package apps
 func collectSystem() *System { return nil }
 
 func packageOrigins([]string) map[string]string { return nil }
+
+func rpmQuery() (string, bool) { return "", false }
