@@ -152,6 +152,9 @@ func (s *Server) refreshOSInfo() error {
 			os.Rename(tmp, s.osInfoPath())
 		}
 	}
+	if data != nil {
+		s.decideOSSupportAll()
+	}
 	return err
 }
 

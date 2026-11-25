@@ -166,8 +166,26 @@ func TestOSInfoLookup(t *testing.T) {
 	if s.supportFor("debian", "12", time.Now()) != nil {
 		t.Fatal("support known before any lookup")
 	}
+	// A device decided before any dates were known: unknown, decided again
+	// as soon as the dates arrive (not a day later).
+	rz := &Agent{ID: "a_rz", Name: "rz", Status: StatusActive}
+	rz.Facts.OSID, rz.Facts.OSVersion = "rocky", "10.3"
+	s.st.mu.Lock()
+	s.st.st.Agents[rz.ID] = rz
+	s.osSupportCheck(rz, time.Now())
+	s.st.mu.Unlock()
+	if sv := rz.Checks.osSupportSvc(); sv == nil || sv.Checked {
+		t.Fatalf("before the lookup: %+v", sv)
+	}
 	if err := s.refreshOSInfo(); err != nil {
 		t.Fatal(err)
+	}
+	s.st.mu.Lock()
+	sv := rz.Checks.osSupportSvc()
+	decided := sv.Checked && sv.Up
+	s.st.mu.Unlock()
+	if !decided {
+		t.Fatalf("not decided after the lookup: %+v", sv)
 	}
 	if o := s.supportFor("debian", "12", time.Now()); o == nil {
 		t.Fatal("no status after lookup")

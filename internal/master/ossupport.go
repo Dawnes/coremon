@@ -129,6 +129,18 @@ func (s *Server) osSupportLoop(stop <-chan struct{}) {
 	}
 }
 
+// decideOSSupportAll decides every OS support service now, not waiting for
+// its day: after new support dates arrived (a release that had none gets
+// its verdict at once).
+func (s *Server) decideOSSupportAll() {
+	now := time.Now()
+	s.st.mu.Lock()
+	defer s.st.mu.Unlock()
+	for _, a := range s.st.st.Agents {
+		s.osSupportCheck(a, now)
+	}
+}
+
 // applyOSSupport: only the name and the days before the end can change.
 func (req *serviceReq) applyOSSupport(sv *Service) error {
 	if (req.Preset != nil && *req.Preset != "") || (req.Method != nil && *req.Method != methodOSSupport) {
