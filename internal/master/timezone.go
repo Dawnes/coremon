@@ -2,8 +2,8 @@ package master
 
 // The time zone of the installation (Settings → General): the website shows
 // every time in it, backups run at 01:00 in it and notifications use it for
-// quiet hours and the daily summary. The zone data is built into the master
-// (tzdata.go), so it does not depend on the system.
+// quiet hours and the daily summary. The zone data comes from the host's
+// tzdata package (/usr/share/zoneinfo), which the installer makes sure of.
 
 import (
 	"sync"

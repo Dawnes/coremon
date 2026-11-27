@@ -15,7 +15,7 @@ func TestTimeZone(t *testing.T) {
 	if set.TimeZone != "Europe/Amsterdam" {
 		t.Fatalf("default zone %q", set.TimeZone)
 	}
-	// With the built-in zone data (not with -tags notzdata): summer time.
+	// With the host's zone data (always on Linux): summer time.
 	if l, err := time.LoadLocation("Europe/Amsterdam"); err == nil {
 		_, w := time.Date(2026, 1, 15, 12, 0, 0, 0, l).Zone()
 		_, s := time.Date(2026, 7, 15, 12, 0, 0, 0, l).Zone()

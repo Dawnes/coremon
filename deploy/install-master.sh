@@ -18,6 +18,13 @@ die() { echo "coremon: $*" >&2; exit 1; }
 [ "$(id -u)" = "0" ] || die "must run as root"
 command -v systemctl >/dev/null 2>&1 || die "systemd is required"
 
+# Time zones come from the host's tzdata package (missing on minimal images).
+if [ ! -f /usr/share/zoneinfo/Europe/Amsterdam ]; then
+  echo "coremon: installing tzdata (time zone data)"
+  apt-get update -q >/dev/null 2>&1 || true
+  DEBIAN_FRONTEND=noninteractive apt-get install -y -q tzdata >/dev/null || die "could not install tzdata (apt-get install -y tzdata)"
+fi
+
 case "$(uname -m)" in
   x86_64|amd64) ARCH=amd64 ;;
   aarch64|arm64) ARCH=arm64 ;;
