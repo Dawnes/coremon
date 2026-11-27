@@ -107,6 +107,17 @@ as **agentless** devices: the master itself pings them and checks their services
   With Upstream on, the network views start at a cloud in its state colour.
   Healthy lines carry a slow pulse toward the master, and the map zooms and
   pans (it opens fitted to the screen).
+* **Notifications**: push messages with ntfy (ntfy.sh or your own server, with
+  an optional access token or username and password), switched on and off
+  with one switch. Right away when a device goes down and is back, a service
+  fails and recovers, Upstream goes offline, or a new device waits for
+  approval; once a day a summary of new security updates, serious CVEs,
+  reboots, ending OS support and new releases. Each event has its own
+  priority; quiet hours let only Urgent messages through; at most X messages
+  in Y minutes per device; tapping a message opens the device when a public
+  address is set. Messages are kept for up to 24 hours while the server
+  cannot be reached, followed by a note that they were late. Activity →
+  Notifications lists what was sent, held back or failed.
 * **Maintenance**: pause all checks of a device for 5 minutes up to 4 hours, or
   until ended by hand; no automatic jobs run and no failures are shown meanwhile.
 * **Releases**: update the master and the agents from the website.
@@ -141,7 +152,7 @@ the master and keeps its data.
 
 The master needs outbound HTTPS to GitHub (releases), Debian and
 endoflife.date (support dates) and OSV.dev, NVD, CISA and FIRST
-(vulnerability data). The master itself runs on Debian or Ubuntu; agents also
+(vulnerability data), and to your ntfy server when notifications are on. The master itself runs on Debian or Ubuntu; agents also
 run on Rocky Linux, AlmaLinux, RHEL, SLES, openSUSE and Alpine (with OpenRC:
 the agent then runs under supervise-daemon).
 

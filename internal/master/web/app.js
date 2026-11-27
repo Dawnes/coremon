@@ -55,6 +55,7 @@ const ICONS = {
   pulse: '<path d="M3 12h4l3-8 4 16 3-8h4"/>',
   info: '<circle cx="12" cy="12" r="9"/><path d="M12 11v6M12 7.5v.01"/>',
   globe: '<circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3a14 14 0 0 1 0 18M12 3a14 14 0 0 0 0 18"/>',
+  send: '<path d="M21 3 10 14"/><path d="m21 3-7 18-4-7-7-4 18-7Z"/>',
 };
 const icon = (n) => raw(`<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">${ICONS[n] || ''}</svg>`);
 
@@ -533,8 +534,8 @@ const NAV = [
 const SUBNAV = {
   dashboard: () => [['overview', 'Overview'], ['devices', 'Devices'], ['apps', 'Application List'], ['map', 'Map']],
   about: () => [['about', 'About'], ['license', 'License']],
-  activity: () => [['jobs', 'Jobs'], ['probes', 'Remote Probes'], ['audit', 'Audit log']],
-  settings: () => [['general', 'General'], ['upstream', 'Upstream'], ['releases', 'Releases'], ...(canChange() ? [['users', 'Users']] : []), ['identity', 'Identity'], ...(canChange() ? [['backups', 'Backups']] : [])],
+  activity: () => [['jobs', 'Jobs'], ['probes', 'Remote Probes'], ['notifications', 'Notifications'], ['audit', 'Audit log']],
+  settings: () => [['general', 'General'], ['upstream', 'Upstream'], ...(canChange() ? [['notifications', 'Notifications']] : []), ['releases', 'Releases'], ...(canChange() ? [['users', 'Users']] : []), ['identity', 'Identity'], ...(canChange() ? [['backups', 'Backups']] : [])],
 };
 // The breadcrumb on a device page: back to the Dashboard page it was opened from.
 const crumbs = (name) => html`<div class="crumbs"><a href="#/dashboard/${lastDashSub}">${icon('back')}${(SUBNAV.dashboard().find(([k]) => k === lastDashSub) || [, 'Overview'])[1]}</a><span class="sep">›</span><span class="cur">${name}</span></div>`;
@@ -599,8 +600,8 @@ function route() {
   const parts = location.hash.replace(/^#\/?/, '').split('/');
   const [section, sub] = currentRoute();
   const subViews = {
-    settings: { general: SettingsGeneral, upstream: SettingsUpstream, releases: Releases, users: SettingsUsers, backups: SettingsBackups, identity: SettingsIdentity },
-    activity: { jobs: Jobs, probes: RemoteProbes, audit: Audit },
+    settings: { general: SettingsGeneral, upstream: SettingsUpstream, notifications: SettingsNotify, releases: Releases, users: SettingsUsers, backups: SettingsBackups, identity: SettingsIdentity },
+    activity: { jobs: Jobs, probes: RemoteProbes, notifications: NotifyLog, audit: Audit },
     dashboard: { overview: Dashboard, devices: DeviceList, apps: AppList, map: MapPage },
     about: { about: AboutPage, license: LicensePage },
   };
@@ -3948,6 +3949,163 @@ function SettingsUpstream() {
   };
 }
 
+// Settings → Notifications (admins): where messages go and what sends one.
+// Each notifier (for now only ntfy) has its own On/Off switch at the top;
+// events and options are shared by all of them.
+const NOTIFY_PRIO = [[1, 'Min'], [2, 'Low'], [3, 'Default'], [4, 'High'], [5, 'Urgent']];
+const NOTIFY_EVENT = { device: 'Device', service: 'Service', upstream: 'Upstream', pending: 'New device', summary: 'Daily summary', outage: 'Delay note' };
+function SettingsNotify() {
+  const st = { d: null, test: null, testing: false };
+  const tz = (() => { try { return Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC'; } catch { return 'UTC'; } })();
+  const ntfy = () => st.d.targets.find((t) => t.type === 'ntfy');
+  const randTopic = () => {
+    const a = new Uint8Array(14);
+    crypto.getRandomValues(a);
+    return 'coremon-' + [...a].map((x) => 'abcdefghijkmnpqrstuvwxyz23456789'[x % 32]).join('');
+  };
+  const sw = (name, on) => html`<label class="bigswitch ${on ? 'on' : ''}"><input type="checkbox" name="${name}" data-change="onoff" ${on ? 'checked' : ''}><span class="track"><span class="knob"></span></span><span class="state">${on ? 'On' : 'Off'}</span></label>`;
+  function authFields(auth, t) {
+    if (auth === 'token') {
+      return html`<label class="field">Access token<input type="password" name="token" autocomplete="off" spellcheck="false" placeholder="${t.token_set ? 'set — enter a new token to replace it' : 'tk_…'}"></label>`;
+    }
+    if (auth === 'basic') {
+      return html`<div class="grid2" style="gap:12px"><label class="field">Username<input type="text" name="user" value="${t.user || ''}" autocomplete="off" spellcheck="false" maxlength="128"></label>
+        <label class="field">Password<input type="password" name="password" autocomplete="new-password" placeholder="${t.password_set ? 'set — enter a new one to replace it' : ''}"></label></div>`;
+    }
+    return '';
+  }
+  function status() {
+    const d = st.d, t = ntfy(), box = $('#nt-status');
+    if (!box) return;
+    const parts = [];
+    if (d.outage) parts.push(html`<div class="notice red small" style="margin:0">The ntfy server can't be reached since ${fmtDate(d.outage.from)}. ${d.waiting} message${d.waiting === 1 ? '' : 's'} waiting; retried every minute for up to 24 hours.</div>`);
+    else if (d.waiting) parts.push(html`<div class="dim small">${d.waiting} message${d.waiting === 1 ? '' : 's'} waiting to be sent.</div>`);
+    if (st.test) parts.push(st.test.ok ? html`<span class="c-green small">${icon('check')} Test message delivered ${fmtDate(st.test.at, true)}</span>` : html`<div class="notice red small" style="margin:0">Test failed: ${st.test.error}</div>`);
+    const on = $('#nt form')?.on?.checked ?? t.on;
+    if (!on && !parts.length) parts.push(html`<span class="dim small">Off: nothing is sent and nothing is kept for later.</span>`);
+    setHTML(box, html`${parts}`);
+  }
+  function build() {
+    const d = st.d, t = ntfy();
+    const ev = (e) => html`<div class="nt-ev"><label class="checkrow"><input type="checkbox" name="ev-${e.key}" ${e.on ? 'checked' : ''}> ${e.title}</label>
+      <select name="prio-${e.key}">${NOTIFY_PRIO.map(([v, l]) => html`<option value="${v}" ${e.prio === v ? 'selected' : ''}>${l}</option>`)}</select></div>`;
+    setHTML($('#nt'), html`<form class="form" data-submit="save"><div class="stack">
+      <div class="panel panel-pad nt-target ${t.on ? 'is-on' : ''}">
+        <div class="row" style="justify-content:space-between;align-items:center;gap:12px;margin-bottom:6px">
+          <div><h2 style="margin:0">ntfy</h2><div class="muted small">Push messages to the ntfy app on your phone or desktop</div></div>${sw('on', t.on)}</div>
+        <div class="grid2" style="gap:12px">
+          <label class="field">Server<input type="text" name="server" value="${t.server}" placeholder="https://ntfy.sh" spellcheck="false" autocomplete="off"></label>
+          <label class="field">Topic<div class="row" style="gap:6px"><input type="text" name="topic" value="${t.topic || ''}" class="mono" style="flex:1;min-width:0" maxlength="64" spellcheck="false" autocomplete="off" placeholder="coremon-…"><button type="button" class="btn sm" data-act="gen-topic">Generate</button></div></label>
+        </div>
+        <div class="dim small">Subscribe to the topic in the ntfy app. On the public ntfy.sh server anyone who knows the topic can read the messages: use a long, random one (Generate), or your own server with sign-in.</div>
+        <label class="field" style="max-width:320px">Sign in to the server<select name="auth" data-change="auth">
+          ${[['none', 'Not needed'], ['token', 'Access token'], ['basic', 'Username and password']].map(([v, l]) => html`<option value="${v}" ${t.auth === v ? 'selected' : ''}>${l}</option>`)}</select></label>
+        <div id="nt-auth">${authFields(t.auth, t)}</div>
+        <div class="dim small">Secrets are kept on the master and never shown again.</div>
+        <div class="row" style="gap:10px;align-items:center;margin-top:4px"><button type="button" class="btn" data-act="test" ${st.testing ? 'disabled' : ''}>${st.testing ? html`<span class="spin"></span>` : icon('send')} Send test message</button><span id="nt-status" style="flex:1"></span></div>
+      </div>
+      <div class="panel panel-pad">
+        <h2 style="margin:0 0 4px">Send right away when</h2>
+        <div class="nt-evs">${d.events.filter((e) => !e.summary).map(ev)}</div>
+        <h2 style="margin:16px 0 4px">In the daily summary</h2>
+        <div class="muted small" style="margin-bottom:4px">One message a day with what is new and still true, at the highest priority of what it holds. Nothing new: no message.</div>
+        <div class="nt-evs">${d.events.filter((e) => e.summary).map(ev)}</div>
+        <label class="field" style="margin-top:10px">Send the summary at<input type="time" name="summary_at" value="${d.summary_at}" required style="width:130px"></label>
+      </div>
+      <div class="panel panel-pad">
+        <h2 style="margin:0 0 8px">Options</h2>
+        <label class="checkrow"><input type="checkbox" name="also_hidden" ${d.also_hidden ? 'checked' : ''}> Also for devices that are unreachable behind a device that is down</label>
+        <div class="dim small">Off: only the device that is down sends a message. Devices in maintenance never send anything.</div>
+        <label class="field" style="margin-top:10px">Public address of Coremon<input type="text" name="public_url" value="${d.public_url || ''}" placeholder="https://coremon.example.org" spellcheck="false" autocomplete="off" style="max-width:420px"></label>
+        <label class="checkrow"><input type="checkbox" name="link" ${d.no_link ? '' : 'checked'}> Tapping a message opens the device in Coremon</label>
+        <div class="dim small">The address your phone can open Coremon on. Without one, messages have no link.</div>
+        <label class="checkrow" style="margin-top:12px"><input type="checkbox" name="quiet" ${d.quiet ? 'checked' : ''}> Quiet hours: only Urgent messages</label>
+        <div class="row" style="gap:8px;align-items:center"><span class="muted small">from</span><input type="time" name="quiet_from" value="${d.quiet_from}" style="width:130px"><span class="muted small">to</span><input type="time" name="quiet_to" value="${d.quiet_to}" style="width:130px"></div>
+        <div class="dim small">Other messages in that time are not sent (Activity → Notifications lists them); a daily summary that falls in it is sent when the quiet hours end.</div>
+        <div class="field" style="margin-top:12px">Per device at most<div class="row" style="gap:8px;align-items:center">
+          <input type="number" name="throttle_n" value="${d.throttle_n}" min="1" max="${d.limits.throttle_n}" step="1" required style="width:80px"><span class="muted">messages in</span>
+          <input type="number" name="throttle_min" value="${d.throttle_min}" min="1" max="${d.limits.throttle_min}" step="1" required style="width:90px"><span class="muted">minutes</span></div></div>
+        <div class="dim small">For a device that keeps going down and up. Further changes wait; when there is room again, one message says how things stand.</div>
+        <div class="dim small" style="margin-top:12px">Times are in your time zone, ${tz}.</div>
+        ${d.tz !== 'UTC' && !d.tz_known ? html`<div class="notice small" style="margin:6px 0 0">The master does not know the time zone ${d.tz} (no time zone data installed): it uses UTC instead.</div>` : ''}
+      </div>
+      <div><button class="btn primary">Save</button></div>
+    </div></form>`);
+    status();
+  }
+  const targetBody = (f) => ({ id: 'ntfy', on: f.on.checked, server: f.server.value.trim(), topic: f.topic.value.trim(), auth: f.auth.value,
+    token: f.token?.value || '', user: f.user?.value.trim() || '', password: f.password?.value || '' });
+  return {
+    interval: 15000,
+    mount(el) {
+      el.innerHTML = r(html`${settingsTabs('notifications')}<div class="page-head"><div><h1>Notifications</h1><div class="sub">Messages when something needs your attention</div></div></div><div id="nt"></div>`);
+    },
+    async refresh() {
+      const d = await GET('notify');
+      const first = !st.d;
+      st.d = d;
+      if (first) build();
+      else status();
+    },
+    acts: {
+      onoff: (t) => { const l = t.closest('.bigswitch'); l.classList.toggle('on', t.checked); l.querySelector('.state').textContent = t.checked ? 'On' : 'Off'; t.closest('.nt-target')?.classList.toggle('is-on', t.checked); status(); },
+      auth: (t) => setHTML($('#nt-auth'), authFields(t.value, ntfy())),
+      'gen-topic': () => { const f = $('#nt form'); f.topic.value = randTopic(); dirtyForms.add(f); },
+      test: async () => {
+        const f = $('#nt form');
+        st.testing = true;
+        const btn = f.querySelector('[data-act="test"]');
+        btn.disabled = true;
+        try {
+          st.test = await POST('notify/test', targetBody(f));
+        } catch (e) {
+          st.test = { ok: false, error: e.message };
+        } finally {
+          st.testing = false;
+          btn.disabled = false;
+        }
+        status();
+      },
+      save: async (f) => {
+        const events = {};
+        st.d.events.forEach((e) => { events[e.key] = { on: f[`ev-${e.key}`].checked, prio: +f[`prio-${e.key}`].value }; });
+        await POST('notify', {
+          targets: [targetBody(f)], events, also_hidden: f.also_hidden.checked, no_link: !f.link.checked, public_url: f.public_url.value.trim(),
+          quiet: f.quiet.checked, quiet_from: f.quiet_from.value, quiet_to: f.quiet_to.value, summary_at: f.summary_at.value, tz,
+          throttle_n: +f.throttle_n.value, throttle_min: +f.throttle_min.value,
+        });
+        toast(f.on.checked ? 'Saved — notifications are on' : 'Saved — notifications are off', 'ok');
+        st.d = null;
+        view.refresh();
+      },
+    },
+  };
+}
+
+// Activity → Notifications: what was sent, held back or failed.
+function NotifyLog() {
+  const st = { d: null };
+  const STATUS = { sent: ['ok', 'sent'], delayed: ['upd', 'sent late'], failed: ['sec', 'failed'], dropped: ['sec', 'given up'], quiet: ['mute', 'quiet hours'], held: ['mute', 'held back'] };
+  function render() {
+    const d = st.d;
+    if (!d) return;
+    const e = d.entries;
+    setHTML($('#nl'), html`${!d.on ? html`<div class="notice grey">Notifications are off.${canChange() ? html` Switch them on under <a href="#/settings/notifications">Settings → Notifications</a>.` : ''}</div>` : ''}
+      ${d.waiting ? html`<div class="notice">${d.waiting} message${d.waiting === 1 ? '' : 's'} waiting to be sent.</div>` : ''}
+      ${e.length ? html`<div class="panel"><table class="tbl"><thead><tr><th>Time</th><th>Status</th><th>Event</th><th>Message</th><th>Detail</th></tr></thead><tbody>
+        ${e.map((x) => { const [cls, txt] = STATUS[x.status] || ['mute', x.status]; return html`<tr><td class="muted mono small nowrap">${fmtDate(x.at, true)}</td><td><span class="badge ${cls} xs">${txt}</span></td>
+          <td class="small">${NOTIFY_EVENT[x.event] || x.event}</td><td>${x.title}</td><td class="muted small">${x.error || ''}</td></tr>`; })}</tbody></table></div>`
+        : html`<div class="panel empty">No messages yet.</div>`}`);
+  }
+  return {
+    interval: 10000,
+    mount(el) {
+      el.innerHTML = r(html`${subTabs('activity', 'notifications')}<div class="page-head"><div><h1>Notifications</h1><div class="sub">The last ${200} messages: sent, held back or failed</div></div></div><div id="nl"></div>`);
+    },
+    async refresh() { st.d = await GET('notify/log'); render(); },
+  };
+}
+
 function SettingsGeneral() {
   const st = { saved: null, next: 0, timer: null };
   // One block: heading, description and a form with its own Save.
@@ -4417,7 +4575,6 @@ function SettingsAccount() {
     let body;
     if (u.two_fa) {
       body = html`<div class="row"><span class="badge ok">${icon('check')} on</span><span class="muted small">${u.two_fa_since ? 'since ' + fmtDate(u.two_fa_since) : ''}</span></div>
-        <div class="muted small" style="margin-top:8px">Every sign-in asks for a code from your authenticator app.</div>
         <form class="form" data-submit="tfa-disable">${codeField}<div style="margin-top:8px"><button class="btn danger">Turn off 2FA</button></div></form>`;
     } else if (st.enroll) {
       const key = st.enroll.secret.replace(/(.{4})/g, '$1 ').trim();

@@ -290,6 +290,7 @@ type State struct {
 	Local       LocalSettings             `json:"local"`
 	Virtuals    map[string]*VirtualDevice `json:"virtuals,omitempty"`
 	Upstream    UpstreamSettings          `json:"upstream"`
+	Notify      NotifySettings            `json:"notify"`
 	Tokens      map[string]*EnrollToken   `json:"tokens"`
 	Jobs        []*Job                    `json:"-"` // jobs.dat
 
@@ -362,6 +363,7 @@ func openStore(dir string) (*store, error) {
 		}
 	}
 	s.st.Upstream.normalize()
+	s.st.Notify.normalize()
 	s.st.Settings.normalize()
 	s.loadAgents()
 	s.loadJobs()

@@ -80,6 +80,7 @@ type Server struct {
 	vul           vulnStore
 	loc           localState
 	up            upstreamState
+	ntf           notifyState
 	pinger        pingFunc
 	svcCheck      svcCheckFunc
 	checksDirty   bool              // check results changed; guarded by st.mu
@@ -202,6 +203,7 @@ func New(cfg Config) (*Server, error) {
 	s.loc.next, s.loc.busy = map[string]time.Time{}, map[string]bool{}
 	s.up.kick = make(chan struct{}, 1)
 	s.loadChecks()
+	s.loadNotify()
 
 	pubPath := cfg.SigningKeyPath
 	if pubPath == "" {
@@ -384,6 +386,10 @@ func (s *Server) routes() http.Handler {
 	view("GET /api/ui/upstream", s.handleUpstreamGet)
 	change("POST /api/ui/upstream", s.handleUpstreamSave)
 	change("POST /api/ui/upstream/via", s.handleUpstreamVia)
+	change("GET /api/ui/notify", s.handleNotifyGet)
+	change("POST /api/ui/notify", s.handleNotifySave)
+	change("POST /api/ui/notify/test", s.handleNotifyTest)
+	view("GET /api/ui/notify/log", s.handleNotifyLog)
 	change("POST /api/ui/locals", s.handleLocalCreate)
 	change("POST /api/ui/locals/{id}", s.handleLocalUpdate)
 	change("POST /api/ui/locals/{id}/delete", s.handleLocalDelete)
@@ -512,6 +518,7 @@ func (s *Server) Run(ctx context.Context) error {
 	go s.upstreamLoop(stop)
 	go s.checksLoop(stop)
 	go s.osSupportLoop(stop)
+	go s.notifyLoop(stop)
 	handler := s.routes()
 	s.handler = handler
 	s.applyUIPort(handler)
