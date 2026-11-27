@@ -9,7 +9,7 @@ import (
 	"net/url"
 	"regexp"
 	"strings"
-	"time" // time zones from the system (tzdata, always on Debian)
+	"time"
 )
 
 const (
@@ -70,7 +70,7 @@ type NotifySettings struct {
 	QuietFrom  string `json:"quiet_from,omitempty"`
 	QuietTo    string `json:"quiet_to,omitempty"`
 	SummaryAt  string `json:"summary_at,omitempty"`
-	TZ         string `json:"tz,omitempty"`
+	TZ         string `json:"-"` // the installation's time zone, filled in when used
 	ThrottleN  int    `json:"throttle_n,omitempty"`
 	ThrottleM  int    `json:"throttle_min,omitempty"`
 }
@@ -111,15 +111,9 @@ var (
 	pushKeyRe   = regexp.MustCompile(`^[A-Za-z0-9]{30}$`)
 	pushDevRe   = regexp.MustCompile(`^[A-Za-z0-9_-]{1,25}$`)
 	hhmmRe      = regexp.MustCompile(`^([01][0-9]|2[0-3]):[0-5][0-9]$`)
-	// tzNameRe: an IANA time zone name (Europe/Amsterdam). One the master
-	// does not know counts as UTC (tzKnown).
+	// tzNameRe: an IANA time zone name (Europe/Amsterdam).
 	tzNameRe = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9_+\-]{0,30}(/[A-Za-z0-9_+\-]{1,30}){0,2}$`)
 )
-
-func tzKnown(name string) bool {
-	_, err := time.LoadLocation(name)
-	return err == nil
-}
 
 func (n *NotifySettings) normalize() {
 	var targets []*NotifyTarget
@@ -172,9 +166,7 @@ func (n *NotifySettings) normalize() {
 	if !hhmmRe.MatchString(n.SummaryAt) {
 		n.SummaryAt = "08:00"
 	}
-	if !tzNameRe.MatchString(n.TZ) {
-		n.TZ = "UTC"
-	}
+
 	if n.ThrottleN == 0 {
 		n.ThrottleN = defaultThrottleN
 	}
@@ -204,13 +196,7 @@ func (n *NotifySettings) anyOn() bool {
 	return false
 }
 
-func (n *NotifySettings) loc() *time.Location {
-	l, err := time.LoadLocation(n.TZ)
-	if err != nil {
-		return time.UTC
-	}
-	return l
-}
+func (n *NotifySettings) loc() *time.Location { return zoneOf(n.TZ) }
 
 // minuteOf: "22:30" → 1350.
 func minuteOf(hhmm string) int {

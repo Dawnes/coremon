@@ -33,6 +33,9 @@ type Settings struct {
 	TFATrusted []string `json:"tfa_trusted,omitempty"`
 	// TFANever: never trusted, also inside a trusted network (always wins).
 	TFANever []string `json:"tfa_never,omitempty"`
+	// TimeZone: the time zone of the whole installation (IANA name): the
+	// times on the website, backups and notifications.
+	TimeZone string `json:"time_zone,omitempty"`
 }
 
 var osInfoChoices = []int{3, 14, 30, 90}
@@ -93,6 +96,9 @@ func (s *Settings) normalize() {
 	}
 	if s.TFAMode != tfaUntrusted || len(s.TFATrusted) == 0 {
 		s.TFAMode = tfaAlways
+	}
+	if !tzNameRe.MatchString(s.TimeZone) {
+		s.TimeZone = defaultTimeZone
 	}
 }
 

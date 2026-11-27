@@ -61,13 +61,40 @@ const icon = (n) => raw(`<svg viewBox="0 0 24 24" fill="none" stroke="currentCol
 
 const now = () => Date.now() / 1000;
 const p2 = (n) => String(n).padStart(2, '0');
+// Every time is shown in the installation's time zone (Settings → General),
+// for every user, whatever zone their browser is in.
+const tzFmt = {};
+function zfmt(key, opts) {
+  const tz = session.time_zone || '';
+  const k = `${key}|${tz}`;
+  if (!tzFmt[k]) {
+    try { tzFmt[k] = new Intl.DateTimeFormat('en-GB', { ...opts, ...(tz ? { timeZone: tz } : {}) }); } catch { tzFmt[k] = new Intl.DateTimeFormat('en-GB', opts); }
+  }
+  return tzFmt[k];
+}
+// zparts: year, month, day, hour, minute, second of a Date, as 2-digit strings.
+function zparts(d) {
+  const o = {};
+  for (const p of zfmt('p', { year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit', hourCycle: 'h23' }).formatToParts(d)) o[p.type] = p.value;
+  if (o.hour === '24') o.hour = '00';
+  return o;
+}
+const zoneAbbr = (d = new Date()) => zfmt('z', { timeZoneName: 'short' }).formatToParts(d).find((p) => p.type === 'timeZoneName')?.value || '';
 function fmtDate(ts, seconds = false) {
   if (!ts) return '—';
   const d = typeof ts === 'string' ? new Date(ts) : new Date(ts * 1000);
   if (isNaN(d)) return '—';
-  const t = `${p2(d.getHours())}:${p2(d.getMinutes())}${seconds ? ':' + p2(d.getSeconds()) : ''}`;
-  return `${p2(d.getDate())}-${p2(d.getMonth() + 1)}-${d.getFullYear()} ${t}`;
+  const o = zparts(d);
+  return `${o.day}-${o.month}-${o.year} ${o.hour}:${o.minute}${seconds ? ':' + o.second : ''}`;
 }
+// The clock at the bottom of the menu.
+setInterval(() => {
+  const el = document.getElementById('clock');
+  if (!el) return;
+  const o = zparts(new Date()), t = `Local time: ${o.hour}:${o.minute}`;
+  if (el.textContent !== t) el.textContent = t;
+}, 1000);
+const clockTitle = () => `${session.time_zone || 'UTC'} (${zoneAbbr()}) — Settings › General`;
 function ago(ts) {
   if (!ts) return 'never';
   const d = Math.max(0, now() - ts);
@@ -576,7 +603,7 @@ function renderShell() {
           ${SUBNAV[h] ? html`<div class="subnav ${open.has(h) ? '' : 'folded'}" data-sec="${h}">${SUBNAV[h]().map(([k, l]) => html`<a href="#/${h}/${k}" class="${active === h && sub === k ? 'active' : ''}">${l}${h === 'dashboard' && k === 'devices' ? html`<span id="nav-pending"></span>` : ''}</a>`)}</div>` : ''}`)}
           <a href="#/account" class="mobonly ${active === 'account' ? 'active' : ''}" title="My Account">${icon('user')}</a></nav>
         <div class="foot"><div class="verinfo"><a class="who ${active === 'account' ? 'active' : ''}" href="#/account" title="My Account: password, 2FA and notification email">${icon('user')}<span><b>${session.user?.name}</b>${canChange() ? '' : html` <span class="badge info">read-only</span>`}<span class="dim small">My Account</span></span></a>
-          <span title="Website and master version">Coremon v${session.version}</span>${releasedLabel() ? html`<span class="dim">${releasedLabel()}</span>` : ''}</div>
+          <span title="Website and master version">Coremon v${session.version}</span>${releasedLabel() ? html`<span class="dim">${releasedLabel()}</span>` : ''}<span id="clock" class="dim" title="${clockTitle()}">Local time: ${hhmm(Date.now() / 1000)}</span></div>
           <button class="btn ghost sm iconbtn" data-act="logout" title="Sign out">${icon('logout')}</button></div>
       </aside>
       <main class="main" id="view"></main>
@@ -763,7 +790,7 @@ function unrNotice(a) {
   return html`<div class="notice unr"><b>Unreachable</b> — it does not answer, and <a href="#/device/${a.unreach.id}"><b>${a.unreach.name}</b></a>, which it is connected via, is down or in maintenance. It is not counted as a failure of its own; its checks keep running.</div>`;
 }
 // Maintenance: nothing checked or started automatically, no failures shown.
-const hhmm = (ts) => new Date(ts * 1000).toTimeString().slice(0, 5);
+const hhmm = (ts) => { const o = zparts(new Date(ts * 1000)); return `${o.hour}:${o.minute}`; };
 const maintUntil = (m) => (m.until ? `until ${hhmm(m.until)}` : 'until ended');
 const maintText = (m) => `in maintenance since ${hhmm(m.since)} by ${m.by}, ${maintUntil(m)}`;
 // During maintenance agent actions need a connected agent (not queued).
@@ -2572,7 +2599,7 @@ function rttGraph(rtt) {
   const ticks = [];
   for (let v = 0; v <= top + 1e-9; v += step) ticks.push(v);
   for (const v of ticks) grid += `<line x1="0" x2="${n}" y1="${y(v * 1000)}" y2="${y(v * 1000)}"/>`;
-  const xl = slots.filter((s) => { const d = new Date(s.t * 1000); return d.getMinutes() === 0 && d.getHours() % 2 === 0; });
+  const xl = slots.filter((s) => { const o = zparts(new Date(s.t * 1000)); return +o.minute === 0 && +o.hour % 2 === 0; });
   for (const s of xl) grid += `<line x1="${s.i}" x2="${s.i}" y1="0" y2="${H}"/>`;
   const fmtV = (v) => (step < 1 ? v.toFixed(step < 0.5 ? 2 : 1).replace(/\.?0+$/, '') || '0' : String(+v.toFixed(1)));
   return html`<div class="rttg">
@@ -3147,7 +3174,7 @@ function valGraph(s) {
   const ticks = [];
   for (let v = 0; v <= top + 1e-9; v += step) ticks.push(v);
   for (const v of ticks) grid += `<line x1="0" x2="${n}" y1="${y(v)}" y2="${y(v)}"/>`;
-  const xl = slots.filter((x) => { const d = new Date(x.t * 1000); return d.getMinutes() === 0 && d.getHours() % 2 === 0; });
+  const xl = slots.filter((x) => { const o = zparts(new Date(x.t * 1000)); return +o.minute === 0 && +o.hour % 2 === 0; });
   for (const x of xl) grid += `<line x1="${x.i}" x2="${x.i}" y1="0" y2="${H}"/>`;
   const lim = `<line class="limit" x1="0" x2="${n}" y1="${y(s.limit)}" y2="${y(s.limit)}"/>`;
   const fmtV = (v) => (step < 1 ? v.toFixed(step < 0.5 ? 2 : 1).replace(/\.?0+$/, '') || '0' : String(+v.toFixed(1)));
@@ -3763,7 +3790,7 @@ function Releases() {
   function renderQueue() {
     const Q = st.queue;
     if (!Q) return;
-    const today = (ts) => new Date(ts * 1000).toDateString() === new Date().toDateString();
+    const today = (ts) => fmtDate(ts).split(' ')[0] === fmtDate(Date.now() / 1000).split(' ')[0];
     const at = (ts) => (today(ts) ? fmtDate(ts).split(' ')[1] : fmtDate(ts));
     const status = (i) => ({
       now: html`<span class="row" style="gap:6px;flex-wrap:nowrap"><span class="spin"></span>looking up now</span>`,
@@ -3956,8 +3983,7 @@ const NOTIFY_PRIO = [[1, 'Min'], [2, 'Low'], [3, 'Default'], [4, 'High'], [5, 'U
 const NOTIFY_EVENT = { device: 'Device', service: 'Service', upstream: 'Upstream', pending: 'New device', summary: 'Daily summary', outage: 'Delay note' };
 const NOTIFIER = { ntfy: 'ntfy', pushover: 'Pushover' };
 function SettingsNotify() {
-  const st = { d: null, test: {}, testing: {} };
-  const tz = (() => { try { return Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC'; } catch { return 'UTC'; } })();
+  const st = { d: null, test: {}, tab: '' };
   const target = (id) => st.d.targets.find((t) => t.id === id);
   const form = () => $('#nt form');
   const fld = (id, name) => form()?.elements[`${id}-${name}`];
@@ -3987,13 +4013,29 @@ function SettingsNotify() {
     if (!on && !parts.length) parts.push(html`<span class="dim small">Off: nothing is sent and nothing is kept for later.</span>`);
     setHTML(box, html`${parts}`);
   }
-  const statusAll = () => st.d.targets.forEach((t) => status(t.id));
+  // The dot on a tab: grey off, green on, red/yellow flashing on a problem
+  // (not reachable, messages waiting, or the last test failed).
+  function dot(id) {
+    const t = target(id), el = $(`#nt-tabs [data-id="${id}"] .nt-dot`);
+    if (!el) return;
+    const on = fld(id, 'on')?.checked ?? t.on, bad = on && (t.outage || t.waiting || st.test[id]?.ok === false);
+    el.className = `nt-dot ${bad ? 'bad' : on ? 'on' : ''}`;
+    el.title = bad ? 'Problem: see the panel' : on ? 'On' : 'Off';
+  }
+  const statusAll = () => st.d.targets.forEach((t) => { status(t.id); dot(t.id); });
+  function showTab(id) {
+    st.tab = id;
+    const i = st.d.targets.findIndex((t) => t.id === id);
+    $('#nt-tabs')?.style.setProperty('--i', i);
+    document.querySelectorAll('#nt-tabs .nt-tab').forEach((b) => { const on = b.dataset.id === id; b.classList.toggle('on', on); b.setAttribute('aria-selected', on); });
+    document.querySelectorAll('#nt .nt-target').forEach((p) => { p.hidden = p.dataset.id !== id; });
+  }
   const testRow = (id) => html`<div class="row" style="gap:10px;align-items:center;margin-top:4px"><button type="button" class="btn" data-act="test" data-id="${id}">${icon('send')} Send test message</button><span id="st-${id}" style="flex:1"></span></div>`;
   const linkBox = (t) => html`<label class="checkrow" style="margin-top:6px"><input type="checkbox" name="${t.id}-link" ${t.no_link ? '' : 'checked'}> Show a link to Coremon in the message</label>`;
   const head = (t, sub) => html`<div class="row" style="justify-content:space-between;align-items:center;gap:12px;margin-bottom:6px">
     <div><h2 style="margin:0">${NOTIFIER[t.type]}</h2><div class="muted small">${sub}</div></div>${sw(t.id, t.on)}</div>`;
   function ntfyPanel(t) {
-    return html`<div class="panel panel-pad nt-target ${t.on ? 'is-on' : ''}">
+    return html`<div class="panel panel-pad nt-target ${t.on ? 'is-on' : ''}" data-id="${t.id}" role="tabpanel">
       ${head(t, 'Push messages to the ntfy app on your phone or desktop')}
       <div class="grid2" style="gap:12px">
         <label class="field">Server<input type="text" name="ntfy-server" value="${t.server}" placeholder="https://ntfy.sh" spellcheck="false" autocomplete="off"></label>
@@ -4009,7 +4051,7 @@ function SettingsNotify() {
     </div>`;
   }
   function pushoverPanel(t) {
-    return html`<div class="panel panel-pad nt-target ${t.on ? 'is-on' : ''}">
+    return html`<div class="panel panel-pad nt-target ${t.on ? 'is-on' : ''}" data-id="${t.id}" role="tabpanel">
       ${head(t, 'Push messages to the Pushover app (pushover.net)')}
       <div class="grid2" style="gap:12px">
         ${secret('pushover', 'app_token', 'Application token', t.app_token_set, '30 letters and digits')}
@@ -4027,10 +4069,11 @@ function SettingsNotify() {
     const ev = (e) => html`<div class="nt-ev"><label class="checkrow"><input type="checkbox" name="ev-${e.key}" ${e.on ? 'checked' : ''}> ${e.title}</label>
       <select name="prio-${e.key}">${NOTIFY_PRIO.map(([v, l]) => html`<option value="${v}" ${e.prio === v ? 'selected' : ''}>${l}</option>`)}</select></div>`;
     setHTML($('#nt'), html`<form class="form" data-submit="save"><div class="stack">
+      <div><div class="nt-tabs" id="nt-tabs" role="tablist" style="--n:${d.targets.length};--i:0"><span class="nt-slider"></span>
+        ${d.targets.map((t) => html`<button type="button" class="nt-tab" role="tab" data-act="nt-tab" data-id="${t.id}"><span class="nt-dot"></span>${NOTIFIER[t.type]}</button>`)}</div></div>
       ${d.targets.map((t) => (t.type === 'pushover' ? pushoverPanel(t) : ntfyPanel(t)))}
       <div class="panel panel-pad">
         <h2 style="margin:0 0 4px">Send right away when</h2>
-        <div class="muted small" style="margin-bottom:4px">Every notifier that is on gets the same messages.</div>
         <div class="nt-evs">${d.events.filter((e) => !e.summary).map(ev)}</div>
         <h2 style="margin:16px 0 4px">In the daily summary</h2>
         <div class="muted small" style="margin-bottom:4px">One message a day with what is new and still true, at the highest priority of what it holds. Nothing new: no message.</div>
@@ -4051,11 +4094,11 @@ function SettingsNotify() {
           <input type="number" name="throttle_n" value="${d.throttle_n}" min="1" max="${d.limits.throttle_n}" step="1" required style="width:80px"><span class="muted">messages in</span>
           <input type="number" name="throttle_min" value="${d.throttle_min}" min="1" max="${d.limits.throttle_min}" step="1" required style="width:90px"><span class="muted">minutes</span></div></div>
         <div class="dim small">For a device that keeps going down and up. Further changes wait; when there is room again, one message says how things stand.</div>
-        <div class="dim small" style="margin-top:12px">Times are in your time zone, ${tz}.</div>
-        ${d.tz !== 'UTC' && !d.tz_known ? html`<div class="notice small" style="margin:6px 0 0">The master does not know the time zone ${d.tz} (no time zone data installed): it uses UTC instead.</div>` : ''}
+        <div class="dim small" style="margin-top:12px">Times are in the time zone of Settings › General: ${d.tz} (${zoneAbbr()}).</div>
       </div>
       <div><button class="btn primary">Save</button></div>
     </div></form>`);
+    showTab(st.tab && target(st.tab) ? st.tab : d.targets[0].id); // a save keeps the tab; a visit opens the first
     statusAll();
   }
   const val = (id, name) => fld(id, name)?.value ?? '';
@@ -4076,7 +4119,8 @@ function SettingsNotify() {
       else statusAll();
     },
     acts: {
-      onoff: (t) => { const l = t.closest('.bigswitch'); l.classList.toggle('on', t.checked); l.querySelector('.state').textContent = t.checked ? 'On' : 'Off'; t.closest('.nt-target')?.classList.toggle('is-on', t.checked); status(t.dataset.id); },
+      onoff: (t) => { const l = t.closest('.bigswitch'); l.classList.toggle('on', t.checked); l.querySelector('.state').textContent = t.checked ? 'On' : 'Off'; t.closest('.nt-target')?.classList.toggle('is-on', t.checked); status(t.dataset.id); dot(t.dataset.id); },
+      'nt-tab': (b) => showTab(b.dataset.id),
       auth: (t) => setHTML($('#nt-auth'), authFields(t.value, target('ntfy'))),
       'gen-topic': () => { fld('ntfy', 'topic').value = randTopic(); dirtyForms.add(form()); },
       test: async (b) => {
@@ -4090,13 +4134,14 @@ function SettingsNotify() {
           b.disabled = false;
         }
         status(id);
+        dot(id);
       },
       save: async (f) => {
         const events = {};
         st.d.events.forEach((e) => { events[e.key] = { on: f[`ev-${e.key}`].checked, prio: +f[`prio-${e.key}`].value }; });
         const res = await POST('notify', {
           targets: st.d.targets.map((t) => targetBody(t.id)), events, also_hidden: f.also_hidden.checked, no_link: !f.link.checked, public_url: f.public_url.value.trim(),
-          quiet: f.quiet.checked, quiet_from: f.quiet_from.value, quiet_to: f.quiet_to.value, summary_at: f.summary_at.value, tz,
+          quiet: f.quiet.checked, quiet_from: f.quiet_from.value, quiet_to: f.quiet_to.value, summary_at: f.summary_at.value,
           throttle_n: +f.throttle_n.value, throttle_min: +f.throttle_min.value,
         });
         const on = st.d.targets.filter((t) => fld(t.id, 'on').checked).map((t) => NOTIFIER[t.type]);
@@ -4131,6 +4176,33 @@ function NotifyLog() {
     },
     async refresh() { st.d = await GET('notify/log'); render(); },
   };
+}
+
+// The official time zones the browser knows (IANA names), with their offset
+// and, where it has one, summer time.
+function zoneItems(cur) {
+  let zones = [];
+  try { zones = Intl.supportedValuesOf('timeZone'); } catch { zones = []; }
+  zones = [...new Set(['UTC', ...zones, ...(cur ? [cur] : [])])];
+  const y = new Date().getUTCFullYear();
+  const days = [new Date(Date.UTC(y, 0, 15, 12)), new Date(Date.UTC(y, 6, 15, 12))];
+  const info = (z, d) => {
+    try {
+      const part = (o, lang = 'en-GB') => new Intl.DateTimeFormat(lang, { timeZone: z, timeZoneName: o }).formatToParts(d).find((p) => p.type === 'timeZoneName')?.value || '';
+      const off = part('longOffset').replace('GMT', 'UTC') || 'UTC';
+      const m = off.match(/([+-])(\d\d):(\d\d)/);
+      // Short names (CET, EST, AEST) as each region writes them.
+      const ab = ['en-GB', 'en-US', 'en-AU', 'en-NZ'].map((l) => part('short', l)).find((x) => x && !/^(GMT|UTC)[+-]/.test(x)) || '';
+      return { off: off === 'UTC' ? 'UTC+00:00' : off, mins: m ? (m[1] === '-' ? -1 : 1) * (+m[2] * 60 + +m[3]) : 0, ab: ab === 'UTC' ? '' : ab };
+    } catch { return { off: '', mins: 0, ab: '' }; }
+  };
+  const txt = (x) => (x.ab ? `${x.ab}, ${x.off}` : x.off);
+  return zones.sort((a, b) => a.localeCompare(b)).map((z) => {
+    const [a, b] = days.map((d) => info(z, d));
+    const [std, dst] = a.mins <= b.mins ? [a, b] : [b, a];
+    const sub = std.mins === dst.mins ? txt(std) : `${txt(std)} · summer time ${txt(dst)}`;
+    return { v: z, label: z.replace(/_/g, ' '), sub, find: `${z} ${std.ab} ${dst.ab}` };
+  });
 }
 
 function SettingsGeneral() {
@@ -4264,6 +4336,9 @@ function SettingsGeneral() {
             <div class="dim small" id="ret-info"></div>
             <label class="checkrow"><input type="checkbox" name="proberesults" ${s.probe_results_shown ? 'checked' : ''}> Show received probe results on Remote Probes</label>
             <div class="dim small">Activity › Remote Probes then also lists each batch of check results a remote probe sends, for 20 seconds, with the checks that failed. For all users.</div>`)}
+        ${block('time', 'Time zone', 'The times on the website, of backups and of notifications', html`
+            <div class="field">Time zone${pick('tz', zoneItems(s.time_zone), s.time_zone, { ph: 'Search a city, region or abbreviation…' })}</div>
+            <div class="dim small">Every time on the website is shown in this zone, for every user, whatever zone their browser is in. Automatic backups run at 01:00 in it, and notifications use it for quiet hours and the daily summary. Summer time is followed automatically.</div>`)}
         </div>`);
       st.d = d;
       st.me = meFrom(d);
@@ -4363,6 +4438,15 @@ function SettingsGeneral() {
         st.saved = res.settings.retention_days;
         toast('History & display saved', 'ok');
         preview(f);
+      },
+      'save-time': async (f) => {
+        const res = await POST('settings/time', { time_zone: f.tz.value });
+        session.time_zone = res.settings.time_zone;
+        $('#clock')?.setAttribute('title', clockTitle());
+        toast(`Time zone saved: ${session.time_zone} (${zoneAbbr()})`, 'ok');
+        osInfoBox(st.d.os_info);
+        vulnBox(st.d.vulns);
+        preview(form('history'));
       },
     },
   };

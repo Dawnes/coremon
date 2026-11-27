@@ -91,6 +91,7 @@ type notifyTargetView struct {
 func (s *Server) handleNotifyGet(w http.ResponseWriter, r *http.Request) {
 	s.st.mu.Lock()
 	n := s.st.st.Notify
+	tz := s.st.st.Settings.TimeZone
 	var ts []notifyTargetView
 	for _, t := range n.Targets {
 		ts = append(ts, notifyTargetView{ID: t.ID, Type: t.Type, On: t.On, Server: t.Server, Topic: t.Topic, Auth: t.Auth, User: t.User,
@@ -118,7 +119,7 @@ func (s *Server) handleNotifyGet(w http.ResponseWriter, r *http.Request) {
 	}
 	s.ntf.mu.Unlock()
 	writeJSON(w, map[string]any{"targets": ts, "events": evs, "also_hidden": n.AlsoHidden, "no_link": n.NoLink, "public_url": n.PublicURL,
-		"quiet": n.Quiet, "quiet_from": n.QuietFrom, "quiet_to": n.QuietTo, "summary_at": n.SummaryAt, "tz": n.TZ, "tz_known": tzKnown(n.TZ),
+		"quiet": n.Quiet, "quiet_from": n.QuietFrom, "quiet_to": n.QuietTo, "summary_at": n.SummaryAt, "tz": tz,
 		"throttle_n": n.ThrottleN, "throttle_min": n.ThrottleM,
 		"limits": map[string]int{"throttle_n": maxThrottleN, "throttle_min": maxThrottleM}})
 }
@@ -203,9 +204,9 @@ func (s *Server) handleNotifySave(w http.ResponseWriter, r *http.Request) {
 		QuietFrom  string                 `json:"quiet_from"`
 		QuietTo    string                 `json:"quiet_to"`
 		SummaryAt  string                 `json:"summary_at"`
-		TZ         string                 `json:"tz"`
-		ThrottleN  int                    `json:"throttle_n"`
-		ThrottleM  int                    `json:"throttle_min"`
+
+		ThrottleN int `json:"throttle_n"`
+		ThrottleM int `json:"throttle_min"`
 	}
 	if !readJSON(w, r, &req, 16<<10) {
 		return
@@ -226,10 +227,7 @@ func (s *Server) handleNotifySave(w http.ResponseWriter, r *http.Request) {
 		bad("the quiet hours must start and end at different times")
 		return
 	}
-	if req.TZ != "" && !tzNameRe.MatchString(req.TZ) {
-		bad("not a time zone name")
-		return
-	}
+
 	if req.ThrottleN < 1 || req.ThrottleN > maxThrottleN || req.ThrottleM < 1 || req.ThrottleM > maxThrottleM {
 		bad(fmt.Sprintf("at most 1 to %d messages in 1 to %d minutes", maxThrottleN, maxThrottleM))
 		return
@@ -245,7 +243,7 @@ func (s *Server) handleNotifySave(w http.ResponseWriter, r *http.Request) {
 	old := s.st.st.Notify
 	s.st.mu.Unlock()
 	nu := NotifySettings{Events: map[string]NotifyEvent{}, AlsoHidden: req.AlsoHidden, NoLink: req.NoLink, PublicURL: pub,
-		Quiet: req.Quiet, QuietFrom: req.QuietFrom, QuietTo: req.QuietTo, SummaryAt: req.SummaryAt, TZ: req.TZ,
+		Quiet: req.Quiet, QuietFrom: req.QuietFrom, QuietTo: req.QuietTo, SummaryAt: req.SummaryAt,
 		ThrottleN: req.ThrottleN, ThrottleM: req.ThrottleM}
 	for k, e := range old.Events {
 		nu.Events[k] = e
@@ -296,7 +294,7 @@ func (s *Server) handleNotifySave(w http.ResponseWriter, r *http.Request) {
 	if nu.ThrottleN != old.ThrottleN || nu.ThrottleM != old.ThrottleM {
 		changes = append(changes, fmt.Sprintf("at most %d messages in %d minutes per device", nu.ThrottleN, nu.ThrottleM))
 	}
-	if nu.PublicURL != old.PublicURL || nu.NoLink != old.NoLink || nu.AlsoHidden != old.AlsoHidden || nu.TZ != old.TZ {
+	if nu.PublicURL != old.PublicURL || nu.NoLink != old.NoLink || nu.AlsoHidden != old.AlsoHidden {
 		changes = append(changes, "options changed")
 	}
 	// Pushover: check the token and key with Pushover itself when they are

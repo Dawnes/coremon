@@ -53,7 +53,7 @@ func TestBackupSlots(t *testing.T) {
 }
 
 func TestBackupSchedule(t *testing.T) {
-	loc := time.Local
+	loc := time.FixedZone("CET", 3600)
 	tue := time.Date(2026, 11, 10, 14, 0, 0, 0, loc) // a Tuesday
 	cases := map[string]time.Time{
 		"daily":   time.Date(2026, 11, 11, 1, 0, 0, 0, loc),
@@ -61,7 +61,7 @@ func TestBackupSchedule(t *testing.T) {
 		"monthly": time.Date(2026, 12, 1, 1, 0, 0, 0, loc),
 	}
 	for sched, want := range cases {
-		if got := nextBackupAfter(sched, tue); !got.Equal(want) {
+		if got := nextBackupAfter(sched, tue, loc); !got.Equal(want) {
 			t.Errorf("%s: %v, want %v", sched, got, want)
 		}
 	}

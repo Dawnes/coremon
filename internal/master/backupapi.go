@@ -133,7 +133,7 @@ func (s *Server) handleBackupDownload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.audit.write(me.Name, clientIP(r), "backup.downloaded", "", fmt.Sprintf("encrypted backup (%d users, %d devices)", m.Users, m.Systems))
-	name := "coremon-backup-" + time.Unix(m.Created, 0).Local().Format("2006-01-02-1504") + ".cmbak"
+	name := "coremon-backup-" + time.Unix(m.Created, 0).In(s.zoneNow()).Format("2006-01-02-1504") + ".cmbak"
 	w.Header().Set("Content-Type", "application/octet-stream")
 	w.Header().Set("Content-Disposition", `attachment; filename="`+name+`"`)
 	w.Header().Set("Cache-Control", "no-store")

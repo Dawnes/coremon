@@ -124,6 +124,7 @@ func (s *Server) handleSession(w http.ResponseWriter, r *http.Request) {
 				}
 				out["prev_login"], out["prev_ip"] = u.PrevLogin, u.PrevIP
 				out["notify_email"] = u.NotifyEmail
+				out["time_zone"] = s.st.st.Settings.TimeZone
 			}
 			s.st.mu.Unlock()
 		}

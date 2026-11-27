@@ -203,6 +203,7 @@ func (s *Server) notifyTickOnce(now time.Time) {
 	full := n.lastFull.IsZero() || now.Sub(n.lastFull) >= notifyFullTick
 	s.st.mu.Lock()
 	cfg := s.st.st.Notify
+	cfg.TZ = s.st.st.Settings.TimeZone
 	cfg.Targets = nil
 	for _, t := range s.st.st.Notify.Targets {
 		c := *t
@@ -249,7 +250,7 @@ func clockText(cfg *NotifySettings, at int64) string {
 // notifySnap: caller holds s.st.mu.
 func (s *Server) notifySnap(full bool, now time.Time) *ntfSnap {
 	ts := now.Unix()
-	cfg := &s.st.st.Notify
+	cfg := &NotifySettings{TZ: s.st.st.Settings.TimeZone}
 	sn := &ntfSnap{full: full, devs: map[string]*ntfDev{}, pending: map[string]string{}}
 	group := func(id string) string {
 		if g := s.st.group(id); g != nil {

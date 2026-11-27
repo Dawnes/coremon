@@ -7,6 +7,7 @@ package master
 //   - access:  website port, master URL, 2FA code and trusted networks
 //   - lookups: OS support dates, vulnerability checks, GitHub repository
 //   - history: audit log and job history retention, received probe results
+//   - time:    the time zone of the installation
 
 import (
 	"fmt"
@@ -29,6 +30,7 @@ type settingsBlock struct {
 	GitHubRepo         string `json:"github_repo"`
 	RetentionDays      int    `json:"retention_days"`
 	ProbeResultsShown  bool   `json:"probe_results_shown"`
+	TimeZone           string `json:"time_zone"`
 }
 
 func (s *Server) handleSettingsBlock(w http.ResponseWriter, r *http.Request) {
@@ -95,6 +97,15 @@ func (s *Server) handleSettingsBlock(w http.ResponseWriter, r *http.Request) {
 			bad(fmt.Sprintf("retention must be %d-%d days", minRetention, maxRetention))
 			return
 		}
+	case "time":
+		if !tzNameRe.MatchString(req.TimeZone) {
+			bad("choose a time zone")
+			return
+		}
+		if _, err := time.LoadLocation(req.TimeZone); err != nil {
+			bad("unknown time zone " + req.TimeZone)
+			return
+		}
 	default:
 		http.Error(w, "unknown settings block", http.StatusNotFound)
 		return
@@ -126,6 +137,9 @@ func (s *Server) handleSettingsBlock(w http.ResponseWriter, r *http.Request) {
 	case "history":
 		set.RetentionDays, set.ProbeResultsShown = req.RetentionDays, req.ProbeResultsShown
 		detail = fmt.Sprintf("retention=%dd", set.RetentionDays)
+	case "time":
+		set.TimeZone = req.TimeZone
+		detail = "time zone " + old.TimeZone + " → " + set.TimeZone
 	}
 	now := *set
 	s.st.markDirty()

@@ -428,10 +428,11 @@ func (s *Server) describe(slot int, name string) *slotView {
 
 // ---- schedule ----
 
-// nextBackupAfter: the first scheduled time (01:00 local) after t.
-func nextBackupAfter(schedule string, t time.Time) time.Time {
-	t = t.Local()
-	day := time.Date(t.Year(), t.Month(), t.Day(), 1, 0, 0, 0, time.Local)
+// nextBackupAfter: the first scheduled time (01:00 in loc, the
+// installation's time zone) after t.
+func nextBackupAfter(schedule string, t time.Time, loc *time.Location) time.Time {
+	t = t.In(loc)
+	day := time.Date(t.Year(), t.Month(), t.Day(), 1, 0, 0, 0, loc)
 	for i := 0; i < 400; i++ {
 		c := day.AddDate(0, 0, i)
 		if !c.After(t) {
@@ -487,7 +488,7 @@ func (s *Server) backupTick(now time.Time) {
 		s.saveBackupIndex(idx)
 	}
 	s.bk.idxMu.Unlock()
-	next := nextBackupAfter(sched, time.Unix(idx.LastAuto, 0))
+	next := nextBackupAfter(sched, time.Unix(idx.LastAuto, 0), s.zoneNow())
 	if next.IsZero() || now.Before(next) {
 		return
 	}

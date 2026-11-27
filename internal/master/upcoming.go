@@ -82,7 +82,7 @@ func (s *Server) masterTasks(now time.Time) []upcomingTask {
 		if last > 0 {
 			from = time.Unix(last, 0)
 		}
-		if next := nextBackupAfter(set.BackupSchedule, from); !next.IsZero() {
+		if next := nextBackupAfter(set.BackupSchedule, from, zoneOf(set.TimeZone)); !next.IsZero() {
 			add("backup", "Automatic backup", set.BackupSchedule, next)
 		}
 	}

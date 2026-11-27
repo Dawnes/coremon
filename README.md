@@ -120,6 +120,11 @@ as **agentless** devices: the master itself pings them and checks their services
   address is set. Messages are kept for up to 24 hours while the server
   cannot be reached, followed by a note that they were late. Activity →
   Notifications lists what was sent, held back or failed.
+* **Time zone**: one time zone for the whole installation (Settings → General,
+  Europe/Amsterdam by default). Every time on the website is shown in it for
+  every user, with a running clock below the menu; automatic backups run at
+  01:00 in it, and notifications use it for quiet hours and the daily summary.
+  Summer time is followed automatically; the zone data is built in.
 * **Maintenance**: pause all checks of a device for 5 minutes up to 4 hours, or
   until ended by hand; no automatic jobs run and no failures are shown meanwhile.
 * **Releases**: update the master and the agents from the website.
