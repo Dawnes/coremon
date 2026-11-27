@@ -315,6 +315,72 @@ func TestNtfySend(t *testing.T) {
 	}
 }
 
+func TestPushover(t *testing.T) {
+	var form map[string]string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		r.ParseForm()
+		form = map[string]string{"path": r.URL.Path}
+		for k := range r.PostForm {
+			form[k] = r.PostForm.Get(k)
+		}
+		switch {
+		case r.PostForm.Get("user") == strings.Repeat("b", 30):
+			w.WriteHeader(http.StatusBadRequest)
+			w.Write([]byte(`{"user":"invalid","errors":["user identifier is not a valid user, group, or subscribed user key"],"status":0}`))
+		case r.PostForm.Get("token") == strings.Repeat("z", 30):
+			w.WriteHeader(http.StatusInternalServerError)
+		default:
+			w.Write([]byte(`{"status":1,"request":"x"}`))
+		}
+	}))
+	defer srv.Close()
+	old := pushoverURL
+	pushoverURL = srv.URL + "/1"
+	defer func() { pushoverURL = old }()
+
+	tg := &NotifyTarget{Type: notifyPushover, AppToken: strings.Repeat("a", 30), UserKey: strings.Repeat("u", 30), Devices: "phone,tablet"}
+	m := notifyMsg{Title: "web is down", Body: "No contact.", Prio: 5, Click: "https://cm/#/device/a1", At: 1795800000}
+	if perm, err := sendTarget(tg, m); err != nil || perm {
+		t.Fatal(err)
+	}
+	if form["path"] != "/1/messages.json" || form["priority"] != "1" || form["device"] != "phone,tablet" || form["url"] != "https://cm/#/device/a1" ||
+		form["url_title"] != "Open in Coremon" || form["message"] != "No contact." || form["timestamp"] != "1795800000" {
+		t.Errorf("sent: %v", form)
+	}
+	tg.NoLink = true
+	sendTarget(tg, m)
+	if _, ok := form["url"]; ok {
+		t.Error("link sent while switched off")
+	}
+	for p, want := range map[int]string{1: "-2", 2: "-1", 3: "0", 4: "1", 5: "1"} {
+		if pushoverPrio(p) != want {
+			t.Errorf("prio %d", p)
+		}
+	}
+	bad := *tg
+	bad.UserKey = strings.Repeat("b", 30)
+	if perm, err := sendTarget(&bad, m); !perm || err == nil || !strings.Contains(err.Error(), "not a valid user") {
+		t.Errorf("bad key: %v %v", perm, err)
+	}
+	if reached, err := pushoverValidate(&bad); !reached || err == nil {
+		t.Errorf("validate bad key: %v %v", reached, err)
+	}
+	if reached, err := pushoverValidate(tg); !reached || err != nil || form["path"] != "/1/users/validate.json" {
+		t.Errorf("validate: %v %v %v", reached, err, form)
+	}
+	down := *tg
+	down.AppToken = strings.Repeat("z", 30)
+	if reached, err := pushoverValidate(&down); reached || err == nil {
+		t.Errorf("validate while Pushover fails: %v %v", reached, err)
+	}
+	if d, err := checkDevices(" phone , my-tablet,"); err != nil || d != "phone,my-tablet" {
+		t.Errorf("devices: %q %v", d, err)
+	}
+	if _, err := checkDevices("bad device"); err == nil {
+		t.Error("bad device name accepted")
+	}
+}
+
 func TestNotifyAPI(t *testing.T) {
 	pub, _ := keys(t)
 	s := testServer(t, pub, "http://127.0.0.1:1/none", "0.3.0")
@@ -368,5 +434,41 @@ func TestNotifyAPI(t *testing.T) {
 	}
 	if code, _ := c.do("GET", "/api/ui/notify/log", ""); code != 200 {
 		t.Error("log")
+	}
+
+	// Pushover: the keys are checked with Pushover on save.
+	old := pushoverCheck
+	defer func() { pushoverCheck = old }()
+	tok, key := strings.Repeat("a", 30), strings.Repeat("k", 30)
+	ntfy := `{"id":"ntfy","on":false,"server":"https://ntfy.sh","topic":"coremon-x1","auth":"none"}`
+	po := func(extra string) string {
+		return `{"targets":[` + ntfy + `,{"id":"pushover","on":true,"app_token":"` + tok + `","user_key":"` + key + `"` + extra + `}],` + base + `}`
+	}
+	pushoverCheck = func(*NotifyTarget) (bool, error) { return true, errors.New("Pushover answered: user key is invalid") }
+	if code, b := save(po("")); code != 400 || !strings.Contains(b, "user key is invalid") {
+		t.Errorf("rejected key: %d %s", code, b)
+	}
+	pushoverCheck = func(*NotifyTarget) (bool, error) { return false, errors.New("could not reach the server: timeout") }
+	if code, b := save(po(`,"devices":"phone, tablet","no_link":true`)); code != 200 || !strings.Contains(b, "could not be checked") {
+		t.Errorf("unreachable: %d %s", code, b)
+	}
+	_, body = c.do("GET", "/api/ui/notify", "")
+	if strings.Contains(body, tok) || strings.Contains(body, key) || !strings.Contains(body, `"app_token_set":true`) || !strings.Contains(body, `"devices":"phone,tablet"`) {
+		t.Errorf("pushover view: %s", body)
+	}
+	checked := 0
+	pushoverCheck = func(*NotifyTarget) (bool, error) { checked++; return true, nil }
+	save(`{"targets":[` + ntfy + `,{"id":"pushover","on":true,"devices":"phone,tablet","no_link":true}],` + base + `}`) // keys kept, unchanged
+	if checked != 0 {
+		t.Error("unchanged keys checked again")
+	}
+	if code, _ := save(`{"targets":[` + ntfy + `,{"id":"pushover","on":true,"user_key":"short"}],` + base + `}`); code != 400 {
+		t.Error("bad user key accepted")
+	}
+	s.st.mu.Lock()
+	p := s.st.st.Notify.target("pushover")
+	s.st.mu.Unlock()
+	if p.AppToken != tok || p.UserKey != key || !p.NoLink || !p.On {
+		t.Errorf("stored: %+v", p)
 	}
 }

@@ -71,15 +71,21 @@ func cleanNetErr(err error) error {
 }
 
 type notifyTargetView struct {
-	ID          string `json:"id"`
-	Type        string `json:"type"`
-	On          bool   `json:"on"`
-	Server      string `json:"server"`
-	Topic       string `json:"topic"`
-	Auth        string `json:"auth"`
-	User        string `json:"user,omitempty"`
-	TokenSet    bool   `json:"token_set"`
-	PasswordSet bool   `json:"password_set"`
+	ID          string     `json:"id"`
+	Type        string     `json:"type"`
+	On          bool       `json:"on"`
+	Server      string     `json:"server"`
+	Topic       string     `json:"topic"`
+	Auth        string     `json:"auth"`
+	User        string     `json:"user,omitempty"`
+	TokenSet    bool       `json:"token_set"`
+	PasswordSet bool       `json:"password_set"`
+	AppTokenSet bool       `json:"app_token_set"`
+	UserKeySet  bool       `json:"user_key_set"`
+	Devices     string     `json:"devices,omitempty"`
+	NoLink      bool       `json:"no_link"`
+	Waiting     int        `json:"waiting"`
+	Outage      *ntfOutage `json:"outage,omitempty"`
 }
 
 func (s *Server) handleNotifyGet(w http.ResponseWriter, r *http.Request) {
@@ -88,7 +94,8 @@ func (s *Server) handleNotifyGet(w http.ResponseWriter, r *http.Request) {
 	var ts []notifyTargetView
 	for _, t := range n.Targets {
 		ts = append(ts, notifyTargetView{ID: t.ID, Type: t.Type, On: t.On, Server: t.Server, Topic: t.Topic, Auth: t.Auth, User: t.User,
-			TokenSet: t.Token != "", PasswordSet: t.Password != ""})
+			TokenSet: t.Token != "", PasswordSet: t.Password != "", AppTokenSet: t.AppToken != "", UserKeySet: t.UserKey != "",
+			Devices: t.Devices, NoLink: t.NoLink})
 	}
 	var evs []notifyEventDef
 	for _, d := range notifyEventDefs {
@@ -98,16 +105,21 @@ func (s *Server) handleNotifyGet(w http.ResponseWriter, r *http.Request) {
 	}
 	s.st.mu.Unlock()
 	s.ntf.mu.Lock()
-	waiting := len(s.ntf.f.Queue)
-	var outage *ntfOutage
-	if o := s.ntf.f.Outage[notifyNtfy]; o != nil {
-		c := *o
-		outage = &c
+	for i := range ts {
+		for _, m := range s.ntf.f.Queue {
+			if m.Target == ts[i].ID {
+				ts[i].Waiting++
+			}
+		}
+		if o := s.ntf.f.Outage[ts[i].ID]; o != nil {
+			c := *o
+			ts[i].Outage = &c
+		}
 	}
 	s.ntf.mu.Unlock()
 	writeJSON(w, map[string]any{"targets": ts, "events": evs, "also_hidden": n.AlsoHidden, "no_link": n.NoLink, "public_url": n.PublicURL,
 		"quiet": n.Quiet, "quiet_from": n.QuietFrom, "quiet_to": n.QuietTo, "summary_at": n.SummaryAt, "tz": n.TZ, "tz_known": tzKnown(n.TZ),
-		"throttle_n": n.ThrottleN, "throttle_min": n.ThrottleM, "waiting": waiting, "outage": outage,
+		"throttle_n": n.ThrottleN, "throttle_min": n.ThrottleM,
 		"limits": map[string]int{"throttle_n": maxThrottleN, "throttle_min": maxThrottleM}})
 }
 
@@ -118,15 +130,23 @@ type notifyTargetReq struct {
 	Topic    string `json:"topic"`
 	Auth     string `json:"auth"`
 	User     string `json:"user"`
-	Token    string `json:"token"`    // "" keeps the stored one
-	Password string `json:"password"` // "" keeps the stored one
+	Token    string `json:"token"`     // "" keeps the stored one
+	Password string `json:"password"`  // "" keeps the stored one
+	AppToken string `json:"app_token"` // "" keeps the stored one
+	UserKey  string `json:"user_key"`  // "" keeps the stored one
+	Devices  string `json:"devices"`
+	NoLink   bool   `json:"no_link"`
 }
 
 // targetFrom: the request applied to the stored target; secrets left empty
 // are kept. checkTopic: a topic is required (on, or for a test).
 func targetFrom(old *NotifyTarget, req notifyTargetReq, checkTopic bool) (*NotifyTarget, error) {
+	if old.Type == notifyPushover {
+		return pushoverFrom(old, req, checkTopic)
+	}
 	t := *old
 	t.On = req.On
+	t.NoLink = req.NoLink
 	srv, err := checkNtfyServer(req.Server)
 	if err != nil {
 		return nil, err
@@ -222,8 +242,8 @@ func (s *Server) handleNotifySave(w http.ResponseWriter, r *http.Request) {
 	}
 
 	s.st.mu.Lock()
-	defer s.st.mu.Unlock()
 	old := s.st.st.Notify
+	s.st.mu.Unlock()
 	nu := NotifySettings{Events: map[string]NotifyEvent{}, AlsoHidden: req.AlsoHidden, NoLink: req.NoLink, PublicURL: pub,
 		Quiet: req.Quiet, QuietFrom: req.QuietFrom, QuietTo: req.QuietTo, SummaryAt: req.SummaryAt, TZ: req.TZ,
 		ThrottleN: req.ThrottleN, ThrottleM: req.ThrottleM}
@@ -251,8 +271,12 @@ func (s *Server) handleNotifySave(w http.ResponseWriter, r *http.Request) {
 		switch {
 		case nt.On != ot.On:
 			changes = append(changes, name+" switched "+map[bool]string{true: "on", false: "off"}[nt.On])
-		case nt.Server != ot.Server || nt.Topic != ot.Topic || nt.Auth != ot.Auth || nt.User != ot.User || nt.Token != ot.Token || nt.Password != ot.Password:
+		case nt.Server != ot.Server || nt.Topic != ot.Topic || nt.Auth != ot.Auth || nt.User != ot.User || nt.Token != ot.Token || nt.Password != ot.Password ||
+			nt.AppToken != ot.AppToken || nt.UserKey != ot.UserKey || nt.Devices != ot.Devices:
 			changes = append(changes, name+" connection changed")
+		}
+		if nt.NoLink != ot.NoLink {
+			changes = append(changes, name+map[bool]string{true: " without links", false: " with links"}[nt.NoLink])
 		}
 		nu.Targets = append(nu.Targets, nt)
 	}
@@ -275,12 +299,66 @@ func (s *Server) handleNotifySave(w http.ResponseWriter, r *http.Request) {
 	if nu.PublicURL != old.PublicURL || nu.NoLink != old.NoLink || nu.AlsoHidden != old.AlsoHidden || nu.TZ != old.TZ {
 		changes = append(changes, "options changed")
 	}
+	// Pushover: check the token and key with Pushover itself when they are
+	// new or it is switched on (outside the lock: it goes over the network).
+	warning := ""
+	for _, nt := range nu.Targets {
+		ot := old.target(nt.ID)
+		if nt.Type != notifyPushover || !nt.On || (ot != nil && ot.On && ot.AppToken == nt.AppToken && ot.UserKey == nt.UserKey && ot.Devices == nt.Devices) {
+			continue
+		}
+		reached, err := pushoverCheck(nt)
+		switch {
+		case reached && err != nil:
+			bad(err.Error())
+			return
+		case !reached:
+			warning = "Saved, but the keys could not be checked: " + err.Error()
+		}
+	}
+	s.st.mu.Lock()
 	s.st.st.Notify = nu
 	s.st.markDirty()
+	s.st.mu.Unlock()
 	if len(changes) > 0 {
 		s.audit.write(actor(r), clientIP(r), "notify.changed", "notifications", strings.Join(changes, "; "))
 	}
-	writeJSON(w, map[string]any{"ok": true})
+	res := map[string]any{"ok": true}
+	if warning != "" {
+		res["warning"] = warning
+	}
+	writeJSON(w, res)
+}
+
+// pushoverCheck: tests replace it.
+var pushoverCheck = pushoverValidate
+
+// pushoverFrom: the Pushover part of targetFrom. need: the keys are
+// required (on, or for a test).
+func pushoverFrom(old *NotifyTarget, req notifyTargetReq, need bool) (*NotifyTarget, error) {
+	t := *old
+	t.On, t.NoLink = req.On, req.NoLink
+	if v := strings.TrimSpace(req.AppToken); v != "" {
+		if !pushKeyRe.MatchString(v) {
+			return nil, errors.New("the application token has 30 letters and digits")
+		}
+		t.AppToken = v
+	}
+	if v := strings.TrimSpace(req.UserKey); v != "" {
+		if !pushKeyRe.MatchString(v) {
+			return nil, errors.New("the user key has 30 letters and digits")
+		}
+		t.UserKey = v
+	}
+	devs, err := checkDevices(req.Devices)
+	if err != nil {
+		return nil, err
+	}
+	t.Devices = devs
+	if need && (t.AppToken == "" || t.UserKey == "") {
+		return nil, errors.New("enter the application token and the user key")
+	}
+	return &t, nil
 }
 
 func (s *Server) handleNotifyTest(w http.ResponseWriter, r *http.Request) {

@@ -143,7 +143,7 @@ func (s *Server) loadNotify() {
 	n.notified, n.sends, n.held, n.nextTry = map[string]bool{}, map[string][]int64{}, map[string]int{}, map[string]time.Time{}
 	n.started = time.Now()
 	if n.send == nil {
-		n.send = ntfySend
+		n.send = sendTarget
 	}
 	if b, err := os.ReadFile(n.path); err == nil {
 		if err := json.Unmarshal(b, &n.f); err != nil {
@@ -946,8 +946,25 @@ func (n *notifyState) outageNote(cfg *NotifySettings, t *NotifyTarget, at time.T
 }
 
 func serviceName(typ string) string {
-	if typ == notifyNtfy {
+	switch typ {
+	case notifyNtfy:
 		return "ntfy"
+	case notifyPushover:
+		return "Pushover"
 	}
 	return typ
+}
+
+// sendTarget: one message to one notifier, by its type.
+func sendTarget(t *NotifyTarget, m notifyMsg) (bool, error) {
+	if t.NoLink {
+		m.Click = ""
+	}
+	switch t.Type {
+	case notifyNtfy:
+		return ntfySend(t, m)
+	case notifyPushover:
+		return pushoverSend(t, m)
+	}
+	return true, fmt.Errorf("unknown notifier %q", t.Type)
 }

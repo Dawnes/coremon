@@ -108,8 +108,10 @@ as **agentless** devices: the master itself pings them and checks their services
   Healthy lines carry a slow pulse toward the master, and the map zooms and
   pans (it opens fitted to the screen).
 * **Notifications**: push messages with ntfy (ntfy.sh or your own server, with
-  an optional access token or username and password), switched on and off
-  with one switch. Right away when a device goes down and is back, a service
+  an optional access token or username and password) and Pushover (an
+  application token and a user or group key, checked with Pushover when
+  saved; optionally only to some devices), each switched on and off with its
+  own switch and with or without a link. Right away when a device goes down and is back, a service
   fails and recovers, Upstream goes offline, or a new device waits for
   approval; once a day a summary of new security updates, serious CVEs,
   reboots, ending OS support and new releases. Each event has its own
@@ -152,7 +154,8 @@ the master and keeps its data.
 
 The master needs outbound HTTPS to GitHub (releases), Debian and
 endoflife.date (support dates) and OSV.dev, NVD, CISA and FIRST
-(vulnerability data), and to your ntfy server when notifications are on. The master itself runs on Debian or Ubuntu; agents also
+(vulnerability data), and to your ntfy server or api.pushover.net when
+those notifications are on. The master itself runs on Debian or Ubuntu; agents also
 run on Rocky Linux, AlmaLinux, RHEL, SLES, openSUSE and Alpine (with OpenRC:
 the agent then runs under supervise-daemon).
 

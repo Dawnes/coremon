@@ -13,7 +13,8 @@ import (
 )
 
 const (
-	notifyNtfy = "ntfy"
+	notifyNtfy     = "ntfy"
+	notifyPushover = "pushover"
 
 	authNone  = "none"
 	authToken = "token"
@@ -39,7 +40,16 @@ type NotifyTarget struct {
 	Token    string `json:"token,omitempty"`
 	User     string `json:"user,omitempty"`
 	Password string `json:"password,omitempty"`
+	// pushover
+	AppToken string `json:"app_token,omitempty"`
+	UserKey  string `json:"user_key,omitempty"`
+	Devices  string `json:"devices,omitempty"` // comma-separated; "" all devices
+	// NoLink: this notifier never sends a link.
+	NoLink bool `json:"no_link,omitempty"`
 }
+
+// notifyTypes: the notifiers, in the order the settings page shows them.
+var notifyTypes = []string{notifyNtfy, notifyPushover}
 
 // NotifyEvent: whether an event sends a message, and with which priority
 // (1 min, 2 low, 3 default, 4 high, 5 urgent).
@@ -98,6 +108,8 @@ func notifyEventDefOf(key string) *notifyEventDef {
 
 var (
 	ntfyTopicRe = regexp.MustCompile(`^[-_A-Za-z0-9]{1,64}$`)
+	pushKeyRe   = regexp.MustCompile(`^[A-Za-z0-9]{30}$`)
+	pushDevRe   = regexp.MustCompile(`^[A-Za-z0-9_-]{1,25}$`)
 	hhmmRe      = regexp.MustCompile(`^([01][0-9]|2[0-3]):[0-5][0-9]$`)
 	// tzNameRe: an IANA time zone name (Europe/Amsterdam). One the master
 	// does not know counts as UTC (tzKnown).
@@ -110,25 +122,31 @@ func tzKnown(name string) bool {
 }
 
 func (n *NotifySettings) normalize() {
-	var nt *NotifyTarget
-	for _, t := range n.Targets {
-		if t.Type == notifyNtfy && nt == nil {
-			nt = t
+	var targets []*NotifyTarget
+	for _, typ := range notifyTypes {
+		var t *NotifyTarget
+		for _, x := range n.Targets {
+			if x.Type == typ && t == nil {
+				t = x
+			}
 		}
+		if t == nil {
+			t = &NotifyTarget{Type: typ}
+		}
+		t.ID = typ
+		if typ == notifyNtfy {
+			if t.Server == "" {
+				t.Server = defaultNtfyServer
+			}
+			switch t.Auth {
+			case authToken, authBasic:
+			default:
+				t.Auth = authNone
+			}
+		}
+		targets = append(targets, t)
 	}
-	if nt == nil {
-		nt = &NotifyTarget{ID: notifyNtfy, Type: notifyNtfy}
-	}
-	nt.ID = notifyNtfy
-	if nt.Server == "" {
-		nt.Server = defaultNtfyServer
-	}
-	switch nt.Auth {
-	case authToken, authBasic:
-	default:
-		nt.Auth = authNone
-	}
-	n.Targets = []*NotifyTarget{nt}
+	n.Targets = targets
 	if n.Events == nil {
 		n.Events = map[string]NotifyEvent{}
 	}

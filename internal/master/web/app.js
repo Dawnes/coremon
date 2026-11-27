@@ -3950,62 +3950,87 @@ function SettingsUpstream() {
 }
 
 // Settings → Notifications (admins): where messages go and what sends one.
-// Each notifier (for now only ntfy) has its own On/Off switch at the top;
-// events and options are shared by all of them.
+// Each notifier (ntfy, Pushover) has its own panel with an On/Off switch at
+// the top; events and options are shared by all of them.
 const NOTIFY_PRIO = [[1, 'Min'], [2, 'Low'], [3, 'Default'], [4, 'High'], [5, 'Urgent']];
 const NOTIFY_EVENT = { device: 'Device', service: 'Service', upstream: 'Upstream', pending: 'New device', summary: 'Daily summary', outage: 'Delay note' };
+const NOTIFIER = { ntfy: 'ntfy', pushover: 'Pushover' };
 function SettingsNotify() {
-  const st = { d: null, test: null, testing: false };
+  const st = { d: null, test: {}, testing: {} };
   const tz = (() => { try { return Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC'; } catch { return 'UTC'; } })();
-  const ntfy = () => st.d.targets.find((t) => t.type === 'ntfy');
+  const target = (id) => st.d.targets.find((t) => t.id === id);
+  const form = () => $('#nt form');
+  const fld = (id, name) => form()?.elements[`${id}-${name}`];
   const randTopic = () => {
     const a = new Uint8Array(14);
     crypto.getRandomValues(a);
     return 'coremon-' + [...a].map((x) => 'abcdefghijkmnpqrstuvwxyz23456789'[x % 32]).join('');
   };
-  const sw = (name, on) => html`<label class="bigswitch ${on ? 'on' : ''}"><input type="checkbox" name="${name}" data-change="onoff" ${on ? 'checked' : ''}><span class="track"><span class="knob"></span></span><span class="state">${on ? 'On' : 'Off'}</span></label>`;
+  const sw = (id, on) => html`<label class="bigswitch ${on ? 'on' : ''}"><input type="checkbox" name="${id}-on" data-change="onoff" data-id="${id}" ${on ? 'checked' : ''}><span class="track"><span class="knob"></span></span><span class="state">${on ? 'On' : 'Off'}</span></label>`;
+  const secret = (id, name, label, set, ph) => html`<label class="field">${label}<input type="password" name="${id}-${name}" autocomplete="off" spellcheck="false" placeholder="${set ? 'set — enter a new one to replace it' : ph}"></label>`;
   function authFields(auth, t) {
-    if (auth === 'token') {
-      return html`<label class="field">Access token<input type="password" name="token" autocomplete="off" spellcheck="false" placeholder="${t.token_set ? 'set — enter a new token to replace it' : 'tk_…'}"></label>`;
-    }
+    if (auth === 'token') return secret('ntfy', 'token', 'Access token', t.token_set, 'tk_…');
     if (auth === 'basic') {
-      return html`<div class="grid2" style="gap:12px"><label class="field">Username<input type="text" name="user" value="${t.user || ''}" autocomplete="off" spellcheck="false" maxlength="128"></label>
-        <label class="field">Password<input type="password" name="password" autocomplete="new-password" placeholder="${t.password_set ? 'set — enter a new one to replace it' : ''}"></label></div>`;
+      return html`<div class="grid2" style="gap:12px"><label class="field">Username<input type="text" name="ntfy-user" value="${t.user || ''}" autocomplete="off" spellcheck="false" maxlength="128"></label>
+        ${secret('ntfy', 'password', 'Password', t.password_set, '')}</div>`;
     }
     return '';
   }
-  function status() {
-    const d = st.d, t = ntfy(), box = $('#nt-status');
+  function status(id) {
+    const t = target(id), box = $(`#st-${id}`);
     if (!box) return;
-    const parts = [];
-    if (d.outage) parts.push(html`<div class="notice red small" style="margin:0">The ntfy server can't be reached since ${fmtDate(d.outage.from)}. ${d.waiting} message${d.waiting === 1 ? '' : 's'} waiting; retried every minute for up to 24 hours.</div>`);
-    else if (d.waiting) parts.push(html`<div class="dim small">${d.waiting} message${d.waiting === 1 ? '' : 's'} waiting to be sent.</div>`);
-    if (st.test) parts.push(st.test.ok ? html`<span class="c-green small">${icon('check')} Test message delivered ${fmtDate(st.test.at, true)}</span>` : html`<div class="notice red small" style="margin:0">Test failed: ${st.test.error}</div>`);
-    const on = $('#nt form')?.on?.checked ?? t.on;
+    const name = NOTIFIER[t.type], parts = [], test = st.test[id];
+    if (t.outage) parts.push(html`<div class="notice red small" style="margin:0">The ${name} server can't be reached since ${fmtDate(t.outage.from)}. ${t.waiting} message${t.waiting === 1 ? '' : 's'} waiting; retried every minute for up to 24 hours.</div>`);
+    else if (t.waiting) parts.push(html`<div class="dim small">${t.waiting} message${t.waiting === 1 ? '' : 's'} waiting to be sent.</div>`);
+    if (test) parts.push(test.ok ? html`<span class="c-green small">${icon('check')} Test message delivered ${fmtDate(test.at, true)}</span>` : html`<div class="notice red small" style="margin:0">Test failed: ${test.error}</div>`);
+    const on = fld(id, 'on')?.checked ?? t.on;
     if (!on && !parts.length) parts.push(html`<span class="dim small">Off: nothing is sent and nothing is kept for later.</span>`);
     setHTML(box, html`${parts}`);
   }
+  const statusAll = () => st.d.targets.forEach((t) => status(t.id));
+  const testRow = (id) => html`<div class="row" style="gap:10px;align-items:center;margin-top:4px"><button type="button" class="btn" data-act="test" data-id="${id}">${icon('send')} Send test message</button><span id="st-${id}" style="flex:1"></span></div>`;
+  const linkBox = (t) => html`<label class="checkrow" style="margin-top:6px"><input type="checkbox" name="${t.id}-link" ${t.no_link ? '' : 'checked'}> Show a link to Coremon in the message</label>`;
+  const head = (t, sub) => html`<div class="row" style="justify-content:space-between;align-items:center;gap:12px;margin-bottom:6px">
+    <div><h2 style="margin:0">${NOTIFIER[t.type]}</h2><div class="muted small">${sub}</div></div>${sw(t.id, t.on)}</div>`;
+  function ntfyPanel(t) {
+    return html`<div class="panel panel-pad nt-target ${t.on ? 'is-on' : ''}">
+      ${head(t, 'Push messages to the ntfy app on your phone or desktop')}
+      <div class="grid2" style="gap:12px">
+        <label class="field">Server<input type="text" name="ntfy-server" value="${t.server}" placeholder="https://ntfy.sh" spellcheck="false" autocomplete="off"></label>
+        <label class="field">Topic<div class="row" style="gap:6px"><input type="text" name="ntfy-topic" value="${t.topic || ''}" class="mono" style="flex:1;min-width:0" maxlength="64" spellcheck="false" autocomplete="off" placeholder="coremon-…"><button type="button" class="btn sm" data-act="gen-topic">Generate</button></div></label>
+      </div>
+      <div class="dim small">Subscribe to the topic in the ntfy app. On the public ntfy.sh server anyone who knows the topic can read the messages: use a long, random one (Generate), or your own server with sign-in.</div>
+      <label class="field" style="max-width:320px">Sign in to the server<select name="ntfy-auth" data-change="auth">
+        ${[['none', 'Not needed'], ['token', 'Access token'], ['basic', 'Username and password']].map(([v, l]) => html`<option value="${v}" ${t.auth === v ? 'selected' : ''}>${l}</option>`)}</select></label>
+      <div id="nt-auth">${authFields(t.auth, t)}</div>
+      <div class="dim small">Secrets are kept on the master and never shown again.</div>
+      ${linkBox(t)}
+      ${testRow(t.id)}
+    </div>`;
+  }
+  function pushoverPanel(t) {
+    return html`<div class="panel panel-pad nt-target ${t.on ? 'is-on' : ''}">
+      ${head(t, 'Push messages to the Pushover app (pushover.net)')}
+      <div class="grid2" style="gap:12px">
+        ${secret('pushover', 'app_token', 'Application token', t.app_token_set, '30 letters and digits')}
+        ${secret('pushover', 'user_key', 'User or group key', t.user_key_set, '30 letters and digits')}
+      </div>
+      <div class="dim small">Create an application (for example "Coremon") on pushover.net for the token; the user key is on your Pushover dashboard, a group key reaches several people. Both are kept on the master and never shown again, and are checked with Pushover when you save.</div>
+      <label class="field" style="max-width:420px">Devices (optional)<input type="text" name="pushover-devices" value="${t.devices || ''}" placeholder="all devices" spellcheck="false" autocomplete="off"></label>
+      <div class="dim small">Device names separated by commas; empty sends to all your devices. Urgent messages arrive as High: they do not repeat until acknowledged.</div>
+      ${linkBox(t)}
+      ${testRow(t.id)}
+    </div>`;
+  }
   function build() {
-    const d = st.d, t = ntfy();
+    const d = st.d;
     const ev = (e) => html`<div class="nt-ev"><label class="checkrow"><input type="checkbox" name="ev-${e.key}" ${e.on ? 'checked' : ''}> ${e.title}</label>
       <select name="prio-${e.key}">${NOTIFY_PRIO.map(([v, l]) => html`<option value="${v}" ${e.prio === v ? 'selected' : ''}>${l}</option>`)}</select></div>`;
     setHTML($('#nt'), html`<form class="form" data-submit="save"><div class="stack">
-      <div class="panel panel-pad nt-target ${t.on ? 'is-on' : ''}">
-        <div class="row" style="justify-content:space-between;align-items:center;gap:12px;margin-bottom:6px">
-          <div><h2 style="margin:0">ntfy</h2><div class="muted small">Push messages to the ntfy app on your phone or desktop</div></div>${sw('on', t.on)}</div>
-        <div class="grid2" style="gap:12px">
-          <label class="field">Server<input type="text" name="server" value="${t.server}" placeholder="https://ntfy.sh" spellcheck="false" autocomplete="off"></label>
-          <label class="field">Topic<div class="row" style="gap:6px"><input type="text" name="topic" value="${t.topic || ''}" class="mono" style="flex:1;min-width:0" maxlength="64" spellcheck="false" autocomplete="off" placeholder="coremon-…"><button type="button" class="btn sm" data-act="gen-topic">Generate</button></div></label>
-        </div>
-        <div class="dim small">Subscribe to the topic in the ntfy app. On the public ntfy.sh server anyone who knows the topic can read the messages: use a long, random one (Generate), or your own server with sign-in.</div>
-        <label class="field" style="max-width:320px">Sign in to the server<select name="auth" data-change="auth">
-          ${[['none', 'Not needed'], ['token', 'Access token'], ['basic', 'Username and password']].map(([v, l]) => html`<option value="${v}" ${t.auth === v ? 'selected' : ''}>${l}</option>`)}</select></label>
-        <div id="nt-auth">${authFields(t.auth, t)}</div>
-        <div class="dim small">Secrets are kept on the master and never shown again.</div>
-        <div class="row" style="gap:10px;align-items:center;margin-top:4px"><button type="button" class="btn" data-act="test" ${st.testing ? 'disabled' : ''}>${st.testing ? html`<span class="spin"></span>` : icon('send')} Send test message</button><span id="nt-status" style="flex:1"></span></div>
-      </div>
+      ${d.targets.map((t) => (t.type === 'pushover' ? pushoverPanel(t) : ntfyPanel(t)))}
       <div class="panel panel-pad">
         <h2 style="margin:0 0 4px">Send right away when</h2>
+        <div class="muted small" style="margin-bottom:4px">Every notifier that is on gets the same messages.</div>
         <div class="nt-evs">${d.events.filter((e) => !e.summary).map(ev)}</div>
         <h2 style="margin:16px 0 4px">In the daily summary</h2>
         <div class="muted small" style="margin-bottom:4px">One message a day with what is new and still true, at the highest priority of what it holds. Nothing new: no message.</div>
@@ -4017,8 +4042,8 @@ function SettingsNotify() {
         <label class="checkrow"><input type="checkbox" name="also_hidden" ${d.also_hidden ? 'checked' : ''}> Also for devices that are unreachable behind a device that is down</label>
         <div class="dim small">Off: only the device that is down sends a message. Devices in maintenance never send anything.</div>
         <label class="field" style="margin-top:10px">Public address of Coremon<input type="text" name="public_url" value="${d.public_url || ''}" placeholder="https://coremon.example.org" spellcheck="false" autocomplete="off" style="max-width:420px"></label>
-        <label class="checkrow"><input type="checkbox" name="link" ${d.no_link ? '' : 'checked'}> Tapping a message opens the device in Coremon</label>
-        <div class="dim small">The address your phone can open Coremon on. Without one, messages have no link.</div>
+        <label class="checkrow"><input type="checkbox" name="link" ${d.no_link ? '' : 'checked'}> Messages link to the device in Coremon</label>
+        <div class="dim small">The address your phone can open Coremon on. Without one, or with this off, no message has a link; each notifier can also leave it out.</div>
         <label class="checkrow" style="margin-top:12px"><input type="checkbox" name="quiet" ${d.quiet ? 'checked' : ''}> Quiet hours: only Urgent messages</label>
         <div class="row" style="gap:8px;align-items:center"><span class="muted small">from</span><input type="time" name="quiet_from" value="${d.quiet_from}" style="width:130px"><span class="muted small">to</span><input type="time" name="quiet_to" value="${d.quiet_to}" style="width:130px"></div>
         <div class="dim small">Other messages in that time are not sent (Activity → Notifications lists them); a daily summary that falls in it is sent when the quiet hours end.</div>
@@ -4031,10 +4056,13 @@ function SettingsNotify() {
       </div>
       <div><button class="btn primary">Save</button></div>
     </div></form>`);
-    status();
+    statusAll();
   }
-  const targetBody = (f) => ({ id: 'ntfy', on: f.on.checked, server: f.server.value.trim(), topic: f.topic.value.trim(), auth: f.auth.value,
-    token: f.token?.value || '', user: f.user?.value.trim() || '', password: f.password?.value || '' });
+  const val = (id, name) => fld(id, name)?.value ?? '';
+  const targetBody = (id) => (id === 'pushover'
+    ? { id, on: fld(id, 'on').checked, no_link: !fld(id, 'link').checked, app_token: val(id, 'app_token').trim(), user_key: val(id, 'user_key').trim(), devices: val(id, 'devices').trim() }
+    : { id, on: fld(id, 'on').checked, no_link: !fld(id, 'link').checked, server: val(id, 'server').trim(), topic: val(id, 'topic').trim(), auth: val(id, 'auth'),
+      token: val(id, 'token'), user: val(id, 'user').trim(), password: val(id, 'password') });
   return {
     interval: 15000,
     mount(el) {
@@ -4045,36 +4073,35 @@ function SettingsNotify() {
       const first = !st.d;
       st.d = d;
       if (first) build();
-      else status();
+      else statusAll();
     },
     acts: {
-      onoff: (t) => { const l = t.closest('.bigswitch'); l.classList.toggle('on', t.checked); l.querySelector('.state').textContent = t.checked ? 'On' : 'Off'; t.closest('.nt-target')?.classList.toggle('is-on', t.checked); status(); },
-      auth: (t) => setHTML($('#nt-auth'), authFields(t.value, ntfy())),
-      'gen-topic': () => { const f = $('#nt form'); f.topic.value = randTopic(); dirtyForms.add(f); },
-      test: async () => {
-        const f = $('#nt form');
-        st.testing = true;
-        const btn = f.querySelector('[data-act="test"]');
-        btn.disabled = true;
+      onoff: (t) => { const l = t.closest('.bigswitch'); l.classList.toggle('on', t.checked); l.querySelector('.state').textContent = t.checked ? 'On' : 'Off'; t.closest('.nt-target')?.classList.toggle('is-on', t.checked); status(t.dataset.id); },
+      auth: (t) => setHTML($('#nt-auth'), authFields(t.value, target('ntfy'))),
+      'gen-topic': () => { fld('ntfy', 'topic').value = randTopic(); dirtyForms.add(form()); },
+      test: async (b) => {
+        const id = b.dataset.id;
+        b.disabled = true;
         try {
-          st.test = await POST('notify/test', targetBody(f));
+          st.test[id] = await POST('notify/test', targetBody(id));
         } catch (e) {
-          st.test = { ok: false, error: e.message };
+          st.test[id] = { ok: false, error: e.message };
         } finally {
-          st.testing = false;
-          btn.disabled = false;
+          b.disabled = false;
         }
-        status();
+        status(id);
       },
       save: async (f) => {
         const events = {};
         st.d.events.forEach((e) => { events[e.key] = { on: f[`ev-${e.key}`].checked, prio: +f[`prio-${e.key}`].value }; });
-        await POST('notify', {
-          targets: [targetBody(f)], events, also_hidden: f.also_hidden.checked, no_link: !f.link.checked, public_url: f.public_url.value.trim(),
+        const res = await POST('notify', {
+          targets: st.d.targets.map((t) => targetBody(t.id)), events, also_hidden: f.also_hidden.checked, no_link: !f.link.checked, public_url: f.public_url.value.trim(),
           quiet: f.quiet.checked, quiet_from: f.quiet_from.value, quiet_to: f.quiet_to.value, summary_at: f.summary_at.value, tz,
           throttle_n: +f.throttle_n.value, throttle_min: +f.throttle_min.value,
         });
-        toast(f.on.checked ? 'Saved — notifications are on' : 'Saved — notifications are off', 'ok');
+        const on = st.d.targets.filter((t) => fld(t.id, 'on').checked).map((t) => NOTIFIER[t.type]);
+        if (res.warning) toast(res.warning, '', true);
+        else toast(on.length ? `Saved — on: ${on.join(' and ')}` : 'Saved — notifications are off', 'ok');
         st.d = null;
         view.refresh();
       },
@@ -4092,9 +4119,9 @@ function NotifyLog() {
     const e = d.entries;
     setHTML($('#nl'), html`${!d.on ? html`<div class="notice grey">Notifications are off.${canChange() ? html` Switch them on under <a href="#/settings/notifications">Settings → Notifications</a>.` : ''}</div>` : ''}
       ${d.waiting ? html`<div class="notice">${d.waiting} message${d.waiting === 1 ? '' : 's'} waiting to be sent.</div>` : ''}
-      ${e.length ? html`<div class="panel"><table class="tbl"><thead><tr><th>Time</th><th>Status</th><th>Event</th><th>Message</th><th>Detail</th></tr></thead><tbody>
+      ${e.length ? html`<div class="panel"><table class="tbl"><thead><tr><th>Time</th><th>Status</th><th>Notifier</th><th>Event</th><th>Message</th><th>Detail</th></tr></thead><tbody>
         ${e.map((x) => { const [cls, txt] = STATUS[x.status] || ['mute', x.status]; return html`<tr><td class="muted mono small nowrap">${fmtDate(x.at, true)}</td><td><span class="badge ${cls} xs">${txt}</span></td>
-          <td class="small">${NOTIFY_EVENT[x.event] || x.event}</td><td>${x.title}</td><td class="muted small">${x.error || ''}</td></tr>`; })}</tbody></table></div>`
+          <td class="small">${NOTIFIER[x.target] || html`<span class="dim">all</span>`}</td><td class="small">${NOTIFY_EVENT[x.event] || x.event}</td><td>${x.title}</td><td class="muted small">${x.error || ''}</td></tr>`; })}</tbody></table></div>`
         : html`<div class="panel empty">No messages yet.</div>`}`);
   }
   return {
